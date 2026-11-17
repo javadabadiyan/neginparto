@@ -60,17 +60,17 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   onBatchDeleteKaraneh,
   onDeleteAllKaraneh,
   onBatchImportKaraneh,
-  canManage = true,
-  canExport = true,
-  canImport = true,
+  canManage = false,
+  canExport = false,
+  canImport = false,
   granularPermissions
 }) => {
-  const canCreate = granularPermissions ? granularPermissions.create : canManage;
-  const canEdit = granularPermissions ? granularPermissions.edit : canManage;
-  const canDelete = granularPermissions ? granularPermissions.delete : canManage;
+  const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
+  const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
+  const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = Boolean(granularPermissions?.deleteAll);
-  const allowExport = granularPermissions ? granularPermissions.exportExcel : canExport;
-  const allowImport = granularPermissions ? granularPermissions.importExcel : canImport;
+  const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : canExport;
+  const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canImport;
 
   // Dedicated Year & Month selection for Current Period (ماه جدید)
   const [currentYear, setCurrentYear] = useState<string>('1403');

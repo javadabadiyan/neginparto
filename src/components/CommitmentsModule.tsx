@@ -54,17 +54,17 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
   onBatchDeleteCommitments,
   onDeleteAllCommitments,
   onBatchImportCommitments,
-  canManage = true,
+  canManage = false,
   granularPermissions
 }) => {
-  const canCreate = granularPermissions ? granularPermissions.create : canManage;
-  const canEdit = granularPermissions ? granularPermissions.edit : canManage;
-  const canDelete = granularPermissions ? granularPermissions.delete : canManage;
+  const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
+  const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
+  const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = Boolean(granularPermissions?.deleteAll);
-  const canPrint = granularPermissions?.print ?? true;
-  const canArchive = granularPermissions?.archive ?? canEdit;
-  const allowExport = granularPermissions?.exportExcel ?? true;
-  const allowImport = granularPermissions?.importExcel ?? canCreate;
+  const canPrint = granularPermissions ? Boolean(granularPermissions.print) : false;
+  const canArchive = granularPermissions ? Boolean(granularPermissions.archive) : false;
+  const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : false;
+  const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : false;
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');

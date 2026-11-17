@@ -58,6 +58,8 @@ interface LocalHostDatabaseModuleProps {
   dbStatus: DatabaseStatus | null;
   firebaseUserEmail?: string | null;
   firebaseSyncing?: boolean;
+  canBackup?: boolean;
+  canRestore?: boolean;
   onConnectGoogleFirebase?: () => Promise<boolean>;
   onSyncToFirestore?: () => Promise<boolean>;
   onPullFromFirestore?: () => Promise<boolean>;
@@ -73,6 +75,8 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   dbStatus,
   firebaseUserEmail,
   firebaseSyncing = false,
+  canBackup = false,
+  canRestore = false,
   onConnectGoogleFirebase,
   onSyncToFirestore,
   onPullFromFirestore,
@@ -120,6 +124,10 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   const [emailFeedback, setEmailFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
+    if (!canBackup) {
+      setEmailBackupSupported(false);
+      return;
+    }
     api.getEmailBackupConfig()
       .then((res: any) => {
         if (res && res.supported === false) {
@@ -138,9 +146,10 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
       .catch(() => {
         setEmailBackupSupported(false);
       });
-  }, []);
+  }, [canBackup]);
 
   const handleSaveEmailConfig = async () => {
+    if (!canBackup) return;
     try {
       setEmailSaving(true);
       setEmailFeedback(null);
@@ -304,6 +313,10 @@ npm start
   };
 
   const handleBackupDownload = async () => {
+    if (!canBackup) {
+      setRestoreError('شما مجوز دریافت نسخه پشتیبان را ندارید.');
+      return;
+    }
     const ok = await api.downloadBackup();
     if (!ok) {
       setRestoreError('خطا در دریافت نسخه پشتیبان. لطفاً دسترسی مدیر ارشد را بررسی کنید.');
@@ -311,6 +324,10 @@ npm start
   };
 
   const handleBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canRestore) {
+      setRestoreError('شما مجوز بازیابی پایگاه داده را ندارید.');
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -430,6 +447,10 @@ npm start
   };
 
   const handlePushToGitHub = async () => {
+    if (!canBackup) {
+      setGhMessage({ type: 'error', text: 'شما مجوز دریافت یا ارسال نسخه پشتیبان به گیت‌هاب را ندارید.' });
+      return;
+    }
     try {
       setGhSyncing(true);
       setGhMessage(null);
@@ -457,6 +478,10 @@ npm start
   };
 
   const handlePullFromGitHub = async () => {
+    if (!canRestore) {
+      setGhMessage({ type: 'error', text: 'شما مجوز دریافت و بازیابی اطلاعات از گیت‌هاب را ندارید.' });
+      return;
+    }
     try {
       setGhSyncing(true);
       setGhMessage(null);
@@ -507,13 +532,15 @@ npm start
             <span>بررسی وضعیت دیتابیس</span>
           </button>
 
-          <button
-            onClick={handleBackupDownload}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>دانلود نسخه پشتیبان امن (JSON)</span>
-          </button>
+          {canBackup && (
+            <button
+              onClick={handleBackupDownload}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>دانلود نسخه پشتیبان امن (JSON)</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -562,7 +589,7 @@ npm start
               </button>
             )}
 
-            {onSyncToFirestore && (
+            {canBackup && onSyncToFirestore && (
               <button
                 onClick={onSyncToFirestore}
                 disabled={firebaseSyncing}
@@ -573,7 +600,7 @@ npm start
               </button>
             )}
 
-            {onPullFromFirestore && (
+            {canRestore && onPullFromFirestore && (
               <button
                 onClick={onPullFromFirestore}
                 disabled={firebaseSyncing}
@@ -966,25 +993,29 @@ npm start
                 <span>{ghTesting ? 'در حال بررسی...' : 'تست اتصال و بررسی امنیت مخزن'}</span>
               </button>
 
-              <button
-                type="button"
-                disabled={ghSyncing || ghTesting}
-                onClick={handlePushToGitHub}
-                className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
-              >
-                <CloudUpload className="w-4 h-4" />
-                <span>{ghSyncing ? 'در حال رمزنگاری و ثبت...' : `ذخیره رمزنگاری‌شده در ${ghConfig.branch || 'db-data'}`}</span>
-              </button>
+              {canBackup && (
+                <button
+                  type="button"
+                  disabled={ghSyncing || ghTesting}
+                  onClick={handlePushToGitHub}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  <CloudUpload className="w-4 h-4" />
+                  <span>{ghSyncing ? 'در حال رمزنگاری و ثبت...' : `ذخیره رمزنگاری‌شده در ${ghConfig.branch || 'db-data'}`}</span>
+                </button>
+              )}
 
-              <button
-                type="button"
-                disabled={ghSyncing || ghTesting}
-                onClick={handlePullFromGitHub}
-                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
-              >
-                <CloudDownload className="w-4 h-4" />
-                <span>{ghSyncing ? 'در حال دریافت و رمزگشایی...' : `دریافت و رمزگشایی از ${ghConfig.branch || 'db-data'}`}</span>
-              </button>
+              {canRestore && (
+                <button
+                  type="button"
+                  disabled={ghSyncing || ghTesting}
+                  onClick={handlePullFromGitHub}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  <CloudDownload className="w-4 h-4" />
+                  <span>{ghSyncing ? 'در حال دریافت و رمزگشایی...' : `دریافت و رمزگشایی از ${ghConfig.branch || 'db-data'}`}</span>
+                </button>
+              )}
 
               {(ghConfig.token || ghConfig.encryptionPassphrase) && (
                 <button
@@ -1341,28 +1372,34 @@ npm start
 
         {/* Restore and Reset */}
         <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="cursor-pointer">
-              <span className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold border border-slate-300">
-                <Upload className="w-3.5 h-3.5 text-indigo-600" />
-                <span>{restoreLoading ? 'در حال بازیابی...' : 'بازیابی پایگاه داده از فایل JSON'}</span>
-              </span>
-              <input
-                type="file"
-                accept=".json"
-                onChange={handleBackupFileSelect}
-                className="hidden"
-              />
-            </label>
+          {canRestore ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer">
+                <span className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold border border-slate-300">
+                  <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>{restoreLoading ? 'در حال بازیابی...' : 'بازیابی پایگاه داده از فایل JSON'}</span>
+                </span>
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleBackupFileSelect}
+                  className="hidden"
+                />
+              </label>
 
-            <button
-              onClick={() => setShowResetConfirm(true)}
-              className="flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-bold border border-red-200 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>بازنشانی به داده‌های اولیه</span>
-            </button>
-          </div>
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-bold border border-red-200 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>بازنشانی به داده‌های اولیه</span>
+              </button>
+            </div>
+          ) : (
+            <span className="text-[11px] text-slate-500">
+              مجوز بازیابی یا بازنشانی پایگاه داده برای حساب کاربری شما فعال نیست.
+            </span>
+          )}
 
           <span className="text-slate-600 text-[11px] persian-num">
             آخرین به‌روزرسانی: <b>{toPersianDigits(dbStatus?.lastSaved || 'هم‌اکنون')}</b>
@@ -1385,6 +1422,7 @@ npm start
       </div>
 
       {/* Automated Daily Email Backup Panel */}
+      {canBackup && (
       <div className="bg-white p-4 sm:p-6 rounded-2xl border border-indigo-200 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -1545,9 +1583,10 @@ npm start
           </button>
         </div>
       </div>
+      )}
 
       {/* Reset Confirmation Modal */}
-      {showResetConfirm && (
+      {canRestore && showResetConfirm && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 text-xs">
             <h3 className="text-sm font-bold text-slate-900">تأیید بازنشانی پایگاه داده</h3>

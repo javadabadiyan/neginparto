@@ -79,15 +79,15 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
   onBatchDeleteClassifications,
   onDeleteAllClassifications,
   onBatchImportClassifications,
-  canManage = true,
+  canManage = false,
   granularPermissions
 }) => {
-  const canCreate = granularPermissions ? granularPermissions.create : canManage;
-  const canEdit = granularPermissions ? granularPermissions.edit : canManage;
-  const canDelete = granularPermissions ? granularPermissions.delete : canManage;
+  const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
+  const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
+  const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = Boolean(granularPermissions?.deleteAll);
-  const allowImport = granularPermissions?.importExcel ?? canCreate;
-  const allowExport = granularPermissions?.exportExcel ?? true;
+  const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : false;
+  const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : false;
 
   const [subTab, setSubTab] = useState<'classifications' | 'groups'>('classifications');
   const [searchTerm, setSearchTerm] = useState('');

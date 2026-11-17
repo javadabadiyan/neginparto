@@ -31,7 +31,7 @@ import {
   UnitOperationalReport,
   DatabaseStatus
 } from './types';
-import { normalizePermissions } from './utils/permissions';
+import { normalizePermissions, getFullAdminPermissions, getFirstAccessibleTab } from './utils/permissions';
 import { CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { onAuthStateChanged, signOut, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
@@ -175,6 +175,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!currentUser) return;
+    const isAdmin = currentUser.role === 'super_admin' || currentUser.username === 'javadabadiyan';
+    const perms = isAdmin ? getFullAdminPermissions() : normalizePermissions(currentUser.permissions);
+    const isPermitted =
+      isAdmin ||
+      (activeTab === 'dashboard' && perms.system?.dashboardStats) ||
+      (activeTab === 'smart-dashboard' && perms.smartDashboard?.view) ||
+      (activeTab === 'ceo-dashboard' && perms.ceoDashboard?.view) ||
+      (activeTab === 'unit-operations' && perms.unitOperations?.view) ||
+      (activeTab === 'personnel' && perms.personnel?.view) ||
+      (activeTab === 'karaneh' && perms.karaneh?.view) ||
+      (activeTab === 'payroll' && perms.payroll?.view) ||
+      (activeTab === 'job-groups' && perms.jobGroups?.view) ||
+      (activeTab === 'commitments' && perms.commitments?.view) ||
+      (activeTab === 'users' && perms.users?.view) ||
+      (activeTab === 'database' && (perms.system?.backupDatabase || perms.system?.restoreDatabase));
+    if (!isPermitted) {
+      const nextTab = getFirstAccessibleTab(perms, isAdmin);
+      if (nextTab !== activeTab) {
+        setActiveTab(nextTab);
+      }
+    }
+  }, [currentUser, activeTab]);
+
+  useEffect(() => {
     if (currentUser) {
       loadAllData().then(async () => {
         if (githubAutoPulledRef.current) return;
@@ -305,7 +330,10 @@ export default function App() {
 
   // Auth handlers
   const handleLoginSuccess = (user: User) => {
+    const isAdmin = user.role === 'super_admin' || user.username === 'javadabadiyan';
+    const perms = isAdmin ? getFullAdminPermissions() : normalizePermissions(user.permissions);
     setCurrentUser(user);
+    setActiveTab(getFirstAccessibleTab(perms, isAdmin));
     showNotification(`خوش آمدید، جناب ${user.fullName}`);
   };
 
@@ -672,6 +700,10 @@ export default function App() {
       }
       if (res.success) {
         showNotification(res.message || 'کاربر با موفقیت ذخیره شد.');
+        if (res.data && currentUser && res.data.id === currentUser.id) {
+          setCurrentUser(res.data);
+          localStorage.setItem('hr_current_user', JSON.stringify(res.data));
+        }
         if (auth.currentUser?.emailVerified && res.data) {
           syncSingleRecordToFirestore('users', res.data).catch(() => {});
         }
@@ -1479,34 +1511,13 @@ export default function App() {
 
   // Permissions check
   const isSuperAdmin = currentUser.role === 'super_admin' || currentUser.username === 'javadabadiyan';
-  const userPerms = isSuperAdmin ? normalizePermissions({
-    personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
-    users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
-    smartDashboard: { view: true, exportExcel: true, print: true },
-    ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
-    unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] },
-    canManagePersonnel: true,
-    canManageKaraneh: true,
-    canManageJobGroups: true,
-    canManageCommitments: true,
-    canManageUsers: true,
-    canExportExcel: true,
-    canImportExcel: true,
-    canBackupRestore: true,
-  }) : normalizePermissions(currentUser.permissions);
+  const userPerms = isSuperAdmin ? getFullAdminPermissions() : normalizePermissions(currentUser.permissions);
 
   const canManagePersonnel = isSuperAdmin || (userPerms.personnel.create || userPerms.personnel.edit);
   const canManageKaraneh = isSuperAdmin || (userPerms.karaneh.create || userPerms.karaneh.edit);
   const canManagePayroll = isSuperAdmin || (userPerms.payroll.create || userPerms.payroll.edit);
   const canManageJobGroups = isSuperAdmin || (userPerms.jobGroups.create || userPerms.jobGroups.edit);
   const canManageCommitments = isSuperAdmin || (userPerms.commitments.create || userPerms.commitments.edit);
-  const canExportExcel = isSuperAdmin || userPerms.personnel.exportExcel || userPerms.karaneh.exportExcel;
-  const canImportExcel = isSuperAdmin || userPerms.personnel.importExcel || userPerms.karaneh.importExcel;
 
   return (
     <div className="min-h-[100dvh] bg-slate-50 flex flex-col font-sans overflow-x-hidden">
@@ -1568,9 +1579,20 @@ export default function App() {
                 commitments={commitments}
                 dbStatus={dbStatus}
                 isAdmin={isSuperAdmin}
+                canViewDashboardStats={isSuperAdmin || Boolean(userPerms.system?.dashboardStats)}
                 canViewSmartDashboard={isSuperAdmin || Boolean(userPerms.smartDashboard?.view)}
                 canViewCeoDashboard={isSuperAdmin || Boolean(userPerms.ceoDashboard?.view)}
-                canViewUnitOperations={isSuperAdmin || Boolean(userPerms.unitOperations?.view) || Boolean(userPerms.ceoDashboard?.view)}
+                canViewUnitOperations={isSuperAdmin || Boolean(userPerms.unitOperations?.view)}
+                canViewPersonnel={isSuperAdmin || Boolean(userPerms.personnel?.view)}
+                canCreatePersonnel={isSuperAdmin || Boolean(userPerms.personnel?.create)}
+                canViewKaraneh={isSuperAdmin || Boolean(userPerms.karaneh?.view)}
+                canImportKaraneh={isSuperAdmin || Boolean(userPerms.karaneh?.importExcel)}
+                canViewCommitments={isSuperAdmin || Boolean(userPerms.commitments?.view)}
+                canViewJobGroups={isSuperAdmin || Boolean(userPerms.jobGroups?.view)}
+                canViewPayroll={isSuperAdmin || Boolean(userPerms.payroll?.view)}
+                canViewUsers={isSuperAdmin || Boolean(userPerms.users?.view)}
+                canBackupDatabase={isSuperAdmin || Boolean(userPerms.system?.backupDatabase)}
+                canRestoreDatabase={isSuperAdmin || Boolean(userPerms.system?.restoreDatabase)}
                 onNavigate={setActiveTab}
                 onOpenAddPersonnel={() => setActiveTab('personnel')}
                 onOpenUploadKaraneh={() => setActiveTab('karaneh')}
@@ -1630,7 +1652,7 @@ export default function App() {
             )}
 
             {activeTab === 'unit-operations' && (
-              (isSuperAdmin || userPerms.unitOperations?.view || userPerms.ceoDashboard?.view) ? (
+              (isSuperAdmin || userPerms.unitOperations?.view) ? (
                 <UnitOperationsModule
                   currentUser={currentUser}
                   miningVolumes={miningVolumes}
@@ -1665,7 +1687,7 @@ export default function App() {
             )}
 
             {activeTab === 'personnel' && (
-              userPerms.personnel.view ? (
+              (isSuperAdmin || userPerms.personnel.view) ? (
                 <PersonnelModule
                   personnelList={personnelList}
                   jobGroups={jobGroups}
@@ -1677,8 +1699,8 @@ export default function App() {
                   onBatchImportRelatives={handleBatchImportRelatives}
                   onDeleteAllRelatives={handleDeleteAllRelatives}
                   canManage={canManagePersonnel}
-                  canExport={canExportExcel}
-                  canImport={canImportExcel}
+                  canExport={isSuperAdmin || Boolean(userPerms.personnel.exportExcel)}
+                  canImport={isSuperAdmin || Boolean(userPerms.personnel.importExcel)}
                   granularPermissions={userPerms.personnel}
                 />
               ) : (
@@ -1690,7 +1712,7 @@ export default function App() {
             )}
 
             {activeTab === 'karaneh' && (
-              userPerms.karaneh.view ? (
+              (isSuperAdmin || userPerms.karaneh.view) ? (
                 <KaranehModule
                   personnelList={personnelList}
                   karanehList={karanehList}
@@ -1700,8 +1722,8 @@ export default function App() {
                   onDeleteAllKaraneh={handleDeleteAllKaraneh}
                   onBatchImportKaraneh={handleBatchImportKaraneh}
                   canManage={canManageKaraneh}
-                  canExport={canExportExcel}
-                  canImport={canImportExcel}
+                  canExport={isSuperAdmin || Boolean(userPerms.karaneh.exportExcel)}
+                  canImport={isSuperAdmin || Boolean(userPerms.karaneh.importExcel)}
                   granularPermissions={userPerms.karaneh}
                 />
               ) : (
@@ -1785,6 +1807,8 @@ export default function App() {
                   dbStatus={dbStatus}
                   firebaseUserEmail={firebaseUser?.email || null}
                   firebaseSyncing={firebaseSyncing}
+                  canBackup={isSuperAdmin || Boolean(userPerms.system.backupDatabase)}
+                  canRestore={isSuperAdmin || Boolean(userPerms.system.restoreDatabase)}
                   onConnectGoogleFirebase={handleConnectGoogleFirebase}
                   onSyncToFirestore={handleSyncToFirestore}
                   onPullFromFirestore={handlePullFromFirestore}
@@ -1799,7 +1823,7 @@ export default function App() {
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
                   <div className="font-bold text-slate-800 text-sm">دسترسی محدود شده</div>
-                  <p>بخش پشتیبان‌گیری، بازیابی و راهنمای پایگاه داده منحصراً در اختیار مدیر ارشد سامانه است.</p>
+                  <p>بخش پشتیبان‌گیری، بازیابی و راهنمای پایگاه داده منحصراً در اختیار کاربران مجاز و مدیر ارشد سامانه است.</p>
                 </div>
               )
             )}

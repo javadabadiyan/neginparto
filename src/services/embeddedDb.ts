@@ -12,6 +12,11 @@ import {
   DatabaseStatus,
   KaranehComparisonRow,
 } from '../types';
+import {
+  normalizePermissions,
+  getEmptyPermissions,
+  getFullAdminPermissions,
+} from '../utils/permissions';
 
 const IDB_NAME = 'hr_embedded_permanent_db';
 const IDB_VERSION = 1;
@@ -548,42 +553,8 @@ function isSuperAdmin(user: User | null): boolean {
 function hasPerm(user: User | null, section: string, action: string): boolean {
   if (!user || !user.isActive) return false;
   if (isSuperAdmin(user)) return true;
-  const perms: any = user.permissions || {};
-  if (perms[section] && typeof perms[section][action] === 'boolean') return perms[section][action];
-  if (action === 'deleteAll') return false;
-  if (section === 'personnel') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManagePersonnel);
-    return !!perms.canManagePersonnel;
-  }
-  if (section === 'karaneh') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageKaraneh);
-    return !!perms.canManageKaraneh;
-  }
-  if (section === 'jobGroups') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageJobGroups);
-    return !!perms.canManageJobGroups;
-  }
-  if (section === 'commitments') {
-    if (action === 'view' || action === 'print') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageCommitments);
-    return !!perms.canManageCommitments;
-  }
-  if (section === 'payroll') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && (perms.canManagePersonnel || perms.canManageKaraneh));
-    return !!(perms.canManagePersonnel || perms.canManageKaraneh);
-  }
-  if (section === 'users') return !!perms.canManageUsers;
-  if (section === 'system') return action === 'dashboardStats' ? true : !!perms.canBackupRestore;
-  return false;
+  const perms: any = normalizePermissions(user.permissions);
+  return Boolean(perms?.[section]?.[action] === true);
 }
 
 function getAllowedUnitsEmb(user: User | null): string[] {
@@ -620,7 +591,10 @@ function hasMiningOrUnitPermEmb(user: User | null, action: string): boolean {
 
 function stripPass(u: any): User {
   const { password: _, ...rest } = u;
-  return rest;
+  return {
+    ...rest,
+    permissions: isSuperAdmin(u) ? getFullAdminPermissions() : normalizePermissions(u?.permissions),
+  };
 }
 
 function normPayrollKey(key: string): string {
@@ -741,18 +715,26 @@ export const embeddedDb = {
     if (!user.username || !user.password || !user.fullName) {
       return { success: false, message: 'تکمیل نام کاربری، رمز عبور و نام الزامی است.' };
     }
+    if (String(user.role || '').trim() === 'super_admin' && !isSuperAdmin(auth)) {
+      return { success: false, message: 'فقط مدیر ارشد مجاز به ایجاد کاربر با نقش مدیر ارشد است.' };
+    }
     if (db.users.some((u) => u.username.toLowerCase() === String(user.username).trim().toLowerCase())) {
       return { success: false, message: 'این نام کاربری قبلاً ثبت شده است.' };
     }
+    const normalizedPerms = user.role === 'super_admin'
+      ? getFullAdminPermissions()
+      : user.permissions && typeof user.permissions === 'object'
+      ? normalizePermissions(user.permissions)
+      : getEmptyPermissions();
     const newUser: any = {
       id: `u-${Date.now()}`,
       username: String(user.username).trim(),
       password: hashPasswordClient(String(user.password)),
       email: user.email ? String(user.email).trim().toLowerCase() : '',
       fullName: user.fullName,
-      role: user.role || 'viewer',
+      role: user.role || 'کاربر سفارشی',
       department: user.department || '',
-      permissions: user.permissions || buildPresetPermissions('مشاهده‌گر'),
+      permissions: normalizedPerms,
       isActive: true,
       createdAt: new Date().toLocaleDateString('fa-IR'),
     };
@@ -768,16 +750,25 @@ export const embeddedDb = {
     const idx = db.users.findIndex((u) => u.id === id);
     if (idx < 0) return { success: false, message: 'کاربر یافت نشد.' };
     const existing = db.users[idx];
+    if (!isSuperAdmin(auth) && (isSuperAdmin(existing) || user.role === 'super_admin')) {
+      return { success: false, message: 'ویرایش مدیر ارشد یا ارتقای نقش فقط توسط مدیر ارشد مجاز است.' };
+    }
     if (existing.username === 'javadabadiyan' && user.isActive === false) {
       return { success: false, message: 'حساب ادمین ارشد قابل غیرفعال‌سازی نیست.' };
     }
+    const nextRole = user.role ?? existing.role;
+    const nextPermissions = nextRole === 'super_admin' || existing.username === 'javadabadiyan'
+      ? getFullAdminPermissions()
+      : user.permissions !== undefined
+      ? normalizePermissions(user.permissions)
+      : normalizePermissions(existing.permissions);
     db.users[idx] = {
       ...existing,
       fullName: user.fullName ?? existing.fullName,
       email: user.email !== undefined ? String(user.email).trim().toLowerCase() : existing.email,
-      role: user.role ?? existing.role,
+      role: nextRole,
       department: user.department ?? existing.department,
-      permissions: user.permissions ?? existing.permissions,
+      permissions: nextPermissions,
       isActive: user.isActive ?? existing.isActive,
       password: user.password ? hashPasswordClient(String(user.password)) : existing.password,
     };
@@ -809,17 +800,19 @@ export const embeddedDb = {
       const fullName = String(row.fullName || row['نام و نام خانوادگی'] || '').trim();
       if (!username || !fullName || username.toLowerCase() === 'javadabadiyan') continue;
       const role = String(row.role || row['نقش سازمانی'] || 'کارشناس اداری').trim();
+      if (role === 'super_admin' && !isSuperAdmin(auth)) continue;
       const department = String(row.department || row['واحد اداری'] || '').trim();
       const rawActive = String(row.isActive ?? row['وضعیت حساب'] ?? 'فعال').trim();
       const isActive = rawActive !== 'غیرفعال' && rawActive !== 'مسدود' && rawActive !== 'false' && rawActive !== '0';
-      const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'مشاهده‌گر').trim();
+      const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'دسترسی صفر').trim();
       const rawPass = String(row.password || row['رمز عبور'] || '').trim();
       const idx = db.users.findIndex((u) => u.username.toLowerCase() === username.toLowerCase());
       if (idx >= 0) {
         const existing = db.users[idx];
+        if (isSuperAdmin(existing) && !isSuperAdmin(auth)) continue;
         db.users[idx] = {
           ...existing, fullName, role, department, isActive,
-          permissions: row['الگوی دسترسی'] ? buildPresetPermissions(presetLabel) : existing.permissions,
+          permissions: row['الگوی دسترسی'] ? normalizePermissions(buildPresetPermissions(presetLabel)) : normalizePermissions(existing.permissions),
           password: rawPass ? hashPasswordClient(rawPass) : existing.password,
         };
         updated++;
@@ -827,7 +820,7 @@ export const embeddedDb = {
         db.users.push({
           id: `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           username, password: hashPasswordClient(rawPass || '12345678'), fullName, role, department, isActive,
-          permissions: buildPresetPermissions(presetLabel),
+          permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissions(buildPresetPermissions(presetLabel)) : getEmptyPermissions(),
           createdAt: new Date().toLocaleDateString('fa-IR'),
         });
         added++;
@@ -1102,6 +1095,18 @@ export const embeddedDb = {
     summary: { totalEmployees: number; totalCurrent: number; totalPrevious: number; totalDiff: number; overallGrowthPercent: number; countIncreased: number; countDecreased: number; countUnchanged: number; countNew: number; };
   }> {
     const db = await loadEmbeddedDb();
+    const auth = await getCurrentAuthUser(db);
+    if (!hasPerm(auth, 'karaneh', 'view')) {
+      return {
+        currentPeriod,
+        previousPeriod,
+        comparisonRows: [],
+        summary: {
+          totalEmployees: 0, totalCurrent: 0, totalPrevious: 0, totalDiff: 0,
+          overallGrowthPercent: 0, countIncreased: 0, countDecreased: 0, countUnchanged: 0, countNew: 0,
+        },
+      };
+    }
     const currentRecords = db.karaneh.filter((k) => k.period === currentPeriod);
     const previousRecords = db.karaneh.filter((k) => k.period === previousPeriod);
     const prevMap = new Map(previousRecords.map((p) => [String(p.personnelCode).trim(), p]));
@@ -2006,7 +2011,16 @@ export const embeddedDb = {
 
   async getDatabaseStatus(): Promise<DatabaseStatus> {
     const db = await loadEmbeddedDb();
-    const approxBytes = utf8Bytes(JSON.stringify(db)).length;
+    const auth = await getCurrentAuthUser(db);
+    const canStats = isSuperAdmin(auth) || hasPerm(auth, 'system', 'dashboardStats') || hasPerm(auth, 'system', 'backupDatabase') || hasPerm(auth, 'system', 'restoreDatabase');
+    const canPers = canStats || hasPerm(auth, 'personnel', 'view');
+    const canKar = canStats || hasPerm(auth, 'karaneh', 'view');
+    const canPay = canStats || hasPerm(auth, 'payroll', 'view');
+    const canUsers = canStats || hasPerm(auth, 'users', 'view');
+    const canJg = canStats || hasPerm(auth, 'jobGroups', 'view');
+    const canCmt = canStats || hasPerm(auth, 'commitments', 'view');
+    const canMining = canStats || hasMiningOrUnitPermEmb(auth, 'view');
+    const approxBytes = canStats ? utf8Bytes(JSON.stringify(db)).length : 0;
     const totalActiveUsers = db.users.filter((u) => u.isActive !== false).length;
     const totalPersonnelWithDocs = db.personnel.filter((p) => {
       const d = p.documents || {};
@@ -2017,22 +2031,22 @@ export const embeddedDb = {
     const karanehPeriodsCount = new Set(db.karaneh.map((k) => k.period).filter(Boolean)).size;
     return {
       storageLocation: 'پایگاه داده دائمی داخلی مرورگر (IndexedDB)',
-      totalPersonnel: db.personnel.length,
-      totalRelatives,
-      totalKaranehRecords: db.karaneh.length,
-      totalPayrollRecords: db.payroll.length,
-      totalUsers: db.users.length,
-      totalActiveUsers,
-      totalPersonnelWithDocs,
-      payrollPeriodsCount,
-      karanehPeriodsCount,
-      totalJobGroups: db.jobGroups.length,
-      totalJobClassifications: db.jobClassifications.length,
-      totalCommitments: db.commitments.length,
-      totalArchivedCommitments: db.commitments.filter((c) => c.isArchived).length,
-      totalMiningVolumes: (db.miningVolumes || []).length,
-      totalMiningMachinery: (db.miningMachinery || []).length,
-      totalUnitReports: (db.unitReports || []).length,
+      totalPersonnel: canPers ? db.personnel.length : 0,
+      totalRelatives: canPers ? totalRelatives : 0,
+      totalKaranehRecords: canKar ? db.karaneh.length : 0,
+      totalPayrollRecords: canPay ? db.payroll.length : 0,
+      totalUsers: canUsers ? db.users.length : 0,
+      totalActiveUsers: canUsers ? totalActiveUsers : 0,
+      totalPersonnelWithDocs: canPers ? totalPersonnelWithDocs : 0,
+      payrollPeriodsCount: canPay ? payrollPeriodsCount : 0,
+      karanehPeriodsCount: canKar ? karanehPeriodsCount : 0,
+      totalJobGroups: canJg ? db.jobGroups.length : 0,
+      totalJobClassifications: canJg ? db.jobClassifications.length : 0,
+      totalCommitments: canCmt ? db.commitments.length : 0,
+      totalArchivedCommitments: canCmt ? db.commitments.filter((c) => c.isArchived).length : 0,
+      totalMiningVolumes: canMining ? (db.miningVolumes || []).length : 0,
+      totalMiningMachinery: canMining ? (db.miningMachinery || []).length : 0,
+      totalUnitReports: canMining ? (db.unitReports || []).length : 0,
       storageEngine: 'indexeddb-embedded',
       fileSizeBytes: approxBytes,
       lastSaved: db.lastSaved || 'هم‌اکنون',

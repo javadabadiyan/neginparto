@@ -109,8 +109,8 @@ export const SmartPersonnelDashboard: React.FC<SmartPersonnelDashboardProps> = (
   granularPermissions,
   isSuperAdmin = false,
 }) => {
-  const canExport = isSuperAdmin || (granularPermissions?.exportExcel ?? true);
-  const canPrint = isSuperAdmin || (granularPermissions?.print ?? true);
+  const canExport = isSuperAdmin || Boolean(granularPermissions?.exportExcel);
+  const canPrint = isSuperAdmin || Boolean(granularPermissions?.print);
 
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [employmentFilter, setEmploymentFilter] = useState<string>('all');

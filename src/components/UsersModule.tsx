@@ -34,6 +34,7 @@ import {
 import { toPersianDigits } from '../utils/persian';
 import {
   getFullAdminPermissions,
+  getEmptyPermissions,
   getDefaultViewerPermissions,
   getHrSpecialistPermissions,
   getKaranehSpecialistPermissions,
@@ -41,7 +42,8 @@ import {
   getUnitSupervisorPermissions,
   getDispatchingOfficerPermissions,
   getWorkshopOfficerPermissions,
-  normalizePermissions
+  normalizePermissions,
+  countActivePermissions
 } from '../utils/permissions';
 import {
   exportUsersToExcel,
@@ -62,6 +64,7 @@ interface UsersModuleProps {
 }
 
 const ROLE_SUGGESTIONS = [
+  { label: 'کاربر سفارشی (شروع خالی — انتخاب دستی)', preset: 'empty' },
   { label: 'مدیر عامل شرکت نگین پرتو نصر', preset: 'ceo' },
   { label: 'مسئول دیسپچینگ و کنترل تولید', preset: 'dispatching' },
   { label: 'مسئول تعمیرگاه و ماشین‌آلات سنگین', preset: 'workshop' },
@@ -85,12 +88,12 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   granularPermissions
 }) => {
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
-  const canCreateUser = isSuperAdmin || (granularPermissions?.create ?? true);
-  const canEditUser = isSuperAdmin || (granularPermissions?.edit ?? true);
-  const canDeleteUser = isSuperAdmin || (granularPermissions?.delete ?? true);
+  const canCreateUser = isSuperAdmin || Boolean(granularPermissions?.create);
+  const canEditUser = isSuperAdmin || Boolean(granularPermissions?.edit);
+  const canDeleteUser = isSuperAdmin || Boolean(granularPermissions?.delete);
   const canDeleteAllUsers = isSuperAdmin || Boolean(granularPermissions?.deleteAll);
-  const canImportUsers = isSuperAdmin || (granularPermissions?.importExcel ?? canCreateUser);
-  const canExportUsers = isSuperAdmin || (granularPermissions?.exportExcel ?? true);
+  const canImportUsers = isSuperAdmin || Boolean(granularPermissions?.importExcel);
+  const canExportUsers = isSuperAdmin || Boolean(granularPermissions?.exportExcel);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -113,17 +116,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   }, [users, currentUser?.id]);
 
   const fullAdminPerms = getFullAdminPermissions();
-  const totalPermissionsCount =
-    Object.keys(fullAdminPerms.personnel).length +
-    Object.keys(fullAdminPerms.karaneh).length +
-    Object.keys(fullAdminPerms.jobGroups).length +
-    Object.keys(fullAdminPerms.commitments).length +
-    Object.keys(fullAdminPerms.payroll || {}).length +
-    Object.keys(fullAdminPerms.users).length +
-    Object.keys(fullAdminPerms.system).length +
-    Object.keys(fullAdminPerms.smartDashboard || {}).length +
-    Object.keys(fullAdminPerms.ceoDashboard || {}).length +
-    Object.keys(fullAdminPerms.unitOperations || {}).filter(k => k !== 'allowedUnits').length;
+  const totalPermissionsCount = countActivePermissions(fullAdminPerms).total;
 
   const [formData, setFormData] = useState<{
     username: string;
@@ -139,10 +132,10 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
     password: '',
     email: '',
     fullName: '',
-    role: 'کارشناس کارگزینی',
-    department: 'منابع انسانی',
+    role: 'کاربر سفارشی',
+    department: '',
     isActive: true,
-    permissions: getHrSpecialistPermissions()
+    permissions: getEmptyPermissions()
   });
 
   const handleOpenAdd = () => {
@@ -153,15 +146,20 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
       password: '',
       email: '',
       fullName: '',
-      role: 'کارشناس کارگزینی',
-      department: 'منابع انسانی',
+      role: 'کاربر سفارشی',
+      department: '',
       isActive: true,
-      permissions: getHrSpecialistPermissions()
+      permissions: getEmptyPermissions()
     });
     setIsFormOpen(true);
   };
 
   const handleOpenEdit = (user: User) => {
+    setActionError('');
+    if (!isSuperAdmin && (user.username === 'javadabadiyan' || user.role === 'super_admin')) {
+      setActionError('ویرایش اطلاعات یا مجوزهای مدیر ارشد سامانه فقط توسط مدیر ارشد مجاز است.');
+      return;
+    }
     setEditingUser(user);
     setFormError('');
     const normalized = normalizePermissions(user.permissions);
@@ -170,7 +168,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
       password: '', // blank unless changing
       email: user.email || '',
       fullName: user.fullName,
-      role: user.role || 'کارشناس کارگزینی',
+      role: user.role || 'کاربر سفارشی',
       department: user.department || '',
       isActive: user.isActive,
       permissions: normalized
@@ -178,20 +176,35 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
     setIsFormOpen(true);
   };
 
-  // Helper to toggle specific nested permission
+  // Helper to toggle specific nested permission with parent/child consistency
   const handleToggle = <M extends keyof UserPermissions>(
     module: M,
     field: keyof NonNullable<UserPermissions[M]>
   ) => {
     setFormData(prev => {
       const moduleObj = { ...((prev.permissions[module] as any) || {}) };
-      moduleObj[field as string] = !moduleObj[field as string];
+      const fieldKey = String(field);
+      const nextValue = !Boolean(moduleObj[fieldKey]);
+      moduleObj[fieldKey] = nextValue;
+
+      if (fieldKey === 'view' && !nextValue) {
+        Object.keys(moduleObj).forEach(k => {
+          if (k === 'allowedUnits') {
+            moduleObj[k] = [];
+          } else if (typeof moduleObj[k] === 'boolean') {
+            moduleObj[k] = false;
+          }
+        });
+      } else if (fieldKey !== 'view' && nextValue && 'view' in moduleObj) {
+        moduleObj.view = true;
+      }
+
       return {
         ...prev,
-        permissions: {
+        permissions: normalizePermissions({
           ...prev.permissions,
           [module]: moduleObj
-        }
+        })
       };
     });
   };
@@ -202,26 +215,24 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
     value: boolean
   ) => {
     setFormData(prev => {
-      const existing = (prev.permissions[module] as any) || (
-        module === 'smartDashboard'
-          ? { view: false, exportExcel: false, print: false }
-          : module === 'ceoDashboard'
-          ? { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false }
-          : module === 'unitOperations'
-          ? { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] }
-          : {}
-      );
+      const empty = getEmptyPermissions();
+      const existing = (prev.permissions[module] as any) || (empty[module] as any) || {};
       const currentModule = { ...existing } as Record<string, any>;
       Object.keys(currentModule).forEach(k => {
-        if (k === 'allowedUnits' || typeof currentModule[k] !== 'boolean') return;
-        currentModule[k] = value;
+        if (k === 'allowedUnits') {
+          if (!value) currentModule[k] = [];
+          return;
+        }
+        if (typeof currentModule[k] === 'boolean') {
+          currentModule[k] = value;
+        }
       });
       return {
         ...prev,
-        permissions: {
+        permissions: normalizePermissions({
           ...prev.permissions,
           [module]: currentModule
-        }
+        })
       };
     });
   };
@@ -283,10 +294,11 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
 
   // Preset handlers
   const applyPreset = (
-    presetType: 'admin' | 'ceo' | 'hr' | 'karaneh' | 'dispatching' | 'workshop' | 'unit_supervisor' | 'viewer'
+    presetType: 'empty' | 'admin' | 'ceo' | 'hr' | 'karaneh' | 'dispatching' | 'workshop' | 'unit_supervisor' | 'viewer'
   ) => {
     let perms: UserPermissions;
-    if (presetType === 'admin') perms = getFullAdminPermissions();
+    if (presetType === 'empty') perms = getEmptyPermissions();
+    else if (presetType === 'admin') perms = getFullAdminPermissions();
     else if (presetType === 'ceo') perms = getCeoPermissions();
     else if (presetType === 'hr') perms = getHrSpecialistPermissions();
     else if (presetType === 'karaneh') perms = getKaranehSpecialistPermissions();
@@ -297,7 +309,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
 
     setFormData(prev => ({
       ...prev,
-      permissions: perms
+      permissions: normalizePermissions(perms)
     }));
   };
 
@@ -309,14 +321,27 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
       return;
     }
 
+    if (!isSuperAdmin && formData.role.trim() === 'super_admin') {
+      setFormError('تخصیص نقش مدیر ارشد سامانه (super_admin) فقط توسط مدیر ارشد مجاز است.');
+      return;
+    }
+
+    if (!isSuperAdmin && editingUser && (editingUser.username === 'javadabadiyan' || editingUser.role === 'super_admin')) {
+      setFormError('شما مجوز ویرایش حساب مدیر ارشد را ندارید.');
+      return;
+    }
+
     if (!editingUser && !formData.password) {
       setFormError('وارد کردن رمز عبور برای ایجاد کاربر جدید الزامی است.');
       return;
     }
 
+    const normalizedPermissions = normalizePermissions(formData.permissions);
+
     const payload = {
       ...formData,
       id: editingUser ? editingUser.id : undefined,
+      permissions: normalizedPermissions,
     };
 
     const success = await onSaveUser(payload);
@@ -437,13 +462,15 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
             </button>
           )}
 
-          <button
-            onClick={downloadUsersTemplate}
-            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>نمونه اکسل کاربران</span>
-          </button>
+          {(canImportUsers || canExportUsers) && (
+            <button
+              onClick={downloadUsersTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>نمونه اکسل کاربران</span>
+            </button>
+          )}
 
           {canDeleteAllUsers && onDeleteAllUsers && selectableUserIds.length > 0 && (
             <button
@@ -632,6 +659,16 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                         <span className="font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md border border-indigo-100 persian-num">
                           {toPersianDigits(totalActive)} از {toPersianDigits(totalPermissionsCount)} مجوز
                         </span>
+                        {totalActive === 0 && (
+                          <span className="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                            بدون دسترسی فعال
+                          </span>
+                        )}
+                        {norm.system?.dashboardStats && (
+                          <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                            داشبورد کلان
+                          </span>
+                        )}
                         {norm.personnel.view && (
                           <span className={`px-1.5 py-0.5 rounded ${norm.personnel.delete ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-700'}`}>
                             کارگزینی ({toPersianDigits(pCount.active)})
@@ -680,6 +717,11 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                             کاربران ({toPersianDigits(uCount.active)})
                           </span>
                         )}
+                        {(norm.system?.backupDatabase || norm.system?.restoreDatabase) && (
+                          <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">
+                            پشتیبان‌گیری
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="py-3.5 px-3 text-center">
@@ -692,7 +734,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                     </td>
                     <td className="py-3.5 px-3 text-center">
                       <div className="flex items-center justify-center gap-1">
-                        {canEditUser && (
+                        {canEditUser && (isSuperAdmin || (u.username !== 'javadabadiyan' && u.role !== 'super_admin')) && (
                           <button
                             onClick={() => handleOpenEdit(u)}
                             title="تنظیم دقیق نقش و مجوزها"
@@ -905,6 +947,13 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
+                      onClick={() => applyPreset('empty')}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[11px] font-bold transition-colors"
+                    >
+                      دسترسی صفر (شروع خالی)
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => applyPreset('admin')}
                       className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold transition-colors border border-indigo-200 persian-num"
                     >
@@ -913,7 +962,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                     <button
                       type="button"
                       onClick={() => applyPreset('ceo')}
-                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg text-[11px] font-bold transition-colors border border-slate-700"
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-[11px] font-bold transition-colors border border-slate-700"
                     >
                       الگوی مدیر عامل
                     </button>
@@ -933,24 +982,52 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        handleSetModuleAll('personnel', false);
-                        handleSetModuleAll('karaneh', false);
-                        handleSetModuleAll('jobGroups', false);
-                        handleSetModuleAll('commitments', false);
-                        handleSetModuleAll('payroll', false);
-                        handleSetModuleAll('users', false);
-                        handleSetModuleAll('system', false);
-                        handleSetModuleAll('smartDashboard', false);
-                        handleSetModuleAll('ceoDashboard', false);
-                        handleSetModuleAll('unitOperations', false);
-                      }}
+                      onClick={() => applyPreset('empty')}
                       className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-[11px] font-medium transition-colors border border-red-200"
                     >
                       غیرفعال کردن همه
                     </button>
                   </div>
                 </div>
+
+                {/* Live Active Permissions & Visible Menus Preview */}
+                {(() => {
+                  const modalCounts = countActivePermissions(formData.permissions);
+                  const visibleTabs: string[] = [];
+                  if (formData.permissions.system?.dashboardStats) visibleTabs.push('داشبورد کلان');
+                  if (formData.permissions.smartDashboard?.view) visibleTabs.push('گزارش هوشمند');
+                  if (formData.permissions.ceoDashboard?.view) visibleTabs.push('داشبورد مدیرعامل');
+                  if (formData.permissions.unitOperations?.view) visibleTabs.push('عملیات واحدها');
+                  if (formData.permissions.personnel?.view) visibleTabs.push('پرونده پرسنلی');
+                  if (formData.permissions.commitments?.view) visibleTabs.push('تعهدات');
+                  if (formData.permissions.jobGroups?.view) visibleTabs.push('رتبه‌های شغلی');
+                  if (formData.permissions.payroll?.view) visibleTabs.push('حقوق و دستمزد');
+                  if (formData.permissions.karaneh?.view) visibleTabs.push('کارانه');
+                  if (formData.permissions.users?.view) visibleTabs.push('مدیریت کاربران');
+                  if (formData.permissions.system?.backupDatabase || formData.permissions.system?.restoreDatabase) visibleTabs.push('پشتیبان‌گیری');
+
+                  return (
+                    <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="font-bold text-indigo-900">بخش‌های قابل مشاهده برای این کاربر:</span>
+                        {visibleTabs.length > 0 ? (
+                          visibleTabs.map(tab => (
+                            <span key={tab} className="px-2 py-0.5 rounded-md bg-white border border-indigo-200 text-indigo-800 font-bold">
+                              {tab}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-rose-700 font-bold">
+                            هیچ بخشی فعال نیست — کاربر فقط صفحه دسترسی محدود را می‌بیند
+                          </span>
+                        )}
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shrink-0 persian-num">
+                        {toPersianDigits(modalCounts.active)} از {toPersianDigits(totalPermissionsCount)} مجوز فعال
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {/* 10 Categorized Granular Modules */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

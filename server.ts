@@ -120,16 +120,7 @@ function getInitialDatabase() {
         fullName: 'جواد آبادیان (مدیر ارشد سامانه)',
         role: 'super_admin',
         department: 'مدیریت منابع انسانی و کارگزینی',
-        permissions: {
-          canManagePersonnel: true,
-          canManageKaraneh: true,
-          canManageJobGroups: true,
-          canManageCommitments: true,
-          canManageUsers: true,
-          canExportExcel: true,
-          canImportExcel: true,
-          canBackupRestore: true,
-        },
+        permissions: getFullAdminPermissionsServer(),
         isActive: true,
         createdAt: '1403/01/01',
         lastLogin: 'هم‌اکنون',
@@ -141,16 +132,14 @@ function getInitialDatabase() {
         fullName: 'سارا کاظمی (کارشناس ارزیابی و کارانه)',
         role: 'karaneh_officer',
         department: 'اداره جبران خدمت و کارانه',
-        permissions: {
-          canManagePersonnel: false,
-          canManageKaraneh: true,
-          canManageJobGroups: false,
-          canManageCommitments: false,
-          canManageUsers: false,
-          canExportExcel: true,
-          canImportExcel: true,
-          canBackupRestore: false,
-        },
+        permissions: normalizePermissionsServer({
+          personnel: { view: true, exportExcel: true, viewSalary: true },
+          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          jobGroups: { view: true, exportExcel: true },
+          payroll: { view: true, exportExcel: true },
+          smartDashboard: { view: true, exportExcel: true },
+          system: { dashboardStats: true },
+        }),
         isActive: true,
         createdAt: '1403/03/10',
         lastLogin: '۱۴۰۳/۰۸/۰۲',
@@ -162,16 +151,15 @@ function getInitialDatabase() {
         fullName: 'محمد امینی (کارشناس امور اداری و پرسنلی)',
         role: 'hr_officer',
         department: 'امور کارکنان و قراردادها',
-        permissions: {
-          canManagePersonnel: true,
-          canManageKaraneh: false,
-          canManageJobGroups: true,
-          canManageCommitments: true,
-          canManageUsers: false,
-          canExportExcel: true,
-          canImportExcel: true,
-          canBackupRestore: false,
-        },
+        permissions: normalizePermissionsServer({
+          personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
+          karaneh: { view: true, exportExcel: true },
+          jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
+          payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          smartDashboard: { view: true, exportExcel: true, print: true },
+          system: { dashboardStats: true },
+        }),
         isActive: true,
         createdAt: '1403/04/15',
         lastLogin: '۱۴۰۳/۰۸/۰۱',
@@ -870,64 +858,170 @@ interface AuthenticatedRequest extends Request {
 }
 
 function isSuperAdminUser(user: any): boolean {
-  return user && (user.role === 'super_admin' || user.username === 'javadabadiyan');
+  return Boolean(user && (user.role === 'super_admin' || user.username === 'javadabadiyan'));
+}
+
+function getEmptyPermissionsServer() {
+  return {
+    personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
+    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
+    payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+    smartDashboard: { view: false, exportExcel: false, print: false },
+    ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+    unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] as string[] },
+    canManagePersonnel: false,
+    canManageKaraneh: false,
+    canManageJobGroups: false,
+    canManageCommitments: false,
+    canManageUsers: false,
+    canExportExcel: false,
+    canImportExcel: false,
+    canBackupRestore: false,
+  };
+}
+
+function getFullAdminPermissionsServer() {
+  return {
+    personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
+    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
+    payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
+    smartDashboard: { view: true, exportExcel: true, print: true },
+    ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
+    unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] as string[] },
+    canManagePersonnel: true,
+    canManageKaraneh: true,
+    canManageJobGroups: true,
+    canManageCommitments: true,
+    canManageUsers: true,
+    canExportExcel: true,
+    canImportExcel: true,
+    canBackupRestore: true,
+  };
+}
+
+function syncLegacyPermissionsServer(perms: any) {
+  return {
+    ...perms,
+    canManagePersonnel: Boolean(perms.personnel.create || perms.personnel.edit || perms.personnel.delete),
+    canManageKaraneh: Boolean(perms.karaneh.create || perms.karaneh.edit || perms.karaneh.delete),
+    canManageJobGroups: Boolean(perms.jobGroups.create || perms.jobGroups.edit || perms.jobGroups.delete),
+    canManageCommitments: Boolean(perms.commitments.create || perms.commitments.edit || perms.commitments.delete),
+    canManageUsers: Boolean(perms.users.create || perms.users.edit || perms.users.delete),
+    canExportExcel: Boolean(
+      perms.personnel.exportExcel ||
+      perms.karaneh.exportExcel ||
+      perms.jobGroups.exportExcel ||
+      perms.commitments.exportExcel ||
+      perms.payroll.exportExcel ||
+      perms.users.exportExcel ||
+      perms.smartDashboard.exportExcel ||
+      perms.ceoDashboard.exportExcel ||
+      perms.unitOperations.exportExcel
+    ),
+    canImportExcel: Boolean(
+      perms.personnel.importExcel ||
+      perms.karaneh.importExcel ||
+      perms.jobGroups.importExcel ||
+      perms.commitments.importExcel ||
+      perms.payroll.importExcel ||
+      perms.users.importExcel ||
+      perms.ceoDashboard.importExcel ||
+      perms.unitOperations.importExcel
+    ),
+    canBackupRestore: Boolean(perms.system.backupDatabase || perms.system.restoreDatabase),
+  };
+}
+
+function normalizePermissionsServer(raw: any) {
+  if (!raw || typeof raw !== 'object') return getEmptyPermissionsServer();
+
+  const hasModernSchema = Boolean(
+    (raw.personnel && typeof raw.personnel === 'object') ||
+    (raw.karaneh && typeof raw.karaneh === 'object') ||
+    (raw.jobGroups && typeof raw.jobGroups === 'object') ||
+    (raw.commitments && typeof raw.commitments === 'object') ||
+    (raw.payroll && typeof raw.payroll === 'object') ||
+    (raw.users && typeof raw.users === 'object') ||
+    (raw.system && typeof raw.system === 'object') ||
+    (raw.smartDashboard && typeof raw.smartDashboard === 'object') ||
+    (raw.ceoDashboard && typeof raw.ceoDashboard === 'object') ||
+    (raw.unitOperations && typeof raw.unitOperations === 'object')
+  );
+
+  if (!hasModernSchema) {
+    const lp = raw.canManagePersonnel === true;
+    const lk = raw.canManageKaraneh === true;
+    const lj = raw.canManageJobGroups === true;
+    const lc = raw.canManageCommitments === true;
+    const lu = raw.canManageUsers === true;
+    const le = raw.canExportExcel === true;
+    const li = raw.canImportExcel === true;
+    const lb = raw.canBackupRestore === true;
+
+    return syncLegacyPermissionsServer({
+      personnel: { view: lp, create: lp, edit: lp, delete: lp && lu, deleteAll: false, importExcel: lp && li, exportExcel: lp && le, viewSalary: lp, documents: lp },
+      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le },
+      jobGroups: { view: lj, create: lj, edit: lj, delete: lj && lu, deleteAll: false, importExcel: lj && li, exportExcel: lj && le },
+      commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
+      payroll: { view: lk || lp, create: lk || lp, edit: lk || lp, delete: (lk || lp) && lu, deleteAll: false, importExcel: (lk || lp) && li, exportExcel: (lk || lp) && le },
+      users: { view: lu, create: lu, edit: lu, delete: lu, deleteAll: false, importExcel: lu && li, exportExcel: lu && le },
+      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb },
+      smartDashboard: { view: false, exportExcel: false, print: false },
+      ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+      unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
+    });
+  }
+
+  const p = raw.personnel || {};
+  const k = raw.karaneh || {};
+  const jg = raw.jobGroups || {};
+  const c = raw.commitments || {};
+  const pr = raw.payroll || {};
+  const u = raw.users || {};
+  const s = raw.system || {};
+  const sd = raw.smartDashboard || {};
+  const cd = raw.ceoDashboard || {};
+  const uo = raw.unitOperations || {};
+  const b = (v: any) => v === true;
+
+  return syncLegacyPermissionsServer({
+    personnel: { view: b(p.view), create: b(p.create), edit: b(p.edit), delete: b(p.delete), deleteAll: b(p.deleteAll), importExcel: b(p.importExcel), exportExcel: b(p.exportExcel), viewSalary: b(p.viewSalary), documents: b(p.documents) },
+    karaneh: { view: b(k.view), create: b(k.create), edit: b(k.edit), delete: b(k.delete), deleteAll: b(k.deleteAll), importExcel: b(k.importExcel), exportExcel: b(k.exportExcel) },
+    jobGroups: { view: b(jg.view), create: b(jg.create), edit: b(jg.edit), delete: b(jg.delete), deleteAll: b(jg.deleteAll), importExcel: b(jg.importExcel), exportExcel: b(jg.exportExcel) },
+    commitments: { view: b(c.view), create: b(c.create), edit: b(c.edit), delete: b(c.delete), deleteAll: b(c.deleteAll), print: b(c.print), archive: b(c.archive), importExcel: b(c.importExcel), exportExcel: b(c.exportExcel) },
+    payroll: { view: b(pr.view), create: b(pr.create), edit: b(pr.edit), delete: b(pr.delete), deleteAll: b(pr.deleteAll), importExcel: b(pr.importExcel), exportExcel: b(pr.exportExcel) },
+    users: { view: b(u.view), create: b(u.create), edit: b(u.edit), delete: b(u.delete), deleteAll: b(u.deleteAll), importExcel: b(u.importExcel), exportExcel: b(u.exportExcel) },
+    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase) },
+    smartDashboard: { view: b(sd.view), exportExcel: b(sd.exportExcel), print: b(sd.print) },
+    ceoDashboard: { view: b(cd.view), create: b(cd.create), edit: b(cd.edit), delete: b(cd.delete), deleteAll: b(cd.deleteAll), importExcel: b(cd.importExcel), exportExcel: b(cd.exportExcel), print: b(cd.print) },
+    unitOperations: { view: b(uo.view), create: b(uo.create), edit: b(uo.edit), delete: b(uo.delete), deleteAll: b(uo.deleteAll), importExcel: b(uo.importExcel), exportExcel: b(uo.exportExcel), allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [] },
+  });
+}
+
+function sanitizeUserServer(user: any) {
+  if (!user || typeof user !== 'object') return user;
+  const { password: _, ...rest } = user;
+  return {
+    ...rest,
+    permissions: isSuperAdminUser(user)
+      ? getFullAdminPermissionsServer()
+      : normalizePermissionsServer(user.permissions),
+  };
 }
 
 function checkPermission(user: any, section: string, action: string): boolean {
   if (!user || !user.isActive) return false;
   if (isSuperAdminUser(user)) return true;
-  const perms = user.permissions || {};
-
-  // Check granular nested object first
-  if (perms[section] && typeof perms[section][action] === 'boolean') {
-    return perms[section][action];
-  }
-
-  // Granular bulk clear requires explicit deleteAll permission (never via legacy flags)
-  if (action === 'deleteAll') {
-    return false;
-  }
-
-  // Fallback to legacy top-level flags
-  if (section === 'personnel') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManagePersonnel);
-    return !!perms.canManagePersonnel;
-  }
-  if (section === 'karaneh') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageKaraneh);
-    return !!perms.canManageKaraneh;
-  }
-  if (section === 'jobGroups') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageJobGroups);
-    return !!perms.canManageJobGroups;
-  }
-  if (section === 'commitments') {
-    if (action === 'view') return true;
-    if (action === 'print') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && perms.canManageCommitments);
-    return !!perms.canManageCommitments;
-  }
-  if (section === 'payroll') {
-    if (action === 'view') return true;
-    if (action === 'exportExcel') return perms.canExportExcel ?? true;
-    if (action === 'importExcel') return !!(perms.canImportExcel && (perms.canManagePersonnel || perms.canManageKaraneh));
-    return !!(perms.canManagePersonnel || perms.canManageKaraneh);
-  }
-  if (section === 'users') {
-    return !!perms.canManageUsers;
-  }
-  if (section === 'system') {
-    if (action === 'dashboardStats') return true;
-    return !!perms.canBackupRestore;
-  }
-  return false;
+  const perms: any = normalizePermissionsServer(user.permissions);
+  return Boolean(perms?.[section]?.[action] === true);
 }
 
 function getAllowedUnitsForUser(user: any): string[] {
@@ -1058,11 +1152,10 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     user.lastLogin = new Date().toLocaleString('fa-IR');
     await persistDatabase(db);
 
-    const { password: _, ...userWithoutPass } = user;
     return res.json({
       success: true,
       data: {
-        user: userWithoutPass,
+        user: sanitizeUserServer(user),
         token: createAuthToken(user)
       }
     });
@@ -1125,11 +1218,10 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
       })
     );
 
-    const { password: _, ...userWithoutPass } = user;
     return res.json({
       success: true,
       data: {
-        user: userWithoutPass,
+        user: sanitizeUserServer(user),
         token: createAuthToken(user),
       },
     });
@@ -1140,8 +1232,7 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
 });
 
 app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-  const { password: _, ...userWithoutPass } = req.authUser;
-  res.json({ success: true, data: userWithoutPass });
+  res.json({ success: true, data: sanitizeUserServer(req.authUser) });
 });
 
 // 2. Users Management
@@ -1150,10 +1241,7 @@ app.get('/api/users', requireAuth, (req: AuthenticatedRequest, res: Response) =>
     return res.json({ success: true, data: [] });
   }
   const db = loadDatabase();
-  const safeUsers = db.users.map((u: any) => {
-    const { password: _, ...rest } = u;
-    return rest;
-  });
+  const safeUsers = db.users.map(sanitizeUserServer);
   res.json({ success: true, data: safeUsers });
 });
 
@@ -1165,9 +1253,19 @@ app.post('/api/users', requireAuth, requirePerm('users', 'create'), async (req: 
     return res.status(400).json({ success: false, message: 'تکمیل نام کاربری، رمز عبور و نام الزامی است.' });
   }
 
+  if (String(role || '').trim() === 'super_admin' && !isSuperAdminUser(req.authUser)) {
+    return res.status(403).json({ success: false, message: 'فقط مدیر ارشد سامانه مجاز به ایجاد حساب با نقش super_admin است.' });
+  }
+
   if (db.users.some((u: any) => u.username.toLowerCase() === String(username).trim().toLowerCase())) {
     return res.status(400).json({ success: false, message: 'این نام کاربری قبلاً در سامانه ثبت شده است.' });
   }
+
+  const normalizedPermissions = role === 'super_admin'
+    ? getFullAdminPermissionsServer()
+    : permissions && typeof permissions === 'object'
+    ? normalizePermissionsServer(permissions)
+    : getEmptyPermissionsServer();
 
   const newUser = {
     id: `u-${Date.now()}`,
@@ -1175,18 +1273,9 @@ app.post('/api/users', requireAuth, requirePerm('users', 'create'), async (req: 
     password: hashPassword(String(password)),
     email: email ? String(email).trim().toLowerCase() : '',
     fullName,
-    role: role || 'viewer',
+    role: role || 'کاربر سفارشی',
     department: department || '',
-    permissions: permissions || {
-      canManagePersonnel: false,
-      canManageKaraneh: false,
-      canManageJobGroups: false,
-      canManageCommitments: false,
-      canManageUsers: false,
-      canExportExcel: true,
-      canImportExcel: false,
-      canBackupRestore: false,
-    },
+    permissions: normalizedPermissions,
     isActive: true,
     createdAt: new Date().toLocaleDateString('fa-IR'),
   };
@@ -1194,8 +1283,7 @@ app.post('/api/users', requireAuth, requirePerm('users', 'create'), async (req: 
   db.users.push(newUser);
   try {
     await persistDatabase(db);
-    const { password: _, ...safeUser } = newUser;
-    return res.json({ success: true, data: safeUser, message: 'کاربر جدید با موفقیت ذخیره شد.' });
+    return res.json({ success: true, data: sanitizeUserServer(newUser), message: 'کاربر جدید با موفقیت ذخیره شد.' });
   } catch (err) {
     console.error('Failed to persist new user:', err);
     return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی اطلاعات کاربر در پایگاه داده.' });
@@ -1214,25 +1302,35 @@ app.put('/api/users/:id', requireAuth, requirePerm('users', 'edit'), async (req:
   const existing = db.users[index];
   const { fullName, email, role, department, permissions, isActive, password } = req.body;
 
+  if (!isSuperAdminUser(req.authUser) && (isSuperAdminUser(existing) || role === 'super_admin')) {
+    return res.status(403).json({ success: false, message: 'تغییر مشخصات یا ارتقای سطح به مدیر ارشد فقط توسط مدیر ارشد مجاز است.' });
+  }
+
   if (existing.username === 'javadabadiyan' && isActive === false) {
     return res.status(400).json({ success: false, message: 'حساب ادمین ارشد (javadabadiyan) قابل غیرفعال‌سازی نیست.' });
   }
+
+  const nextRole = role ?? existing.role;
+  const nextPermissions = nextRole === 'super_admin' || existing.username === 'javadabadiyan'
+    ? getFullAdminPermissionsServer()
+    : permissions !== undefined
+    ? normalizePermissionsServer(permissions)
+    : normalizePermissionsServer(existing.permissions);
 
   db.users[index] = {
     ...existing,
     fullName: fullName ?? existing.fullName,
     email: email !== undefined ? String(email).trim().toLowerCase() : existing.email,
-    role: role ?? existing.role,
+    role: nextRole,
     department: department ?? existing.department,
-    permissions: permissions ?? existing.permissions,
+    permissions: nextPermissions,
     isActive: isActive ?? existing.isActive,
     password: password ? hashPassword(String(password)) : existing.password,
   };
 
   try {
     await persistDatabase(db);
-    const { password: _, ...safeUser } = db.users[index];
-    return res.json({ success: true, data: safeUser, message: 'اطلاعات و دسترسی‌های کاربر با موفقیت به‌روزرسانی شد.' });
+    return res.json({ success: true, data: sanitizeUserServer(db.users[index]), message: 'اطلاعات و دسترسی‌های کاربر با موفقیت به‌روزرسانی شد.' });
   } catch (err) {
     console.error('Failed to update user:', err);
     return res.status(500).json({ success: false, message: 'خطا در به‌روزرسانی اطلاعات کاربر در پایگاه داده.' });
@@ -1353,22 +1451,24 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
     if (username.toLowerCase() === 'javadabadiyan') continue; // never overwrite super admin via Excel
 
     const role = String(row.role || row['نقش سازمانی'] || 'کارشناس اداری').trim();
+    if (role === 'super_admin' && !isSuperAdminUser(req.authUser)) continue;
     const department = String(row.department || row['واحد اداری'] || '').trim();
     const rawActive = String(row.isActive ?? row['وضعیت حساب'] ?? 'فعال').trim();
     const isActive = rawActive !== 'غیرفعال' && rawActive !== 'مسدود' && rawActive !== 'false' && rawActive !== '0';
-    const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'مشاهده‌گر').trim();
+    const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'دسترسی صفر').trim();
     const rawPass = String(row.password || row['رمز عبور'] || '').trim();
 
     const idx = db.users.findIndex((u: any) => u.username.toLowerCase() === username.toLowerCase());
     if (idx >= 0) {
       const existing = db.users[idx];
+      if (isSuperAdminUser(existing) && !isSuperAdminUser(req.authUser)) continue;
       db.users[idx] = {
         ...existing,
         fullName,
         role,
         department,
         isActive,
-        permissions: row['الگوی دسترسی'] ? buildPresetPermissionsServer(presetLabel) : existing.permissions,
+        permissions: row['الگوی دسترسی'] ? normalizePermissionsServer(buildPresetPermissionsServer(presetLabel)) : normalizePermissionsServer(existing.permissions),
         password: rawPass ? hashPassword(rawPass) : existing.password,
       };
       updated++;
@@ -1382,7 +1482,7 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
         role,
         department,
         isActive,
-        permissions: buildPresetPermissionsServer(presetLabel),
+        permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissionsServer(buildPresetPermissionsServer(presetLabel)) : getEmptyPermissionsServer(),
         createdAt: new Date().toLocaleDateString('fa-IR'),
       });
       added++;
@@ -3206,28 +3306,37 @@ app.get('/api/database/status', requireAuth, (req: AuthenticatedRequest, res: Re
   const totalActiveUsers = (db.users || []).filter((u: any) => u.isActive !== false).length;
   const totalRelatives = (db.personnel || []).reduce((sum: number, p: any) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
 
+  const canStats = isSuperAdminUser(req.authUser) || checkPermission(req.authUser, 'system', 'dashboardStats') || checkPermission(req.authUser, 'system', 'backupDatabase') || checkPermission(req.authUser, 'system', 'restoreDatabase');
+  const canPers = canStats || checkPermission(req.authUser, 'personnel', 'view');
+  const canKar = canStats || checkPermission(req.authUser, 'karaneh', 'view');
+  const canPay = canStats || checkPermission(req.authUser, 'payroll', 'view');
+  const canUsers = canStats || checkPermission(req.authUser, 'users', 'view');
+  const canJg = canStats || checkPermission(req.authUser, 'jobGroups', 'view');
+  const canCmt = canStats || checkPermission(req.authUser, 'commitments', 'view');
+  const canMining = canStats || hasMiningOrUnitPerm(req.authUser, 'view');
+
   res.json({
     success: true,
     data: {
       storageLocation: 'سرور ابری و پایگاه داده مرکزی',
-      totalPersonnel: (db.personnel || []).length,
-      totalRelatives,
-      totalKaranehRecords: (db.karaneh || []).length,
-      totalPayrollRecords: (db.payroll || []).length,
-      totalUsers: (db.users || []).length,
-      totalActiveUsers,
-      totalPersonnelWithDocs,
-      payrollPeriodsCount,
-      karanehPeriodsCount,
-      totalJobGroups: (db.jobGroups || []).length,
-      totalJobClassifications: (db.jobClassifications || []).length,
-      totalCommitments: (db.commitments || []).length,
-      totalArchivedCommitments: (db.commitments || []).filter((c: any) => c.isArchived).length,
-      totalMiningVolumes: (db.miningVolumes || []).length,
-      totalMiningMachinery: (db.miningMachinery || []).length,
-      totalUnitReports: (db.unitReports || []).length,
+      totalPersonnel: canPers ? (db.personnel || []).length : 0,
+      totalRelatives: canPers ? totalRelatives : 0,
+      totalKaranehRecords: canKar ? (db.karaneh || []).length : 0,
+      totalPayrollRecords: canPay ? (db.payroll || []).length : 0,
+      totalUsers: canUsers ? (db.users || []).length : 0,
+      totalActiveUsers: canUsers ? totalActiveUsers : 0,
+      totalPersonnelWithDocs: canPers ? totalPersonnelWithDocs : 0,
+      payrollPeriodsCount: canPay ? payrollPeriodsCount : 0,
+      karanehPeriodsCount: canKar ? karanehPeriodsCount : 0,
+      totalJobGroups: canJg ? (db.jobGroups || []).length : 0,
+      totalJobClassifications: canJg ? (db.jobClassifications || []).length : 0,
+      totalCommitments: canCmt ? (db.commitments || []).length : 0,
+      totalArchivedCommitments: canCmt ? (db.commitments || []).filter((c: any) => c.isArchived).length : 0,
+      totalMiningVolumes: canMining ? (db.miningVolumes || []).length : 0,
+      totalMiningMachinery: canMining ? (db.miningMachinery || []).length : 0,
+      totalUnitReports: canMining ? (db.unitReports || []).length : 0,
       storageEngine: isPostgresConfigured() ? 'postgres+disk' : 'node-disk',
-      fileSizeBytes: fileSize,
+      fileSizeBytes: canStats ? fileSize : 0,
       lastSaved,
       isLocalHost: true,
       hostPlatform: process.platform,
@@ -3244,10 +3353,7 @@ app.get('/api/database/export-snapshot', requireAuth, (req: AuthenticatedRequest
     return res.status(403).json({ success: false, message: 'شما مجوز دریافت اسنپ‌شات همگام‌سازی را ندارید.' });
   }
   const db = loadDatabase();
-  const safeUsers = (db.users || []).map((u: any) => {
-    const { password: _, ...rest } = u;
-    return rest;
-  });
+  const safeUsers = (db.users || []).map(sanitizeUserServer);
   res.json({
     success: true,
     data: {

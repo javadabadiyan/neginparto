@@ -97,13 +97,13 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
   onBatchDeletePayroll,
   onDeleteAllPayroll,
   onDeletePayrollPeriod,
-  canManage = true,
+  canManage = false,
   granularPermissions
 }) => {
-  const canDelete = granularPermissions ? granularPermissions.delete : canManage;
+  const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = granularPermissions ? Boolean(granularPermissions.deleteAll) : false;
-  const allowImport = granularPermissions ? granularPermissions.importExcel : canManage;
-  const allowExport = granularPermissions ? granularPermissions.exportExcel : true;
+  const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canManage;
+  const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : false;
 
   // Period selectors
   const [currentYear, setCurrentYear] = useState<string>('1403');

@@ -18,7 +18,7 @@ import {
   Layers
 } from 'lucide-react';
 import { downloadKaranehTemplate, downloadPayrollTemplate } from '../utils/excel';
-import { normalizePermissions } from '../utils/permissions';
+import { normalizePermissions, getFirstAccessibleTab } from '../utils/permissions';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -38,9 +38,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
   const perms = normalizePermissions(currentUser?.permissions);
 
+  const canViewDashboard = isAdmin || Boolean(perms.system?.dashboardStats);
   const canViewSmartDashboard = isAdmin || Boolean(perms.smartDashboard?.view);
   const canViewCeoDashboard = isAdmin || Boolean(perms.ceoDashboard?.view);
-  const canViewUnitOperations = isAdmin || Boolean(perms.unitOperations?.view) || Boolean(perms.ceoDashboard?.view);
+  const canViewUnitOperations = isAdmin || Boolean(perms.unitOperations?.view);
   const canViewPersonnel = isAdmin || Boolean(perms.personnel?.view);
   const canViewCommitments = isAdmin || Boolean(perms.commitments?.view);
   const canViewJobGroups = isAdmin || Boolean(perms.jobGroups?.view);
@@ -48,6 +49,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const canViewKaraneh = isAdmin || Boolean(perms.karaneh?.view);
   const canViewUsers = isAdmin || Boolean(perms.users?.view);
   const canViewBackup = isAdmin || Boolean(perms.system?.backupDatabase) || Boolean(perms.system?.restoreDatabase);
+  const defaultTab = getFirstAccessibleTab(perms, isAdmin);
 
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -96,7 +98,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               <button
                 type="button"
-                onClick={() => handleNavClick('dashboard')}
+                onClick={() => handleNavClick(defaultTab)}
                 className="flex items-center gap-2 min-w-0 cursor-pointer text-right"
               >
                 <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-800 text-white flex items-center justify-center font-bold text-xs sm:text-sm shadow-xs shrink-0">
@@ -193,51 +195,55 @@ export const Navbar: React.FC<NavbarProps> = ({
             <nav className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-5">
 
               {/* Section 1: Dashboards */}
-              <div className="space-y-1.5">
-                <div className="px-2 text-[11px] font-bold text-slate-400">داشبوردها و گزارش‌های مدیریتی</div>
+              {(canViewDashboard || canViewSmartDashboard || canViewCeoDashboard || canViewUnitOperations) && (
+                <div className="space-y-1.5">
+                  <div className="px-2 text-[11px] font-bold text-slate-400">داشبوردها و گزارش‌های مدیریتی</div>
 
-                <button
-                  type="button"
-                  onClick={() => handleNavClick('dashboard')}
-                  className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'dashboard')}`}
-                >
-                  <LayoutDashboard className="w-4 h-4 shrink-0" />
-                  <span>داشبورد کلان</span>
-                </button>
+                  {canViewDashboard && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavClick('dashboard')}
+                      className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'dashboard')}`}
+                    >
+                      <LayoutDashboard className="w-4 h-4 shrink-0" />
+                      <span>داشبورد کلان</span>
+                    </button>
+                  )}
 
-                {canViewSmartDashboard && (
-                  <button
-                    type="button"
-                    onClick={() => handleNavClick('smart-dashboard')}
-                    className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'smart-dashboard', 'sky')}`}
-                  >
-                    <BarChart3 className="w-4 h-4 shrink-0" />
-                    <span>گزارش‌گیری هوشمند پرسنل</span>
-                  </button>
-                )}
+                  {canViewSmartDashboard && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavClick('smart-dashboard')}
+                      className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'smart-dashboard', 'sky')}`}
+                    >
+                      <BarChart3 className="w-4 h-4 shrink-0" />
+                      <span>گزارش‌گیری هوشمند پرسنل</span>
+                    </button>
+                  )}
 
-                {canViewCeoDashboard && (
-                  <button
-                    type="button"
-                    onClick={() => handleNavClick('ceo-dashboard')}
-                    className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'ceo-dashboard', 'ceo')}`}
-                  >
-                    <Pickaxe className={`w-4 h-4 shrink-0 ${activeTab === 'ceo-dashboard' ? 'text-amber-300' : 'text-amber-600'}`} />
-                    <span>داشبورد راهبردی مدیر عامل</span>
-                  </button>
-                )}
+                  {canViewCeoDashboard && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavClick('ceo-dashboard')}
+                      className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'ceo-dashboard', 'ceo')}`}
+                    >
+                      <Pickaxe className={`w-4 h-4 shrink-0 ${activeTab === 'ceo-dashboard' ? 'text-amber-300' : 'text-amber-600'}`} />
+                      <span>داشبورد راهبردی مدیر عامل</span>
+                    </button>
+                  )}
 
-                {canViewUnitOperations && (
-                  <button
-                    type="button"
-                    onClick={() => handleNavClick('unit-operations')}
-                    className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'unit-operations', 'emerald')}`}
-                  >
-                    <Layers className={`w-4 h-4 shrink-0 ${activeTab === 'unit-operations' ? 'text-white' : 'text-emerald-600'}`} />
-                    <span>عملیات واحدها، دیسپچینگ و تعمیرگاه</span>
-                  </button>
-                )}
-              </div>
+                  {canViewUnitOperations && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavClick('unit-operations')}
+                      className={`w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 text-xs rounded-xl transition-colors cursor-pointer ${navItemClass(activeTab === 'unit-operations', 'emerald')}`}
+                    >
+                      <Layers className={`w-4 h-4 shrink-0 ${activeTab === 'unit-operations' ? 'text-white' : 'text-emerald-600'}`} />
+                      <span>عملیات واحدها، دیسپچینگ و تعمیرگاه</span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Section 2: HR & Personnel */}
               {(canViewPersonnel || canViewCommitments || canViewJobGroups) && (

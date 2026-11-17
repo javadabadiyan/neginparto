@@ -101,6 +101,107 @@ export function getFullAdminPermissions(): UserPermissions {
   };
 }
 
+export function getEmptyPermissions(): UserPermissions {
+  return {
+    personnel: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+      viewSalary: false,
+      documents: false,
+    },
+    karaneh: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+    },
+    jobGroups: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+    },
+    commitments: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      print: false,
+      archive: false,
+      importExcel: false,
+      exportExcel: false,
+    },
+    payroll: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+    },
+    users: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+    },
+    system: {
+      dashboardStats: false,
+      backupDatabase: false,
+      restoreDatabase: false,
+    },
+    smartDashboard: {
+      view: false,
+      exportExcel: false,
+      print: false,
+    },
+    ceoDashboard: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+      print: false,
+    },
+    unitOperations: {
+      view: false,
+      create: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      importExcel: false,
+      exportExcel: false,
+      allowedUnits: [],
+    },
+    canManagePersonnel: false,
+    canManageKaraneh: false,
+    canManageJobGroups: false,
+    canManageCommitments: false,
+    canManageUsers: false,
+    canExportExcel: false,
+    canImportExcel: false,
+    canBackupRestore: false,
+  };
+}
+
 export function getDefaultViewerPermissions(): UserPermissions {
   return {
     personnel: {
@@ -506,15 +607,9 @@ export function getKaranehSpecialistPermissions(): UserPermissions {
 }
 
 export function getUnitSupervisorPermissions(allowedUnits: string[] = []): UserPermissions {
-  const base = getDefaultViewerPermissions();
+  const base = getEmptyPermissions();
   return {
     ...base,
-    personnel: { ...base.personnel, view: false, exportExcel: false },
-    karaneh: { ...base.karaneh, view: false, exportExcel: false },
-    jobGroups: { ...base.jobGroups, view: false, exportExcel: false },
-    commitments: { ...base.commitments, view: false, print: false, exportExcel: false },
-    payroll: { ...base.payroll, view: false, exportExcel: false },
-    smartDashboard: { view: false, exportExcel: false, print: false },
     unitOperations: {
       view: true,
       create: true,
@@ -561,9 +656,168 @@ export function canUserAccessMiningUnit(
   });
 }
 
-export function normalizePermissions(raw?: any): UserPermissions {
-  if (!raw) return getDefaultViewerPermissions();
+function syncLegacyPermissionFlags(perms: Omit<UserPermissions,
+  | 'canManagePersonnel'
+  | 'canManageKaraneh'
+  | 'canManageJobGroups'
+  | 'canManageCommitments'
+  | 'canManageUsers'
+  | 'canExportExcel'
+  | 'canImportExcel'
+  | 'canBackupRestore'
+>): UserPermissions {
+  return {
+    ...perms,
+    canManagePersonnel: Boolean(perms.personnel.create || perms.personnel.edit || perms.personnel.delete),
+    canManageKaraneh: Boolean(perms.karaneh.create || perms.karaneh.edit || perms.karaneh.delete),
+    canManageJobGroups: Boolean(perms.jobGroups.create || perms.jobGroups.edit || perms.jobGroups.delete),
+    canManageCommitments: Boolean(perms.commitments.create || perms.commitments.edit || perms.commitments.delete),
+    canManageUsers: Boolean(perms.users.create || perms.users.edit || perms.users.delete),
+    canExportExcel: Boolean(
+      perms.personnel.exportExcel ||
+      perms.karaneh.exportExcel ||
+      perms.jobGroups.exportExcel ||
+      perms.commitments.exportExcel ||
+      perms.payroll.exportExcel ||
+      perms.users.exportExcel ||
+      perms.smartDashboard?.exportExcel ||
+      perms.ceoDashboard?.exportExcel ||
+      perms.unitOperations?.exportExcel
+    ),
+    canImportExcel: Boolean(
+      perms.personnel.importExcel ||
+      perms.karaneh.importExcel ||
+      perms.jobGroups.importExcel ||
+      perms.commitments.importExcel ||
+      perms.payroll.importExcel ||
+      perms.users.importExcel ||
+      perms.ceoDashboard?.importExcel ||
+      perms.unitOperations?.importExcel
+    ),
+    canBackupRestore: Boolean(perms.system.backupDatabase || perms.system.restoreDatabase),
+  };
+}
 
+export function normalizePermissions(raw?: any): UserPermissions {
+  if (!raw || typeof raw !== 'object') return getEmptyPermissions();
+
+  const hasModernSchema = Boolean(
+    (raw.personnel && typeof raw.personnel === 'object') ||
+    (raw.karaneh && typeof raw.karaneh === 'object') ||
+    (raw.jobGroups && typeof raw.jobGroups === 'object') ||
+    (raw.commitments && typeof raw.commitments === 'object') ||
+    (raw.payroll && typeof raw.payroll === 'object') ||
+    (raw.users && typeof raw.users === 'object') ||
+    (raw.system && typeof raw.system === 'object') ||
+    (raw.smartDashboard && typeof raw.smartDashboard === 'object') ||
+    (raw.ceoDashboard && typeof raw.ceoDashboard === 'object') ||
+    (raw.unitOperations && typeof raw.unitOperations === 'object')
+  );
+
+  // Genuine legacy-only objects (no nested module sections): map ONLY explicit true booleans
+  if (!hasModernSchema) {
+    const lp = raw.canManagePersonnel === true;
+    const lk = raw.canManageKaraneh === true;
+    const lj = raw.canManageJobGroups === true;
+    const lc = raw.canManageCommitments === true;
+    const lu = raw.canManageUsers === true;
+    const le = raw.canExportExcel === true;
+    const li = raw.canImportExcel === true;
+    const lb = raw.canBackupRestore === true;
+
+    return syncLegacyPermissionFlags({
+      personnel: {
+        view: lp,
+        create: lp,
+        edit: lp,
+        delete: lp && lu,
+        deleteAll: false,
+        importExcel: lp && li,
+        exportExcel: lp && le,
+        viewSalary: lp,
+        documents: lp,
+      },
+      karaneh: {
+        view: lk,
+        create: lk,
+        edit: lk,
+        delete: lk && lu,
+        deleteAll: false,
+        importExcel: lk && li,
+        exportExcel: lk && le,
+      },
+      jobGroups: {
+        view: lj,
+        create: lj,
+        edit: lj,
+        delete: lj && lu,
+        deleteAll: false,
+        importExcel: lj && li,
+        exportExcel: lj && le,
+      },
+      commitments: {
+        view: lc,
+        create: lc,
+        edit: lc,
+        delete: lc && lu,
+        deleteAll: false,
+        print: lc,
+        archive: lc,
+        importExcel: lc && li,
+        exportExcel: lc && le,
+      },
+      payroll: {
+        view: lk || lp,
+        create: lk || lp,
+        edit: lk || lp,
+        delete: (lk || lp) && lu,
+        deleteAll: false,
+        importExcel: (lk || lp) && li,
+        exportExcel: (lk || lp) && le,
+      },
+      users: {
+        view: lu,
+        create: lu,
+        edit: lu,
+        delete: lu,
+        deleteAll: false,
+        importExcel: lu && li,
+        exportExcel: lu && le,
+      },
+      system: {
+        dashboardStats: lp || lk || lj || lc || lu,
+        backupDatabase: lb,
+        restoreDatabase: lb,
+      },
+      smartDashboard: {
+        view: false,
+        exportExcel: false,
+        print: false,
+      },
+      ceoDashboard: {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false,
+        deleteAll: false,
+        importExcel: false,
+        exportExcel: false,
+        print: false,
+      },
+      unitOperations: {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false,
+        deleteAll: false,
+        importExcel: false,
+        exportExcel: false,
+        allowedUnits: [],
+      },
+    });
+  }
+
+  // Modern schema: strictly fail-closed (every flag is false unless explicitly true)
   const p = raw.personnel || {};
   const k = raw.karaneh || {};
   const jg = raw.jobGroups || {};
@@ -575,111 +829,139 @@ export function normalizePermissions(raw?: any): UserPermissions {
   const cd = raw.ceoDashboard || {};
   const uo = raw.unitOperations || {};
 
-  const legacyPersonnel = raw.canManagePersonnel ?? true;
-  const legacyKaraneh = raw.canManageKaraneh ?? false;
-  const legacyJobGroups = raw.canManageJobGroups ?? false;
-  const legacyCommitments = raw.canManageCommitments ?? false;
-  const legacyUsers = raw.canManageUsers ?? false;
-  const legacyExport = raw.canExportExcel ?? true;
-  const legacyImport = raw.canImportExcel ?? false;
-  const legacyBackup = raw.canBackupRestore ?? false;
+  const b = (v: any) => v === true;
 
-  return {
+  return syncLegacyPermissionFlags({
     personnel: {
-      view: p.view ?? true,
-      create: p.create ?? legacyPersonnel,
-      edit: p.edit ?? legacyPersonnel,
-      delete: p.delete ?? (legacyPersonnel && legacyUsers),
-      deleteAll: Boolean(p.deleteAll ?? false),
-      importExcel: p.importExcel ?? (legacyImport && legacyPersonnel),
-      exportExcel: p.exportExcel ?? legacyExport,
-      viewSalary: p.viewSalary ?? true,
-      documents: p.documents ?? legacyPersonnel,
+      view: b(p.view),
+      create: b(p.create),
+      edit: b(p.edit),
+      delete: b(p.delete),
+      deleteAll: b(p.deleteAll),
+      importExcel: b(p.importExcel),
+      exportExcel: b(p.exportExcel),
+      viewSalary: b(p.viewSalary),
+      documents: b(p.documents),
     },
     karaneh: {
-      view: k.view ?? true,
-      create: k.create ?? legacyKaraneh,
-      edit: k.edit ?? legacyKaraneh,
-      delete: k.delete ?? (legacyKaraneh && legacyUsers),
-      deleteAll: Boolean(k.deleteAll ?? false),
-      importExcel: k.importExcel ?? (legacyImport && legacyKaraneh),
-      exportExcel: k.exportExcel ?? legacyExport,
+      view: b(k.view),
+      create: b(k.create),
+      edit: b(k.edit),
+      delete: b(k.delete),
+      deleteAll: b(k.deleteAll),
+      importExcel: b(k.importExcel),
+      exportExcel: b(k.exportExcel),
     },
     jobGroups: {
-      view: jg.view ?? true,
-      create: jg.create ?? legacyJobGroups,
-      edit: jg.edit ?? legacyJobGroups,
-      delete: jg.delete ?? (legacyJobGroups && legacyUsers),
-      deleteAll: Boolean(jg.deleteAll ?? false),
-      importExcel: jg.importExcel ?? (legacyImport && legacyJobGroups),
-      exportExcel: jg.exportExcel ?? legacyExport,
+      view: b(jg.view),
+      create: b(jg.create),
+      edit: b(jg.edit),
+      delete: b(jg.delete),
+      deleteAll: b(jg.deleteAll),
+      importExcel: b(jg.importExcel),
+      exportExcel: b(jg.exportExcel),
     },
     commitments: {
-      view: c.view ?? true,
-      create: c.create ?? legacyCommitments,
-      edit: c.edit ?? legacyCommitments,
-      delete: c.delete ?? (legacyCommitments && legacyUsers),
-      deleteAll: Boolean(c.deleteAll ?? false),
-      print: c.print ?? true,
-      archive: c.archive ?? legacyCommitments,
-      importExcel: c.importExcel ?? (legacyImport && legacyCommitments),
-      exportExcel: c.exportExcel ?? legacyExport,
+      view: b(c.view),
+      create: b(c.create),
+      edit: b(c.edit),
+      delete: b(c.delete),
+      deleteAll: b(c.deleteAll),
+      print: b(c.print),
+      archive: b(c.archive),
+      importExcel: b(c.importExcel),
+      exportExcel: b(c.exportExcel),
     },
     payroll: {
-      view: pr.view ?? true,
-      create: pr.create ?? (legacyPersonnel || legacyKaraneh),
-      edit: pr.edit ?? (legacyPersonnel || legacyKaraneh),
-      delete: pr.delete ?? ((legacyPersonnel || legacyKaraneh) && legacyUsers),
-      deleteAll: Boolean(pr.deleteAll ?? false),
-      importExcel: pr.importExcel ?? (legacyImport && (legacyPersonnel || legacyKaraneh)),
-      exportExcel: pr.exportExcel ?? legacyExport,
+      view: b(pr.view),
+      create: b(pr.create),
+      edit: b(pr.edit),
+      delete: b(pr.delete),
+      deleteAll: b(pr.deleteAll),
+      importExcel: b(pr.importExcel),
+      exportExcel: b(pr.exportExcel),
     },
     users: {
-      view: u.view ?? legacyUsers,
-      create: u.create ?? legacyUsers,
-      edit: u.edit ?? legacyUsers,
-      delete: u.delete ?? legacyUsers,
-      deleteAll: Boolean(u.deleteAll ?? false),
-      importExcel: u.importExcel ?? legacyUsers,
-      exportExcel: u.exportExcel ?? legacyUsers,
+      view: b(u.view),
+      create: b(u.create),
+      edit: b(u.edit),
+      delete: b(u.delete),
+      deleteAll: b(u.deleteAll),
+      importExcel: b(u.importExcel),
+      exportExcel: b(u.exportExcel),
     },
     system: {
-      dashboardStats: s.dashboardStats ?? true,
-      backupDatabase: s.backupDatabase ?? legacyBackup,
-      restoreDatabase: s.restoreDatabase ?? legacyBackup,
+      dashboardStats: b(s.dashboardStats),
+      backupDatabase: b(s.backupDatabase),
+      restoreDatabase: b(s.restoreDatabase),
     },
     smartDashboard: {
-      view: sd.view ?? true,
-      exportExcel: sd.exportExcel ?? legacyExport,
-      print: sd.print ?? true,
+      view: b(sd.view),
+      exportExcel: b(sd.exportExcel),
+      print: b(sd.print),
     },
     ceoDashboard: {
-      view: cd.view ?? false,
-      create: cd.create ?? false,
-      edit: cd.edit ?? false,
-      delete: cd.delete ?? false,
-      deleteAll: Boolean(cd.deleteAll ?? false),
-      importExcel: cd.importExcel ?? false,
-      exportExcel: cd.exportExcel ?? (cd.view ?? false),
-      print: cd.print ?? (cd.view ?? false),
+      view: b(cd.view),
+      create: b(cd.create),
+      edit: b(cd.edit),
+      delete: b(cd.delete),
+      deleteAll: b(cd.deleteAll),
+      importExcel: b(cd.importExcel),
+      exportExcel: b(cd.exportExcel),
+      print: b(cd.print),
     },
     unitOperations: {
-      view: uo.view ?? (cd.view ?? false),
-      create: uo.create ?? (cd.create ?? false),
-      edit: uo.edit ?? (cd.edit ?? false),
-      delete: uo.delete ?? (cd.delete ?? false),
-      deleteAll: Boolean(uo.deleteAll ?? false),
-      importExcel: uo.importExcel ?? (cd.importExcel ?? false),
-      exportExcel: uo.exportExcel ?? (cd.exportExcel ?? (uo.view ?? false)),
+      view: b(uo.view),
+      create: b(uo.create),
+      edit: b(uo.edit),
+      delete: b(uo.delete),
+      deleteAll: b(uo.deleteAll),
+      importExcel: b(uo.importExcel),
+      exportExcel: b(uo.exportExcel),
       allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [],
     },
-    canManagePersonnel: legacyPersonnel,
-    canManageKaraneh: legacyKaraneh,
-    canManageJobGroups: legacyJobGroups,
-    canManageCommitments: legacyCommitments,
-    canManageUsers: legacyUsers,
-    canExportExcel: legacyExport,
-    canImportExcel: legacyImport,
-    canBackupRestore: legacyBackup,
-  };
+  });
+}
+
+export function countActivePermissions(perms: UserPermissions): { active: number; total: number } {
+  const modules: any[] = [
+    perms.personnel,
+    perms.karaneh,
+    perms.jobGroups,
+    perms.commitments,
+    perms.payroll,
+    perms.users,
+    perms.system,
+    perms.smartDashboard,
+    perms.ceoDashboard,
+    perms.unitOperations,
+  ];
+  let active = 0;
+  let total = 0;
+  for (const mod of modules) {
+    if (!mod || typeof mod !== 'object') continue;
+    for (const key of Object.keys(mod)) {
+      if (key === 'allowedUnits') continue;
+      if (typeof mod[key] === 'boolean') {
+        total++;
+        if (mod[key]) active++;
+      }
+    }
+  }
+  return { active, total };
+}
+
+export function getFirstAccessibleTab(perms: UserPermissions, isAdmin: boolean): string {
+  if (isAdmin || perms.system?.dashboardStats) return 'dashboard';
+  if (perms.ceoDashboard?.view) return 'ceo-dashboard';
+  if (perms.unitOperations?.view) return 'unit-operations';
+  if (perms.smartDashboard?.view) return 'smart-dashboard';
+  if (perms.personnel?.view) return 'personnel';
+  if (perms.karaneh?.view) return 'karaneh';
+  if (perms.payroll?.view) return 'payroll';
+  if (perms.jobGroups?.view) return 'job-groups';
+  if (perms.commitments?.view) return 'commitments';
+  if (perms.users?.view) return 'users';
+  if (perms.system?.backupDatabase || perms.system?.restoreDatabase) return 'database';
+  return 'dashboard';
 }

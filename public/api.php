@@ -173,16 +173,7 @@ function getInitialDatabase(): array {
                 'fullName' => 'جواد آبادیان (مدیر ارشد سامانه)',
                 'role' => 'super_admin',
                 'department' => 'مدیریت منابع انسانی و کارگزینی',
-                'permissions' => [
-                    'canManagePersonnel' => true,
-                    'canManageKaraneh' => true,
-                    'canManageJobGroups' => true,
-                    'canManageCommitments' => true,
-                    'canManageUsers' => true,
-                    'canExportExcel' => true,
-                    'canImportExcel' => true,
-                    'canBackupRestore' => true,
-                ],
+                'permissions' => getFullAdminPermissionsPhp(),
                 'isActive' => true,
                 'createdAt' => '1403/01/01',
                 'lastLogin' => 'هم‌اکنون',
@@ -194,16 +185,14 @@ function getInitialDatabase(): array {
                 'fullName' => 'سارا کاظمی (کارشناس ارزیابی و کارانه)',
                 'role' => 'karaneh_officer',
                 'department' => 'اداره جبران خدمت و کارانه',
-                'permissions' => [
-                    'canManagePersonnel' => false,
-                    'canManageKaraneh' => true,
-                    'canManageJobGroups' => false,
-                    'canManageCommitments' => false,
-                    'canManageUsers' => false,
-                    'canExportExcel' => true,
-                    'canImportExcel' => true,
-                    'canBackupRestore' => false,
-                ],
+                'permissions' => normalizePermissionsPhp([
+                    'personnel' => ['view' => true, 'exportExcel' => true, 'viewSalary' => true],
+                    'karaneh' => ['view' => true, 'create' => true, 'edit' => true, 'importExcel' => true, 'exportExcel' => true],
+                    'jobGroups' => ['view' => true, 'exportExcel' => true],
+                    'payroll' => ['view' => true, 'exportExcel' => true],
+                    'smartDashboard' => ['view' => true, 'exportExcel' => true],
+                    'system' => ['dashboardStats' => true],
+                ]),
                 'isActive' => true,
                 'createdAt' => '1403/03/10',
                 'lastLogin' => '۱۴۰۳/۰۸/۰۲',
@@ -215,16 +204,15 @@ function getInitialDatabase(): array {
                 'fullName' => 'محمد امینی (کارشناس امور اداری و پرسنلی)',
                 'role' => 'hr_officer',
                 'department' => 'امور کارکنان و قراردادها',
-                'permissions' => [
-                    'canManagePersonnel' => true,
-                    'canManageKaraneh' => false,
-                    'canManageJobGroups' => true,
-                    'canManageCommitments' => true,
-                    'canManageUsers' => false,
-                    'canExportExcel' => true,
-                    'canImportExcel' => true,
-                    'canBackupRestore' => false,
-                ],
+                'permissions' => normalizePermissionsPhp([
+                    'personnel' => ['view' => true, 'create' => true, 'edit' => true, 'importExcel' => true, 'exportExcel' => true, 'viewSalary' => true, 'documents' => true],
+                    'karaneh' => ['view' => true, 'exportExcel' => true],
+                    'jobGroups' => ['view' => true, 'create' => true, 'edit' => true, 'importExcel' => true, 'exportExcel' => true],
+                    'commitments' => ['view' => true, 'create' => true, 'edit' => true, 'print' => true, 'archive' => true, 'importExcel' => true, 'exportExcel' => true],
+                    'payroll' => ['view' => true, 'create' => true, 'edit' => true, 'importExcel' => true, 'exportExcel' => true],
+                    'smartDashboard' => ['view' => true, 'exportExcel' => true, 'print' => true],
+                    'system' => ['dashboardStats' => true],
+                ]),
                 'isActive' => true,
                 'createdAt' => '1403/04/15',
                 'lastLogin' => '۱۴۰۳/۰۸/۰۱',
@@ -623,54 +611,134 @@ function isSuperAdminUser(array $user): bool {
     return (($user['role'] ?? '') === 'super_admin') || (($user['username'] ?? '') === 'javadabadiyan');
 }
 
+function getEmptyPermissionsPhp(): array {
+    return [
+        'personnel' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false, 'viewSalary' => false, 'documents' => false],
+        'karaneh' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false],
+        'jobGroups' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false],
+        'commitments' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'print' => false, 'archive' => false, 'importExcel' => false, 'exportExcel' => false],
+        'payroll' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false],
+        'users' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false],
+        'system' => ['dashboardStats' => false, 'backupDatabase' => false, 'restoreDatabase' => false],
+        'smartDashboard' => ['view' => false, 'exportExcel' => false, 'print' => false],
+        'ceoDashboard' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false, 'print' => false],
+        'unitOperations' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false, 'allowedUnits' => []],
+        'canManagePersonnel' => false,
+        'canManageKaraneh' => false,
+        'canManageJobGroups' => false,
+        'canManageCommitments' => false,
+        'canManageUsers' => false,
+        'canExportExcel' => false,
+        'canImportExcel' => false,
+        'canBackupRestore' => false,
+    ];
+}
+
+function getFullAdminPermissionsPhp(): array {
+    return [
+        'personnel' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true, 'viewSalary' => true, 'documents' => true],
+        'karaneh' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true],
+        'jobGroups' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true],
+        'commitments' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'print' => true, 'archive' => true, 'importExcel' => true, 'exportExcel' => true],
+        'payroll' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true],
+        'users' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true],
+        'system' => ['dashboardStats' => true, 'backupDatabase' => true, 'restoreDatabase' => true],
+        'smartDashboard' => ['view' => true, 'exportExcel' => true, 'print' => true],
+        'ceoDashboard' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true, 'print' => true],
+        'unitOperations' => ['view' => true, 'create' => true, 'edit' => true, 'delete' => true, 'deleteAll' => true, 'importExcel' => true, 'exportExcel' => true, 'allowedUnits' => []],
+        'canManagePersonnel' => true,
+        'canManageKaraneh' => true,
+        'canManageJobGroups' => true,
+        'canManageCommitments' => true,
+        'canManageUsers' => true,
+        'canExportExcel' => true,
+        'canImportExcel' => true,
+        'canBackupRestore' => true,
+    ];
+}
+
+function syncLegacyPermissionsPhp(array $perms): array {
+    $perms['canManagePersonnel'] = !empty($perms['personnel']['create']) || !empty($perms['personnel']['edit']) || !empty($perms['personnel']['delete']);
+    $perms['canManageKaraneh'] = !empty($perms['karaneh']['create']) || !empty($perms['karaneh']['edit']) || !empty($perms['karaneh']['delete']);
+    $perms['canManageJobGroups'] = !empty($perms['jobGroups']['create']) || !empty($perms['jobGroups']['edit']) || !empty($perms['jobGroups']['delete']);
+    $perms['canManageCommitments'] = !empty($perms['commitments']['create']) || !empty($perms['commitments']['edit']) || !empty($perms['commitments']['delete']);
+    $perms['canManageUsers'] = !empty($perms['users']['create']) || !empty($perms['users']['edit']) || !empty($perms['users']['delete']);
+    $perms['canExportExcel'] = !empty($perms['personnel']['exportExcel']) || !empty($perms['karaneh']['exportExcel']) || !empty($perms['jobGroups']['exportExcel']) || !empty($perms['commitments']['exportExcel']) || !empty($perms['payroll']['exportExcel']) || !empty($perms['users']['exportExcel']) || !empty($perms['smartDashboard']['exportExcel']) || !empty($perms['ceoDashboard']['exportExcel']) || !empty($perms['unitOperations']['exportExcel']);
+    $perms['canImportExcel'] = !empty($perms['personnel']['importExcel']) || !empty($perms['karaneh']['importExcel']) || !empty($perms['jobGroups']['importExcel']) || !empty($perms['commitments']['importExcel']) || !empty($perms['payroll']['importExcel']) || !empty($perms['users']['importExcel']) || !empty($perms['ceoDashboard']['importExcel']) || !empty($perms['unitOperations']['importExcel']);
+    $perms['canBackupRestore'] = !empty($perms['system']['backupDatabase']) || !empty($perms['system']['restoreDatabase']);
+    return $perms;
+}
+
+function normalizePermissionsPhp($raw): array {
+    if (!is_array($raw)) return getEmptyPermissionsPhp();
+
+    $hasModern = (isset($raw['personnel']) && is_array($raw['personnel']))
+        || (isset($raw['karaneh']) && is_array($raw['karaneh']))
+        || (isset($raw['jobGroups']) && is_array($raw['jobGroups']))
+        || (isset($raw['commitments']) && is_array($raw['commitments']))
+        || (isset($raw['payroll']) && is_array($raw['payroll']))
+        || (isset($raw['users']) && is_array($raw['users']))
+        || (isset($raw['system']) && is_array($raw['system']))
+        || (isset($raw['smartDashboard']) && is_array($raw['smartDashboard']))
+        || (isset($raw['ceoDashboard']) && is_array($raw['ceoDashboard']))
+        || (isset($raw['unitOperations']) && is_array($raw['unitOperations']));
+
+    if (!$hasModern) {
+        $lp = ($raw['canManagePersonnel'] ?? null) === true;
+        $lk = ($raw['canManageKaraneh'] ?? null) === true;
+        $lj = ($raw['canManageJobGroups'] ?? null) === true;
+        $lc = ($raw['canManageCommitments'] ?? null) === true;
+        $lu = ($raw['canManageUsers'] ?? null) === true;
+        $le = ($raw['canExportExcel'] ?? null) === true;
+        $li = ($raw['canImportExcel'] ?? null) === true;
+        $lb = ($raw['canBackupRestore'] ?? null) === true;
+
+        return syncLegacyPermissionsPhp([
+            'personnel' => ['view' => $lp, 'create' => $lp, 'edit' => $lp, 'delete' => $lp && $lu, 'deleteAll' => false, 'importExcel' => $lp && $li, 'exportExcel' => $lp && $le, 'viewSalary' => $lp, 'documents' => $lp],
+            'karaneh' => ['view' => $lk, 'create' => $lk, 'edit' => $lk, 'delete' => $lk && $lu, 'deleteAll' => false, 'importExcel' => $lk && $li, 'exportExcel' => $lk && $le],
+            'jobGroups' => ['view' => $lj, 'create' => $lj, 'edit' => $lj, 'delete' => $lj && $lu, 'deleteAll' => false, 'importExcel' => $lj && $li, 'exportExcel' => $lj && $le],
+            'commitments' => ['view' => $lc, 'create' => $lc, 'edit' => $lc, 'delete' => $lc && $lu, 'deleteAll' => false, 'print' => $lc, 'archive' => $lc, 'importExcel' => $lc && $li, 'exportExcel' => $lc && $le],
+            'payroll' => ['view' => $lk || $lp, 'create' => $lk || $lp, 'edit' => $lk || $lp, 'delete' => ($lk || $lp) && $lu, 'deleteAll' => false, 'importExcel' => ($lk || $lp) && $li, 'exportExcel' => ($lk || $lp) && $le],
+            'users' => ['view' => $lu, 'create' => $lu, 'edit' => $lu, 'delete' => $lu, 'deleteAll' => false, 'importExcel' => $lu && $li, 'exportExcel' => $lu && $le],
+            'system' => ['dashboardStats' => $lp || $lk || $lj || $lc || $lu, 'backupDatabase' => $lb, 'restoreDatabase' => $lb],
+            'smartDashboard' => ['view' => false, 'exportExcel' => false, 'print' => false],
+            'ceoDashboard' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false, 'print' => false],
+            'unitOperations' => ['view' => false, 'create' => false, 'edit' => false, 'delete' => false, 'deleteAll' => false, 'importExcel' => false, 'exportExcel' => false, 'allowedUnits' => []],
+        ]);
+    }
+
+    $b = fn($v) => $v === true;
+    $p = is_array($raw['personnel'] ?? null) ? $raw['personnel'] : [];
+    $k = is_array($raw['karaneh'] ?? null) ? $raw['karaneh'] : [];
+    $jg = is_array($raw['jobGroups'] ?? null) ? $raw['jobGroups'] : [];
+    $c = is_array($raw['commitments'] ?? null) ? $raw['commitments'] : [];
+    $pr = is_array($raw['payroll'] ?? null) ? $raw['payroll'] : [];
+    $u = is_array($raw['users'] ?? null) ? $raw['users'] : [];
+    $s = is_array($raw['system'] ?? null) ? $raw['system'] : [];
+    $sd = is_array($raw['smartDashboard'] ?? null) ? $raw['smartDashboard'] : [];
+    $cd = is_array($raw['ceoDashboard'] ?? null) ? $raw['ceoDashboard'] : [];
+    $uo = is_array($raw['unitOperations'] ?? null) ? $raw['unitOperations'] : [];
+    $allowedUnits = isset($uo['allowedUnits']) && is_array($uo['allowedUnits']) ? array_values(array_map('strval', $uo['allowedUnits'])) : [];
+
+    return syncLegacyPermissionsPhp([
+        'personnel' => ['view' => $b($p['view'] ?? false), 'create' => $b($p['create'] ?? false), 'edit' => $b($p['edit'] ?? false), 'delete' => $b($p['delete'] ?? false), 'deleteAll' => $b($p['deleteAll'] ?? false), 'importExcel' => $b($p['importExcel'] ?? false), 'exportExcel' => $b($p['exportExcel'] ?? false), 'viewSalary' => $b($p['viewSalary'] ?? false), 'documents' => $b($p['documents'] ?? false)],
+        'karaneh' => ['view' => $b($k['view'] ?? false), 'create' => $b($k['create'] ?? false), 'edit' => $b($k['edit'] ?? false), 'delete' => $b($k['delete'] ?? false), 'deleteAll' => $b($k['deleteAll'] ?? false), 'importExcel' => $b($k['importExcel'] ?? false), 'exportExcel' => $b($k['exportExcel'] ?? false)],
+        'jobGroups' => ['view' => $b($jg['view'] ?? false), 'create' => $b($jg['create'] ?? false), 'edit' => $b($jg['edit'] ?? false), 'delete' => $b($jg['delete'] ?? false), 'deleteAll' => $b($jg['deleteAll'] ?? false), 'importExcel' => $b($jg['importExcel'] ?? false), 'exportExcel' => $b($jg['exportExcel'] ?? false)],
+        'commitments' => ['view' => $b($c['view'] ?? false), 'create' => $b($c['create'] ?? false), 'edit' => $b($c['edit'] ?? false), 'delete' => $b($c['delete'] ?? false), 'deleteAll' => $b($c['deleteAll'] ?? false), 'print' => $b($c['print'] ?? false), 'archive' => $b($c['archive'] ?? false), 'importExcel' => $b($c['importExcel'] ?? false), 'exportExcel' => $b($c['exportExcel'] ?? false)],
+        'payroll' => ['view' => $b($pr['view'] ?? false), 'create' => $b($pr['create'] ?? false), 'edit' => $b($pr['edit'] ?? false), 'delete' => $b($pr['delete'] ?? false), 'deleteAll' => $b($pr['deleteAll'] ?? false), 'importExcel' => $b($pr['importExcel'] ?? false), 'exportExcel' => $b($pr['exportExcel'] ?? false)],
+        'users' => ['view' => $b($u['view'] ?? false), 'create' => $b($u['create'] ?? false), 'edit' => $b($u['edit'] ?? false), 'delete' => $b($u['delete'] ?? false), 'deleteAll' => $b($u['deleteAll'] ?? false), 'importExcel' => $b($u['importExcel'] ?? false), 'exportExcel' => $b($u['exportExcel'] ?? false)],
+        'system' => ['dashboardStats' => $b($s['dashboardStats'] ?? false), 'backupDatabase' => $b($s['backupDatabase'] ?? false), 'restoreDatabase' => $b($s['restoreDatabase'] ?? false)],
+        'smartDashboard' => ['view' => $b($sd['view'] ?? false), 'exportExcel' => $b($sd['exportExcel'] ?? false), 'print' => $b($sd['print'] ?? false)],
+        'ceoDashboard' => ['view' => $b($cd['view'] ?? false), 'create' => $b($cd['create'] ?? false), 'edit' => $b($cd['edit'] ?? false), 'delete' => $b($cd['delete'] ?? false), 'deleteAll' => $b($cd['deleteAll'] ?? false), 'importExcel' => $b($cd['importExcel'] ?? false), 'exportExcel' => $b($cd['exportExcel'] ?? false), 'print' => $b($cd['print'] ?? false)],
+        'unitOperations' => ['view' => $b($uo['view'] ?? false), 'create' => $b($uo['create'] ?? false), 'edit' => $b($uo['edit'] ?? false), 'delete' => $b($uo['delete'] ?? false), 'deleteAll' => $b($uo['deleteAll'] ?? false), 'importExcel' => $b($uo['importExcel'] ?? false), 'exportExcel' => $b($uo['exportExcel'] ?? false), 'allowedUnits' => $allowedUnits],
+    ]);
+}
+
 function checkPermission(?array $user, string $section, string $action): bool {
     if (!$user || empty($user['isActive'])) return false;
     if (isSuperAdminUser($user)) return true;
-    $perms = $user['permissions'] ?? [];
-    if (isset($perms[$section]) && is_array($perms[$section]) && array_key_exists($action, $perms[$section]) && is_bool($perms[$section][$action])) {
-        return $perms[$section][$action];
-    }
-    if ($action === 'deleteAll') {
-        return false;
-    }
-    if ($section === 'personnel') {
-        if ($action === 'view') return true;
-        if ($action === 'exportExcel') return $perms['canExportExcel'] ?? true;
-        if ($action === 'importExcel') return !empty($perms['canImportExcel']) && !empty($perms['canManagePersonnel']);
-        return !empty($perms['canManagePersonnel']);
-    }
-    if ($section === 'karaneh') {
-        if ($action === 'view') return true;
-        if ($action === 'exportExcel') return $perms['canExportExcel'] ?? true;
-        if ($action === 'importExcel') return !empty($perms['canImportExcel']) && !empty($perms['canManageKaraneh']);
-        return !empty($perms['canManageKaraneh']);
-    }
-    if ($section === 'jobGroups') {
-        if ($action === 'view') return true;
-        if ($action === 'exportExcel') return $perms['canExportExcel'] ?? true;
-        if ($action === 'importExcel') return !empty($perms['canImportExcel']) && !empty($perms['canManageJobGroups']);
-        return !empty($perms['canManageJobGroups']);
-    }
-    if ($section === 'commitments') {
-        if ($action === 'view' || $action === 'print') return true;
-        if ($action === 'exportExcel') return $perms['canExportExcel'] ?? true;
-        if ($action === 'importExcel') return !empty($perms['canImportExcel']) && !empty($perms['canManageCommitments']);
-        return !empty($perms['canManageCommitments']);
-    }
-    if ($section === 'payroll') {
-        if ($action === 'view') return true;
-        if ($action === 'exportExcel') return $perms['canExportExcel'] ?? true;
-        if ($action === 'importExcel') return !empty($perms['canImportExcel']) && (!empty($perms['canManagePersonnel']) || !empty($perms['canManageKaraneh']));
-        return !empty($perms['canManagePersonnel']) || !empty($perms['canManageKaraneh']);
-    }
-    if ($section === 'users') {
-        return !empty($perms['canManageUsers']);
-    }
-    if ($section === 'system') {
-        if ($action === 'dashboardStats') return true;
-        return !empty($perms['canBackupRestore']);
-    }
-    return false;
+    $perms = normalizePermissionsPhp($user['permissions'] ?? []);
+    return ($perms[$section][$action] ?? false) === true;
 }
 
 function getAllowedUnitsPhp(?array $user): array {
@@ -711,6 +779,9 @@ function hasMiningOrUnitPermPhp(?array $user, string $action): bool {
 
 function stripPassword(array $user): array {
     unset($user['password']);
+    $user['permissions'] = isSuperAdminUser($user)
+        ? getFullAdminPermissionsPhp()
+        : normalizePermissionsPhp($user['permissions'] ?? []);
     return $user;
 }
 
@@ -1111,20 +1182,27 @@ if ($method === 'POST' && $path === '/users') {
         if ($username === '' || $password === '' || $fullName === '') {
             return ['status' => 400, 'body' => ['success' => false, 'message' => 'تکمیل نام کاربری، رمز عبور و نام الزامی است.']];
         }
+        $role = (string)($body['role'] ?? 'کاربر سفارشی');
+        if ($role === 'super_admin' && !isSuperAdminUser($authUser)) {
+            return ['status' => 403, 'body' => ['success' => false, 'message' => 'فقط مدیر ارشد مجاز به ایجاد کاربر با نقش مدیر ارشد است.']];
+        }
         foreach ($db['users'] as $u) {
             if (strtolower((string)$u['username']) === strtolower($username)) {
                 return ['status' => 400, 'body' => ['success' => false, 'message' => 'این نام کاربری قبلاً در سامانه ثبت شده است.']];
             }
         }
+        $normalizedPermissions = $role === 'super_admin'
+            ? getFullAdminPermissionsPhp()
+            : (isset($body['permissions']) && is_array($body['permissions']) ? normalizePermissionsPhp($body['permissions']) : getEmptyPermissionsPhp());
         $newUser = [
             'id' => 'u-' . (int)round(microtime(true) * 1000),
             'username' => $username,
             'password' => hashPasswordPhp($password),
             'email' => !empty($body['email']) ? strtolower(trim((string)$body['email'])) : '',
             'fullName' => $fullName,
-            'role' => $body['role'] ?? 'viewer',
+            'role' => $role,
             'department' => $body['department'] ?? '',
-            'permissions' => $body['permissions'] ?? buildPresetPermissions('مشاهده‌گر'),
+            'permissions' => $normalizedPermissions,
             'isActive' => true,
             'createdAt' => date('Y/m/d'),
         ];
@@ -1156,10 +1234,11 @@ if ($method === 'POST' && $path === '/users/batch-import') {
             $fullName = trim((string)($row['fullName'] ?? $row['نام و نام خانوادگی'] ?? ''));
             if ($username === '' || $fullName === '' || strtolower($username) === 'javadabadiyan') continue;
             $role = trim((string)($row['role'] ?? $row['نقش سازمانی'] ?? 'کارشناس اداری'));
+            if ($role === 'super_admin' && !isSuperAdminUser($authUser)) continue;
             $department = trim((string)($row['department'] ?? $row['واحد اداری'] ?? ''));
             $rawActive = trim((string)($row['isActive'] ?? $row['وضعیت حساب'] ?? 'فعال'));
             $isActive = !in_array($rawActive, ['غیرفعال', 'مسدود', 'false', '0'], true);
-            $presetLabel = trim((string)($row['preset'] ?? $row['الگوی دسترسی'] ?? 'مشاهده‌گر'));
+            $presetLabel = trim((string)($row['preset'] ?? $row['الگوی دسترسی'] ?? 'دسترسی صفر'));
             $rawPass = trim((string)($row['password'] ?? $row['رمز عبور'] ?? ''));
 
             $foundIdx = -1;
@@ -1171,16 +1250,18 @@ if ($method === 'POST' && $path === '/users/batch-import') {
             }
             if ($foundIdx >= 0) {
                 $existing = $db['users'][$foundIdx];
+                if (isSuperAdminUser($existing) && !isSuperAdminUser($authUser)) continue;
                 $db['users'][$foundIdx] = array_merge($existing, [
                     'fullName' => $fullName,
                     'role' => $role,
                     'department' => $department,
                     'isActive' => $isActive,
-                    'permissions' => !empty($row['الگوی دسترسی']) ? buildPresetPermissions($presetLabel) : ($existing['permissions'] ?? []),
+                    'permissions' => !empty($row['الگوی دسترسی']) ? normalizePermissionsPhp(buildPresetPermissions($presetLabel)) : normalizePermissionsPhp($existing['permissions'] ?? []),
                     'password' => $rawPass !== '' ? hashPasswordPhp($rawPass) : ($existing['password'] ?? ''),
                 ]);
                 $updated++;
             } else {
+                $hasPreset = !empty($row['الگوی دسترسی']) || !empty($row['preset']);
                 $db['users'][] = [
                     'id' => genId('u'),
                     'username' => $username,
@@ -1189,7 +1270,7 @@ if ($method === 'POST' && $path === '/users/batch-import') {
                     'role' => $role,
                     'department' => $department,
                     'isActive' => $isActive,
-                    'permissions' => buildPresetPermissions($presetLabel),
+                    'permissions' => $hasPreset ? normalizePermissionsPhp(buildPresetPermissions($presetLabel)) : getEmptyPermissionsPhp(),
                     'createdAt' => date('Y/m/d'),
                 ];
                 $added++;
@@ -1251,6 +1332,10 @@ if (preg_match('#^/users/([^/]+)$#', $path, $m)) {
             requirePerm($authUser, 'users', 'edit');
             foreach ($db['users'] as $i => $existing) {
                 if (($existing['id'] ?? '') === $id) {
+                    $requestedRole = array_key_exists('role', $body) ? (string)$body['role'] : (string)($existing['role'] ?? '');
+                    if (!isSuperAdminUser($authUser) && (isSuperAdminUser($existing) || $requestedRole === 'super_admin')) {
+                        return ['status' => 403, 'body' => ['success' => false, 'message' => 'تغییر مشخصات یا ارتقای سطح به مدیر ارشد فقط توسط مدیر ارشد مجاز است.']];
+                    }
                     if (($existing['username'] ?? '') === 'javadabadiyan' && ($body['isActive'] ?? true) === false) {
                         return ['status' => 400, 'body' => ['success' => false, 'message' => 'حساب ادمین ارشد (javadabadiyan) قابل غیرفعال‌سازی نیست.']];
                     }
@@ -1259,7 +1344,13 @@ if (preg_match('#^/users/([^/]+)$#', $path, $m)) {
                     if (array_key_exists('email', $body)) $updated['email'] = strtolower(trim((string)$body['email']));
                     if (array_key_exists('role', $body)) $updated['role'] = $body['role'];
                     if (array_key_exists('department', $body)) $updated['department'] = $body['department'];
-                    if (array_key_exists('permissions', $body)) $updated['permissions'] = $body['permissions'];
+                    if (($updated['role'] ?? '') === 'super_admin' || ($existing['username'] ?? '') === 'javadabadiyan') {
+                        $updated['permissions'] = getFullAdminPermissionsPhp();
+                    } elseif (array_key_exists('permissions', $body)) {
+                        $updated['permissions'] = normalizePermissionsPhp($body['permissions']);
+                    } else {
+                        $updated['permissions'] = normalizePermissionsPhp($existing['permissions'] ?? []);
+                    }
                     if (array_key_exists('isActive', $body)) $updated['isActive'] = (bool)$body['isActive'];
                     if (!empty($body['password'])) $updated['password'] = hashPasswordPhp((string)$body['password']);
                     $db['users'][$i] = $updated;
@@ -2884,28 +2975,37 @@ if ($method === 'GET' && $path === '/database/status') {
             $totalRelatives += count($p['relatives']);
         }
     }
+    $canStats = isSuperAdminUser($authUser) || checkPermission($authUser, 'system', 'dashboardStats') || checkPermission($authUser, 'system', 'backupDatabase') || checkPermission($authUser, 'system', 'restoreDatabase');
+    $canPers = $canStats || checkPermission($authUser, 'personnel', 'view');
+    $canKar = $canStats || checkPermission($authUser, 'karaneh', 'view');
+    $canPay = $canStats || checkPermission($authUser, 'payroll', 'view');
+    $canUsers = $canStats || checkPermission($authUser, 'users', 'view');
+    $canJg = $canStats || checkPermission($authUser, 'jobGroups', 'view');
+    $canCmt = $canStats || checkPermission($authUser, 'commitments', 'view');
+    $canMining = $canStats || hasMiningOrUnitPermPhp($authUser, 'view');
+
     jsonResponse([
         'success' => true,
         'data' => [
             'storageLocation' => 'پایگاه داده دائمی داخلی پوشه سایت (PHP Flat-File + Lock)',
-            'totalPersonnel' => count($db['personnel']),
-            'totalRelatives' => $totalRelatives,
-            'totalKaranehRecords' => count($db['karaneh']),
-            'totalPayrollRecords' => count($db['payroll']),
-            'totalUsers' => count($db['users']),
-            'totalActiveUsers' => $activeUsers,
-            'totalPersonnelWithDocs' => $docsCount,
-            'payrollPeriodsCount' => $payrollPeriodsCount,
-            'karanehPeriodsCount' => $karanehPeriodsCount,
-            'totalJobGroups' => count($db['jobGroups']),
-            'totalJobClassifications' => count($db['jobClassifications']),
-            'totalCommitments' => count($db['commitments']),
-            'totalArchivedCommitments' => $archived,
-            'totalMiningVolumes' => count($db['miningVolumes']),
-            'totalMiningMachinery' => count($db['miningMachinery']),
-            'totalUnitReports' => count($db['unitReports']),
+            'totalPersonnel' => $canPers ? count($db['personnel']) : 0,
+            'totalRelatives' => $canPers ? $totalRelatives : 0,
+            'totalKaranehRecords' => $canKar ? count($db['karaneh']) : 0,
+            'totalPayrollRecords' => $canPay ? count($db['payroll']) : 0,
+            'totalUsers' => $canUsers ? count($db['users']) : 0,
+            'totalActiveUsers' => $canUsers ? $activeUsers : 0,
+            'totalPersonnelWithDocs' => $canPers ? $docsCount : 0,
+            'payrollPeriodsCount' => $canPay ? $payrollPeriodsCount : 0,
+            'karanehPeriodsCount' => $canKar ? $karanehPeriodsCount : 0,
+            'totalJobGroups' => $canJg ? count($db['jobGroups']) : 0,
+            'totalJobClassifications' => $canJg ? count($db['jobClassifications']) : 0,
+            'totalCommitments' => $canCmt ? count($db['commitments']) : 0,
+            'totalArchivedCommitments' => $canCmt ? $archived : 0,
+            'totalMiningVolumes' => $canMining ? count($db['miningVolumes']) : 0,
+            'totalMiningMachinery' => $canMining ? count($db['miningMachinery']) : 0,
+            'totalUnitReports' => $canMining ? count($db['unitReports']) : 0,
             'storageEngine' => 'php-disk',
-            'fileSizeBytes' => $fileSize,
+            'fileSizeBytes' => $canStats ? $fileSize : 0,
             'lastSaved' => $lastSaved,
             'isLocalHost' => false,
             'hostPlatform' => 'php-folder',

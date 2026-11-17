@@ -74,19 +74,19 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
   onBatchImportPersonnel,
   onBatchImportRelatives,
   onDeleteAllRelatives,
-  canManage = true,
-  canExport = true,
-  canImport = true,
+  canManage = false,
+  canExport = false,
+  canImport = false,
   granularPermissions
 }) => {
-  const canCreate = granularPermissions ? granularPermissions.create : canManage;
-  const canEdit = granularPermissions ? granularPermissions.edit : canManage;
-  const canDelete = granularPermissions ? granularPermissions.delete : canManage;
+  const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
+  const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
+  const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = granularPermissions ? Boolean(granularPermissions.deleteAll) : false;
-  const allowExport = granularPermissions ? granularPermissions.exportExcel : canExport;
-  const allowImport = granularPermissions ? granularPermissions.importExcel : canImport;
-  const canViewSalary = granularPermissions ? granularPermissions.viewSalary : true;
-  const canManageDocs = granularPermissions?.documents ?? (canCreate || canEdit || true);
+  const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : canExport;
+  const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canImport;
+  const canViewSalary = granularPermissions ? Boolean(granularPermissions.viewSalary) : false;
+  const canManageDocs = granularPermissions ? Boolean(granularPermissions.documents) : (canCreate || canEdit);
 
   const [activeSubTab, setActiveSubTab] = useState<'personnel' | 'relatives'>('personnel');
   const [tableViewMode, setTableViewMode] = useState<'full28' | 'compact'>('full28');
