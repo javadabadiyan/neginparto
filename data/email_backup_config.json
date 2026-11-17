@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "recipientEmail": "abadiyanjavad@gmail.com",
+  "dailyHour": 8,
+  "dailyMinute": 0,
+  "smtpHost": "smtp.gmail.com",
+  "smtpPort": 465,
+  "smtpSecure": true,
+  "smtpUser": "",
+  "smtpPass": "",
+  "lastSentDateKey": "",
+  "lastSentAt": "",
+  "lastAutoAttemptDateKey": "",
+  "lastStatus": "",
+  "lastError": ""
+}

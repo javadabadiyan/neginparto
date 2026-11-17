@@ -3508,37 +3508,89 @@ interface EmailBackupConfig {
   smtpPass: string;
   lastSentDateKey: string;
   lastSentAt: string;
+  lastAutoAttemptDateKey?: string;
   lastStatus: '' | 'success' | 'error';
   lastError: string;
 }
 
+const EMAIL_RE = /^[^\s@<>()[\]\\,;:'"]+@[^\s@<>()[\]\\,;:'"]+\.[^\s@<>()[\]\\,;:'"]{2,}$/;
+const HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$|^localhost$|^(?:\d{1,3}\.){3}\d{1,3}$/;
+
+function isValidEmailAddress(value: string): boolean {
+  return EMAIL_RE.test(String(value || '').trim());
+}
+
+function isValidSmtpHost(value: string): boolean {
+  const host = String(value || '').trim();
+  return Boolean(host) && HOSTNAME_RE.test(host);
+}
+
+function isValidSmtpPort(value: unknown): boolean {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
 function loadEmailBackupConfig(): EmailBackupConfig {
+  const defaultHost = isValidSmtpHost(process.env.SMTP_HOST || '')
+    ? String(process.env.SMTP_HOST).trim()
+    : 'smtp.gmail.com';
+  const defaultPort = isValidSmtpPort(process.env.SMTP_PORT)
+    ? Number(process.env.SMTP_PORT)
+    : 465;
+  const defaultRecipient = isValidEmailAddress(process.env.BACKUP_RECIPIENT_EMAIL || '')
+    ? String(process.env.BACKUP_RECIPIENT_EMAIL).trim()
+    : 'abadiyanjavad@gmail.com';
+  const defaultSmtpUser = isValidEmailAddress(process.env.SMTP_USER || '')
+    ? String(process.env.SMTP_USER).trim()
+    : '';
+
   const defaults: EmailBackupConfig = {
     enabled: true,
-    recipientEmail: process.env.BACKUP_RECIPIENT_EMAIL || 'abadiyanjavad@gmail.com',
+    recipientEmail: defaultRecipient,
     dailyHour: 8,
     dailyMinute: 0,
-    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
-    smtpPort: Number(process.env.SMTP_PORT || 465),
+    smtpHost: defaultHost,
+    smtpPort: defaultPort,
     smtpSecure: process.env.SMTP_SECURE !== 'false',
-    smtpUser: process.env.SMTP_USER || '',
+    smtpUser: defaultSmtpUser,
     smtpPass: process.env.SMTP_PASS || '',
     lastSentDateKey: '',
     lastSentAt: '',
+    lastAutoAttemptDateKey: '',
     lastStatus: '',
     lastError: '',
   };
   try {
     if (fs.existsSync(EMAIL_BACKUP_CONFIG_FILE)) {
       const raw = JSON.parse(fs.readFileSync(EMAIL_BACKUP_CONFIG_FILE, 'utf-8'));
-      return {
+      const rawRecipient = String(raw.recipientEmail || '').trim();
+      const rawHost = String(raw.smtpHost || '').trim();
+      const rawUser = String(raw.smtpUser || '').trim();
+      const hasCorruptedFields =
+        (rawRecipient && !isValidEmailAddress(rawRecipient)) ||
+        (rawHost && !isValidSmtpHost(rawHost)) ||
+        (raw.smtpPort !== undefined && !isValidSmtpPort(raw.smtpPort)) ||
+        (rawUser && !isValidEmailAddress(rawUser));
+
+      const sanitized: EmailBackupConfig = {
         ...defaults,
         ...raw,
-        recipientEmail: String(raw.recipientEmail || defaults.recipientEmail).trim() || 'abadiyanjavad@gmail.com',
-        dailyHour: Number.isFinite(Number(raw.dailyHour)) ? Math.max(0, Math.min(23, Number(raw.dailyHour))) : 8,
-        dailyMinute: Number.isFinite(Number(raw.dailyMinute)) ? Math.max(0, Math.min(59, Number(raw.dailyMinute))) : 0,
-        smtpPort: Number.isFinite(Number(raw.smtpPort)) ? Number(raw.smtpPort) : 465,
+        recipientEmail: isValidEmailAddress(rawRecipient) ? rawRecipient : defaults.recipientEmail,
+        dailyHour: Number.isFinite(Number(raw.dailyHour)) ? Math.max(0, Math.min(23, Math.trunc(Number(raw.dailyHour)))) : 8,
+        dailyMinute: Number.isFinite(Number(raw.dailyMinute)) ? Math.max(0, Math.min(59, Math.trunc(Number(raw.dailyMinute)))) : 0,
+        smtpHost: isValidSmtpHost(rawHost) ? rawHost : defaults.smtpHost,
+        smtpPort: isValidSmtpPort(raw.smtpPort) ? Number(raw.smtpPort) : defaults.smtpPort,
+        smtpSecure: typeof raw.smtpSecure === 'boolean' ? raw.smtpSecure : defaults.smtpSecure,
+        smtpUser: isValidEmailAddress(rawUser) ? rawUser : '',
+        smtpPass: isValidEmailAddress(rawUser) && typeof raw.smtpPass === 'string' ? raw.smtpPass : '',
+        lastStatus: hasCorruptedFields ? '' : (raw.lastStatus || ''),
+        lastError: hasCorruptedFields ? '' : String(raw.lastError || ''),
       };
+
+      if (hasCorruptedFields) {
+        saveEmailBackupConfig(sanitized);
+      }
+      return sanitized;
     }
   } catch {
     // fallback to defaults
@@ -3608,14 +3660,18 @@ async function sendBackupEmailNow(trigger: 'manual' | 'daily_auto'): Promise<{ s
     throw new Error('ارسال ایمیل پشتیبان در حال انجام است؛ چند ثانیه صبر کنید.');
   }
   const cfg = loadEmailBackupConfig();
-  if (!cfg.recipientEmail) {
-    throw new Error('ایمیل گیرنده مشخص نشده است.');
+  if (!cfg.recipientEmail || !isValidEmailAddress(cfg.recipientEmail)) {
+    throw new Error('نشانی ایمیل گیرنده معتبر نیست.');
   }
-  if (!cfg.smtpHost || !cfg.smtpUser || !cfg.smtpPass) {
+  if (!cfg.smtpHost || !isValidSmtpHost(cfg.smtpHost) || !isValidSmtpPort(cfg.smtpPort)) {
+    throw new Error('آدرس یا پورت سرور ارسال ایمیل (SMTP) معتبر نیست.');
+  }
+  if (!cfg.smtpUser || !isValidEmailAddress(cfg.smtpUser) || !cfg.smtpPass) {
     throw new Error('تنظیمات سرور ارسال ایمیل (SMTP User / App Password) هنوز تکمیل نشده است.');
   }
 
   emailSendInProgress = true;
+  const { dateKey } = getTehranDateParts();
   try {
     const transporter = nodemailer.createTransport({
       host: cfg.smtpHost,
@@ -3629,7 +3685,6 @@ async function sendBackupEmailNow(trigger: 'manual' | 'daily_auto'): Promise<{ s
 
     const payload = buildFullBackupPayload();
     const counts = payload._backupMetadata.counts;
-    const { dateKey } = getTehranDateParts();
     const jsonString = JSON.stringify(payload, null, 2);
     const sizeKb = (Buffer.byteLength(jsonString, 'utf-8') / 1024).toFixed(1);
     const faTime = new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
@@ -3673,6 +3728,7 @@ async function sendBackupEmailNow(trigger: 'manual' | 'daily_auto'): Promise<{ s
       ...cfg,
       lastSentDateKey: dateKey,
       lastSentAt: faTime,
+      lastAutoAttemptDateKey: dateKey,
       lastStatus: 'success',
       lastError: '',
     };
@@ -3681,6 +3737,7 @@ async function sendBackupEmailNow(trigger: 'manual' | 'daily_auto'): Promise<{ s
   } catch (err: any) {
     const failed: EmailBackupConfig = {
       ...cfg,
+      lastAutoAttemptDateKey: trigger === 'daily_auto' ? dateKey : cfg.lastAutoAttemptDateKey,
       lastStatus: 'error',
       lastError: err?.message || 'خطا در ارسال ایمیل SMTP',
     };
@@ -3706,17 +3763,58 @@ app.get('/api/backup/email-config', requireAuth, requirePerm('system', 'backupDa
 app.post('/api/backup/email-config', requireAuth, requirePerm('system', 'backupDatabase'), (req: AuthenticatedRequest, res: Response) => {
   const current = loadEmailBackupConfig();
   const body = req.body || {};
+
+  const recipientEmail = body.recipientEmail !== undefined
+    ? String(body.recipientEmail).trim()
+    : current.recipientEmail;
+  if (!isValidEmailAddress(recipientEmail)) {
+    return res.status(400).json({
+      success: false,
+      message: 'نشانی ایمیل گیرنده نامعتبر است.',
+    });
+  }
+
+  const smtpHost = body.smtpHost !== undefined
+    ? (String(body.smtpHost).trim() || 'smtp.gmail.com')
+    : current.smtpHost;
+  if (!isValidSmtpHost(smtpHost)) {
+    return res.status(400).json({
+      success: false,
+      message: 'آدرس سرور SMTP نامعتبر است (مثال: smtp.gmail.com).',
+    });
+  }
+
+  const rawPort = body.smtpPort !== undefined ? Number(body.smtpPort) : current.smtpPort;
+  if (!isValidSmtpPort(rawPort)) {
+    return res.status(400).json({
+      success: false,
+      message: 'شماره پورت SMTP باید بین ۱ تا ۶۵۵۳۵ باشد (مثال: ۴۶۵).',
+    });
+  }
+
+  const smtpUser = body.smtpUser !== undefined
+    ? String(body.smtpUser).trim()
+    : current.smtpUser;
+  if (smtpUser && !isValidEmailAddress(smtpUser)) {
+    return res.status(400).json({
+      success: false,
+      message: 'نشانی ایمیل فرستنده (SMTP User) معتبر نیست.',
+    });
+  }
+
   const next: EmailBackupConfig = {
     ...current,
     enabled: body.enabled !== undefined ? Boolean(body.enabled) : current.enabled,
-    recipientEmail: String(body.recipientEmail ?? current.recipientEmail).trim() || 'abadiyanjavad@gmail.com',
-    dailyHour: Number.isFinite(Number(body.dailyHour)) ? Math.max(0, Math.min(23, Number(body.dailyHour))) : current.dailyHour,
-    dailyMinute: Number.isFinite(Number(body.dailyMinute)) ? Math.max(0, Math.min(59, Number(body.dailyMinute))) : current.dailyMinute,
-    smtpHost: String(body.smtpHost ?? current.smtpHost).trim() || 'smtp.gmail.com',
-    smtpPort: Number.isFinite(Number(body.smtpPort)) ? Number(body.smtpPort) : current.smtpPort,
+    recipientEmail,
+    dailyHour: Number.isFinite(Number(body.dailyHour)) ? Math.max(0, Math.min(23, Math.trunc(Number(body.dailyHour)))) : current.dailyHour,
+    dailyMinute: Number.isFinite(Number(body.dailyMinute)) ? Math.max(0, Math.min(59, Math.trunc(Number(body.dailyMinute)))) : current.dailyMinute,
+    smtpHost,
+    smtpPort: rawPort,
     smtpSecure: body.smtpSecure !== undefined ? Boolean(body.smtpSecure) : current.smtpSecure,
-    smtpUser: String(body.smtpUser ?? current.smtpUser).trim(),
+    smtpUser,
     smtpPass: body.smtpPass && String(body.smtpPass).trim() ? String(body.smtpPass).trim() : current.smtpPass,
+    lastStatus: '',
+    lastError: '',
   };
   saveEmailBackupConfig(next);
   const { smtpPass, ...safeNext } = next;
@@ -3747,9 +3845,18 @@ function startDailyEmailBackupScheduler() {
   const checkAndSend = async () => {
     try {
       const cfg = loadEmailBackupConfig();
-      if (!cfg.enabled || !cfg.smtpUser || !cfg.smtpPass || !cfg.recipientEmail) return;
+      if (
+        !cfg.enabled ||
+        !isValidEmailAddress(cfg.smtpUser) ||
+        !cfg.smtpPass ||
+        !isValidEmailAddress(cfg.recipientEmail) ||
+        !isValidSmtpHost(cfg.smtpHost) ||
+        !isValidSmtpPort(cfg.smtpPort)
+      ) {
+        return;
+      }
       const { dateKey, hour, minute } = getTehranDateParts();
-      if (cfg.lastSentDateKey === dateKey) return;
+      if (cfg.lastSentDateKey === dateKey || cfg.lastAutoAttemptDateKey === dateKey) return;
       const currentTotalMinutes = hour * 60 + minute;
       const targetTotalMinutes = cfg.dailyHour * 60 + cfg.dailyMinute;
       if (currentTotalMinutes >= targetTotalMinutes) {
@@ -3757,7 +3864,7 @@ function startDailyEmailBackupScheduler() {
         console.log(`📧 Automated daily backup sent to ${cfg.recipientEmail} for ${dateKey}`);
       }
     } catch (err: any) {
-      console.warn('Daily auto-email backup check failed:', err?.message || err);
+      console.info('Daily auto-email backup skipped:', err?.message || err);
     }
   };
   // Check every 5 minutes

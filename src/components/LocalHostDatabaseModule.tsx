@@ -171,7 +171,12 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
     try {
       setEmailSendingNow(true);
       setEmailFeedback(null);
-      await api.saveEmailBackupConfig(emailConfig);
+      const saveRes: any = await api.saveEmailBackupConfig(emailConfig);
+      if (!saveRes?.success) {
+        setEmailFeedback({ type: 'error', text: saveRes?.message || 'تنظیمات ایمیل معتبر نیست.' });
+        return;
+      }
+      setEmailConfig((prev) => ({ ...prev, ...(saveRes.data || {}), smtpPass: '' }));
       const res: any = await api.sendBackupEmailNow();
       if (res?.success) {
         setEmailConfig((prev) => ({
