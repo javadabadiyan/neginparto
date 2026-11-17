@@ -1,0 +1,96 @@
+@import "tailwindcss";
+@import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css');
+
+@theme {
+  --font-sans: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@layer base {
+  *, ::before, ::after {
+    font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  :root {
+    font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: "ss01" on, "tnum" on;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: 'Vazirmatn', system-ui, sans-serif;
+    direction: rtl;
+    text-align: right;
+  }
+
+  /* Force all form controls to inherit Vazirmatn and render Persian digits */
+  input, select, textarea, button {
+    font-family: 'Vazirmatn', system-ui, sans-serif !important;
+    font-feature-settings: "ss01" on, "tnum" on !important;
+  }
+
+  /* Table numbers, amounts, dates, codes */
+  table, td, th, tr, code, pre, .persian-num {
+    font-family: 'Vazirmatn', system-ui, sans-serif;
+    font-feature-settings: "ss01" on, "tnum" on;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Persian tabular numbers */
+.persian-num {
+  font-feature-settings: "ss01" 1, "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mobile responsive touch container */
+.responsive-table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Custom smooth scrollbar for Windows and Mobile */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+  html, body {
+    background: #ffffff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-sheet {
+    position: static !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .print-sheet * {
+    overflow: visible !important;
+  }
+}

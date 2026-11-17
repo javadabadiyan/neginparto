@@ -1,0 +1,1236 @@
+{
+  "entities": {
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted administrator registry keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "admin"],
+          "maxLength": 32
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "HR system user role and granular RBAC permissions without PII.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "roleType": {
+          "type": "string",
+          "enum": ["super_admin", "custom", "viewer"],
+          "maxLength": 32
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "permissions": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "username", "fullName", "role", "isActive", "permissions", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII sub-document for an HR user account.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "lastLogin": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerUid", "createdAt", "updatedAt"]
+    },
+    "Personnel": {
+      "title": "Personnel",
+      "description": "Electronic personnel dossier containing HR identity and employment fields.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "employeeId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "personnelCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "firstName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "fatherName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "shenasnamehNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "nationalId": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "nationality": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "citizenship": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "gender": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "position": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "positionCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "jobTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "jobCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "workLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "hireDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "birthPlace": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "issuePlace": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "birthDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "issueDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "maritalStatus": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "militaryStatus": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "employmentType": {
+          "type": "string",
+          "enum": ["رسمی", "پیمانی", "قراردادی", "طرحی", "شرکتی"],
+          "maxLength": 32
+        },
+        "jobGroupId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "jobGroupName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "education": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "fieldOfStudy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "status": {
+          "type": "string",
+          "enum": ["فعال", "مرخصی", "ماموریت", "قطع همکاری"],
+          "maxLength": 32
+        },
+        "baseSalary": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "hasDocuments": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "personnelCode", "fullName", "employmentType", "status", "baseSalary", "createdAt", "updatedAt"]
+    },
+    "PersonnelRelative": {
+      "title": "PersonnelRelative",
+      "description": "Family relative or dependent record stored under a personnel dossier subcollection.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "personnelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "personnelCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "personnelName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "nationalId": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "shenasnamehNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "fatherName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "birthDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "gender": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "education": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "isDependent": {
+          "type": "boolean"
+        },
+        "insuranceCovered": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "personnelId", "ownerUid", "fullName", "relation", "createdAt", "updatedAt"]
+    },
+    "PersonnelDocument": {
+      "title": "PersonnelDocument",
+      "description": "Individual scanned identity document stored under a personnel record to stay below 1MB per doc.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "personnelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "docType": {
+          "type": "string",
+          "enum": ["national_card", "shenasnameh", "spouse_shenasnameh", "child_shenasnameh"],
+          "maxLength": 40
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "dataUrl": {
+          "type": "string",
+          "maxLength": 750000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "personnelId", "ownerUid", "docType", "dataUrl", "createdAt", "updatedAt"]
+    },
+    "KaranehRecord": {
+      "title": "KaranehRecord",
+      "description": "Monthly karaneh performance payout record for comparative analytics.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "personnelId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "personnelCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "position": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "period": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "score": {
+          "type": "number"
+        },
+        "performanceCoeff": {
+          "type": "number"
+        },
+        "baseKaraneh": {
+          "type": "number"
+        },
+        "overtimeBonus": {
+          "type": "number"
+        },
+        "deductions": {
+          "type": "number"
+        },
+        "finalKaraneh": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "personnelCode", "fullName", "period", "baseKaraneh", "overtimeBonus", "deductions", "finalKaraneh", "createdAt", "updatedAt"]
+    },
+    "JobGroup": {
+      "title": "JobGroup",
+      "description": "Organizational job grade and compensation ceiling definition.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "grade": {
+          "type": "number"
+        },
+        "minBaseSalary": {
+          "type": "number"
+        },
+        "maxBaseSalary": {
+          "type": "number"
+        },
+        "maxKaranehCeiling": {
+          "type": "number"
+        },
+        "requiredExperienceYears": {
+          "type": "number"
+        },
+        "requiredDegree": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "code", "title", "grade", "minBaseSalary", "maxBaseSalary", "maxKaranehCeiling", "createdAt", "updatedAt"]
+    },
+    "JobClassificationRecord": {
+      "title": "JobClassificationRecord",
+      "description": "18-column job classification and mining experience record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "personnelCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "firstName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "workLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "nationalId": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "education": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "hireDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "hireMonth": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "miningExperienceDays": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "totalInsuranceHistory": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "miningExperience": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "nonMiningExperience": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "jobGroup": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "groupGapFrom1405": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "nextGroupGap": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "jobTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "position": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "personnelCode", "createdAt", "updatedAt"]
+    },
+    "PersonnelCommitment": {
+      "title": "PersonnelCommitment",
+      "description": "Accounting guarantees, service commitments, and archived records.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "personnelId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "personnelCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "personnelName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "commitmentType": {
+          "type": "string",
+          "enum": ["تعهد حسابداری", "تعهد خدمت", "سفته حسن انجام کار", "چک تضمین", "تعهد دوره‌های آموزشی", "محرمانگی و عدم رقابت"],
+          "maxLength": 80
+        },
+        "documentNumber": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "amount": {
+          "type": "number"
+        },
+        "previouslyTakenAmount": {
+          "type": "number"
+        },
+        "maxAllowedAmount": {
+          "type": "number"
+        },
+        "startDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "endDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["جاری و معتبر", "پایان یافته", "عودت داده شده", "به اجرا گذاشته شده"],
+          "maxLength": 40
+        },
+        "isArchived": {
+          "type": "boolean"
+        },
+        "archivedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "archiveCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "guarantorName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "personnelCode", "personnelName", "commitmentType", "amount", "status", "createdAt", "updatedAt"]
+    },
+    "PayrollRecord": {
+      "title": "PayrollRecord",
+      "description": "Monthly payroll slip and organizational breakdown record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "period": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "yearMonthLabel": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "employeeId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "personnelCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "firstName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "nationalId": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "workLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "jobTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "position": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "jobGroupCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "jobGroupTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "employmentType": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "effectiveDays": {
+          "type": "number"
+        },
+        "netPayable": {
+          "type": "number"
+        },
+        "totalBenefits": {
+          "type": "number"
+        },
+        "overtimeAmount": {
+          "type": "number"
+        },
+        "fridayWorkAmount": {
+          "type": "number"
+        },
+        "missionAmount": {
+          "type": "number"
+        },
+        "bonusAmount": {
+          "type": "number"
+        },
+        "incentiveAmount": {
+          "type": "number"
+        },
+        "otherBenefits": {
+          "type": "number"
+        },
+        "arrearsAmount": {
+          "type": "number"
+        },
+        "advanceAmount": {
+          "type": "number"
+        },
+        "totalDeductions": {
+          "type": "number"
+        },
+        "taxAmount": {
+          "type": "number"
+        },
+        "salaryTaxAmount": {
+          "type": "number"
+        },
+        "jobWage": {
+          "type": "number"
+        },
+        "totalOrderFactors": {
+          "type": "number"
+        },
+        "baseSalaryOrder": {
+          "type": "number"
+        },
+        "overtimeHours": {
+          "type": "number"
+        },
+        "fridayWorkHours": {
+          "type": "number"
+        },
+        "costCenterCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "costCenterTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "projectCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "projectTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "bankName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "bankAccount": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "rawFields": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "period", "personnelCode", "fullName", "netPayable", "totalBenefits", "totalDeductions", "createdAt", "updatedAt"]
+    },
+    "MiningVolume": {
+      "title": "MiningVolume",
+      "description": "Monthly mining production, stripping, crushing, or operational volume record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "period": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "unitName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "activityType": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "metricTitle": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "volumeValue": {
+          "type": "number"
+        },
+        "targetVolume": {
+          "type": "number"
+        },
+        "unitLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "period", "unitName", "volumeValue", "createdAt", "updatedAt"]
+    },
+    "MiningMachinery": {
+      "title": "MiningMachinery",
+      "description": "Fleet equipment and repair workshop operational readiness status record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "machineCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "machineName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "machineType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "unitName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "status": {
+          "type": "string",
+          "enum": ["آماده به کار", "خراب / در تعمیرگاه", "در انتظار قطعه", "سرویس دوره‌ای"],
+          "maxLength": 40
+        },
+        "issueDescription": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "stoppedSince": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "estimatedReadyDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "operatorName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "machineCode", "machineName", "status", "createdAt", "updatedAt"]
+    },
+    "UnitReport": {
+      "title": "UnitReport",
+      "description": "Operational report uploaded or entered by any mining company unit.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accessUids": {
+          "type": "array"
+        },
+        "period": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}$"
+        },
+        "unitName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "reportCategory": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "metricName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "actualValue": {
+          "type": "number"
+        },
+        "previousValue": {
+          "type": "number"
+        },
+        "targetValue": {
+          "type": "number"
+        },
+        "unitLabel": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "submittedBy": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "rawFields": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "accessUids", "period", "unitName", "metricName", "actualValue", "previousValue", "targetValue", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Trusted administrator role lookup documents."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "HR user accounts and role permissions (non-PII)."
+    },
+    "/users/{userId}/private/{infoId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII subcollection for HR user accounts."
+    },
+    "/personnel/{personnelId}": {
+      "schema": { "$ref": "#/entities/Personnel" },
+      "description": "Electronic personnel dossier records."
+    },
+    "/personnel/{personnelId}/documents/{docId}": {
+      "schema": { "$ref": "#/entities/PersonnelDocument" },
+      "description": "Individual scanned identity document pages belonging to a personnel record."
+    },
+    "/personnel/{personnelId}/relatives/{relativeId}": {
+      "schema": { "$ref": "#/entities/PersonnelRelative" },
+      "description": "Family relatives and dependents belonging to a personnel record."
+    },
+    "/karaneh/{recordId}": {
+      "schema": { "$ref": "#/entities/KaranehRecord" },
+      "description": "Monthly karaneh performance payout records."
+    },
+    "/jobGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/JobGroup" },
+      "description": "Organizational job group grade definitions."
+    },
+    "/jobClassifications/{recordId}": {
+      "schema": { "$ref": "#/entities/JobClassificationRecord" },
+      "description": "18-column job classification records."
+    },
+    "/commitments/{commitmentId}": {
+      "schema": { "$ref": "#/entities/PersonnelCommitment" },
+      "description": "Personnel accounting and service commitment records."
+    },
+    "/payroll/{recordId}": {
+      "schema": { "$ref": "#/entities/PayrollRecord" },
+      "description": "Monthly payroll slip records."
+    },
+    "/miningVolumes/{recordId}": {
+      "schema": { "$ref": "#/entities/MiningVolume" },
+      "description": "Monthly mining production and operational volumes."
+    },
+    "/miningMachinery/{recordId}": {
+      "schema": { "$ref": "#/entities/MiningMachinery" },
+      "description": "Mining fleet machinery and workshop readiness records."
+    },
+    "/unitReports/{recordId}": {
+      "schema": { "$ref": "#/entities/UnitReport" },
+      "description": "Operational Excel and manual reports per mining unit."
+    }
+  }
+}

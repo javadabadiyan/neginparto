@@ -1,0 +1,891 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ================= GLOBAL HELPERS =================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isEmailVerified() && request.auth.token.email == 'javadabadiyangoshi@gmail.com';
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(uid) {
+      return isEmailVerified() && request.auth.uid == uid;
+    }
+
+    function isStr(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isReqStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isNonNegNum(val) {
+      return (val is int || val is float) && val >= 0;
+    }
+
+    function isNum(val) {
+      return val is int || val is float;
+    }
+
+    function isValidAccessUids(listData) {
+      return listData is list &&
+        listData.size() <= 20 &&
+        (listData.size() == 0 || isValidId(listData[0]));
+    }
+
+    function hasValidTimestampsOnCreate(data) {
+      return data.createdAt == request.time && data.updatedAt == request.time;
+    }
+
+    function hasValidTimestampsOnUpdate(data) {
+      return data.createdAt == existing().createdAt && data.updatedAt == request.time;
+    }
+
+    // ================= VALIDATION BLUEPRINTS =================
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'role', 'createdAt']) &&
+        isValidId(data.uid) &&
+        isReqStr(data.email, 3, 254) &&
+        data.role in ['super_admin', 'admin'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'username', 'fullName', 'role', 'isActive', 'permissions', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'ownerUid', 'username', 'fullName', 'role', 'roleType', 'department', 'isActive', 'permissions', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isReqStr(data.username, 2, 64) &&
+        isReqStr(data.fullName, 2, 120) &&
+        isReqStr(data.role, 1, 80) &&
+        (!('roleType' in data) || data.roleType in ['super_admin', 'custom', 'viewer']) &&
+        (!('department' in data) || isStr(data.department, 120)) &&
+        data.isActive is bool &&
+        data.permissions is map &&
+        data.permissions.size() <= 25 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['ownerUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerUid', 'email', 'phone', 'lastLogin', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerUid) &&
+        (!('email' in data) || isStr(data.email, 254)) &&
+        (!('phone' in data) || isStr(data.phone, 32)) &&
+        (!('lastLogin' in data) || isStr(data.lastLogin, 64)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonnel(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'personnelCode', 'fullName', 'employmentType', 'status', 'baseSalary', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'employeeId', 'personnelCode', 'firstName', 'lastName', 'fullName',
+          'fatherName', 'shenasnamehNumber', 'nationalId', 'nationality', 'citizenship', 'gender',
+          'position', 'positionCode', 'jobTitle', 'jobCode', 'workLocation', 'department', 'hireDate',
+          'birthPlace', 'issuePlace', 'birthDate', 'issueDate', 'maritalStatus', 'militaryStatus',
+          'employmentType', 'jobGroupId', 'jobGroupName', 'education', 'fieldOfStudy', 'phone', 'email',
+          'status', 'baseSalary', 'notes', 'hasDocuments', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        (!('employeeId' in data) || isStr(data.employeeId, 64)) &&
+        isReqStr(data.personnelCode, 1, 40) &&
+        (!('firstName' in data) || isStr(data.firstName, 80)) &&
+        (!('lastName' in data) || isStr(data.lastName, 80)) &&
+        isReqStr(data.fullName, 1, 160) &&
+        (!('fatherName' in data) || isStr(data.fatherName, 80)) &&
+        (!('shenasnamehNumber' in data) || isStr(data.shenasnamehNumber, 40)) &&
+        (!('nationalId' in data) || isStr(data.nationalId, 20)) &&
+        (!('nationality' in data) || isStr(data.nationality, 80)) &&
+        (!('citizenship' in data) || isStr(data.citizenship, 80)) &&
+        (!('gender' in data) || isStr(data.gender, 32)) &&
+        (!('position' in data) || isStr(data.position, 160)) &&
+        (!('positionCode' in data) || isStr(data.positionCode, 40)) &&
+        (!('jobTitle' in data) || isStr(data.jobTitle, 160)) &&
+        (!('jobCode' in data) || isStr(data.jobCode, 40)) &&
+        (!('workLocation' in data) || isStr(data.workLocation, 160)) &&
+        (!('department' in data) || isStr(data.department, 160)) &&
+        (!('hireDate' in data) || isStr(data.hireDate, 32)) &&
+        (!('birthPlace' in data) || isStr(data.birthPlace, 120)) &&
+        (!('issuePlace' in data) || isStr(data.issuePlace, 120)) &&
+        (!('birthDate' in data) || isStr(data.birthDate, 32)) &&
+        (!('issueDate' in data) || isStr(data.issueDate, 32)) &&
+        (!('maritalStatus' in data) || isStr(data.maritalStatus, 40)) &&
+        (!('militaryStatus' in data) || isStr(data.militaryStatus, 80)) &&
+        data.employmentType in ['رسمی', 'پیمانی', 'قراردادی', 'طرحی', 'شرکتی'] &&
+        (!('jobGroupId' in data) || data.jobGroupId == '' || isValidId(data.jobGroupId)) &&
+        (!('jobGroupName' in data) || isStr(data.jobGroupName, 160)) &&
+        (!('education' in data) || isStr(data.education, 160)) &&
+        (!('fieldOfStudy' in data) || isStr(data.fieldOfStudy, 160)) &&
+        (!('phone' in data) || isStr(data.phone, 32)) &&
+        (!('email' in data) || isStr(data.email, 254)) &&
+        data.status in ['فعال', 'مرخصی', 'ماموریت', 'قطع همکاری'] &&
+        isNonNegNum(data.baseSalary) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        (!('hasDocuments' in data) || data.hasDocuments is bool) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonnelDocument(data) {
+      return data.keys().hasAll(['id', 'personnelId', 'ownerUid', 'docType', 'dataUrl', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'personnelId', 'ownerUid', 'docType', 'label', 'dataUrl', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.personnelId) &&
+        isValidId(data.ownerUid) &&
+        data.docType in ['national_card', 'shenasnameh', 'spouse_shenasnameh', 'child_shenasnameh'] &&
+        (!('label' in data) || isStr(data.label, 160)) &&
+        isReqStr(data.dataUrl, 1, 750000) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonnelRelative(data) {
+      return data.keys().hasAll(['id', 'personnelId', 'ownerUid', 'fullName', 'relation', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'personnelId', 'ownerUid', 'personnelCode', 'personnelName',
+          'fullName', 'relation', 'nationalId', 'shenasnamehNumber', 'fatherName',
+          'birthDate', 'gender', 'phone', 'education', 'isDependent', 'insuranceCovered',
+          'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.personnelId) &&
+        isValidId(data.ownerUid) &&
+        (!('personnelCode' in data) || isStr(data.personnelCode, 40)) &&
+        (!('personnelName' in data) || isStr(data.personnelName, 160)) &&
+        isReqStr(data.fullName, 1, 160) &&
+        isReqStr(data.relation, 1, 40) &&
+        (!('nationalId' in data) || isStr(data.nationalId, 20)) &&
+        (!('shenasnamehNumber' in data) || isStr(data.shenasnamehNumber, 40)) &&
+        (!('fatherName' in data) || isStr(data.fatherName, 80)) &&
+        (!('birthDate' in data) || isStr(data.birthDate, 32)) &&
+        (!('gender' in data) || isStr(data.gender, 32)) &&
+        (!('phone' in data) || isStr(data.phone, 32)) &&
+        (!('education' in data) || isStr(data.education, 160)) &&
+        (!('isDependent' in data) || data.isDependent is bool) &&
+        (!('insuranceCovered' in data) || data.insuranceCovered is bool) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidKaranehRecord(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'personnelCode', 'fullName', 'period', 'baseKaraneh', 'overtimeBonus', 'deductions', 'finalKaraneh', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'personnelId', 'personnelCode', 'fullName',
+          'department', 'position', 'period', 'score', 'performanceCoeff',
+          'baseKaraneh', 'overtimeBonus', 'deductions', 'finalKaraneh', 'notes',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        (!('personnelId' in data) || data.personnelId == '' || isValidId(data.personnelId)) &&
+        isReqStr(data.personnelCode, 1, 40) &&
+        isReqStr(data.fullName, 1, 160) &&
+        (!('department' in data) || isStr(data.department, 160)) &&
+        (!('position' in data) || isStr(data.position, 160)) &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 10 && data.period.matches('^[0-9]{4}-[0-9]{2}$') &&
+        (!('score' in data) || isNum(data.score)) &&
+        (!('performanceCoeff' in data) || isNum(data.performanceCoeff)) &&
+        isNonNegNum(data.baseKaraneh) &&
+        isNonNegNum(data.overtimeBonus) &&
+        isNonNegNum(data.deductions) &&
+        isNum(data.finalKaraneh) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJobGroup(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'code', 'title', 'grade', 'minBaseSalary', 'maxBaseSalary', 'maxKaranehCeiling', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'code', 'title', 'grade',
+          'minBaseSalary', 'maxBaseSalary', 'maxKaranehCeiling',
+          'requiredExperienceYears', 'requiredDegree', 'description',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        isReqStr(data.code, 1, 40) &&
+        isReqStr(data.title, 1, 160) &&
+        isNonNegNum(data.grade) &&
+        isNonNegNum(data.minBaseSalary) &&
+        isNonNegNum(data.maxBaseSalary) &&
+        isNonNegNum(data.maxKaranehCeiling) &&
+        (!('requiredExperienceYears' in data) || isNonNegNum(data.requiredExperienceYears)) &&
+        (!('requiredDegree' in data) || isStr(data.requiredDegree, 120)) &&
+        (!('description' in data) || isStr(data.description, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJobClassification(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'personnelCode', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'personnelCode', 'firstName', 'lastName',
+          'workLocation', 'department', 'nationalId', 'education', 'hireDate', 'hireMonth',
+          'miningExperienceDays', 'totalInsuranceHistory', 'miningExperience', 'nonMiningExperience',
+          'jobGroup', 'groupGapFrom1405', 'nextGroupGap', 'jobTitle', 'position',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        isReqStr(data.personnelCode, 1, 40) &&
+        (!('firstName' in data) || isStr(data.firstName, 80)) &&
+        (!('lastName' in data) || isStr(data.lastName, 80)) &&
+        (!('workLocation' in data) || isStr(data.workLocation, 160)) &&
+        (!('department' in data) || isStr(data.department, 160)) &&
+        (!('nationalId' in data) || isStr(data.nationalId, 20)) &&
+        (!('education' in data) || isStr(data.education, 160)) &&
+        (!('hireDate' in data) || isStr(data.hireDate, 32)) &&
+        (!('hireMonth' in data) || isStr(data.hireMonth, 32)) &&
+        (!('miningExperienceDays' in data) || isStr(data.miningExperienceDays, 40)) &&
+        (!('totalInsuranceHistory' in data) || isStr(data.totalInsuranceHistory, 64)) &&
+        (!('miningExperience' in data) || isStr(data.miningExperience, 64)) &&
+        (!('nonMiningExperience' in data) || isStr(data.nonMiningExperience, 64)) &&
+        (!('jobGroup' in data) || isStr(data.jobGroup, 64)) &&
+        (!('groupGapFrom1405' in data) || isStr(data.groupGapFrom1405, 64)) &&
+        (!('nextGroupGap' in data) || isStr(data.nextGroupGap, 64)) &&
+        (!('jobTitle' in data) || isStr(data.jobTitle, 160)) &&
+        (!('position' in data) || isStr(data.position, 160)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPersonnelCommitment(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'personnelCode', 'personnelName', 'commitmentType', 'amount', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'personnelId', 'personnelCode', 'personnelName',
+          'commitmentType', 'documentNumber', 'amount', 'previouslyTakenAmount', 'maxAllowedAmount',
+          'startDate', 'endDate', 'status', 'isArchived', 'archivedAt', 'archiveCode',
+          'guarantorName', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        (!('personnelId' in data) || data.personnelId == '' || isValidId(data.personnelId)) &&
+        isReqStr(data.personnelCode, 1, 40) &&
+        isReqStr(data.personnelName, 1, 160) &&
+        data.commitmentType in ['تعهد حسابداری', 'تعهد خدمت', 'سفته حسن انجام کار', 'چک تضمین', 'تعهد دوره‌های آموزشی', 'محرمانگی و عدم رقابت'] &&
+        (!('documentNumber' in data) || isStr(data.documentNumber, 80)) &&
+        isNonNegNum(data.amount) &&
+        (!('previouslyTakenAmount' in data) || isNonNegNum(data.previouslyTakenAmount)) &&
+        (!('maxAllowedAmount' in data) || isNonNegNum(data.maxAllowedAmount)) &&
+        (!('startDate' in data) || isStr(data.startDate, 32)) &&
+        (!('endDate' in data) || isStr(data.endDate, 32)) &&
+        data.status in ['جاری و معتبر', 'پایان یافته', 'عودت داده شده', 'به اجرا گذاشته شده'] &&
+        (!('isArchived' in data) || data.isArchived is bool) &&
+        (!('archivedAt' in data) || isStr(data.archivedAt, 40)) &&
+        (!('archiveCode' in data) || isStr(data.archiveCode, 40)) &&
+        (!('guarantorName' in data) || isStr(data.guarantorName, 160)) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPayrollRecord(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'period', 'personnelCode', 'fullName', 'netPayable', 'totalBenefits', 'totalDeductions', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'period', 'yearMonthLabel', 'employeeId',
+          'personnelCode', 'firstName', 'lastName', 'fullName', 'nationalId',
+          'workLocation', 'department', 'jobTitle', 'position', 'jobGroupCode', 'jobGroupTitle',
+          'employmentType', 'effectiveDays', 'netPayable', 'totalBenefits', 'overtimeAmount',
+          'fridayWorkAmount', 'missionAmount', 'bonusAmount', 'incentiveAmount', 'otherBenefits',
+          'arrearsAmount', 'advanceAmount', 'totalDeductions', 'taxAmount', 'salaryTaxAmount',
+          'jobWage', 'totalOrderFactors', 'baseSalaryOrder', 'overtimeHours', 'fridayWorkHours',
+          'costCenterCode', 'costCenterTitle', 'projectCode', 'projectTitle', 'bankName',
+          'bankAccount', 'rawFields', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 10 && data.period.matches('^[0-9]{4}-[0-9]{2}$') &&
+        (!('yearMonthLabel' in data) || isStr(data.yearMonthLabel, 24)) &&
+        (!('employeeId' in data) || isStr(data.employeeId, 64)) &&
+        isReqStr(data.personnelCode, 1, 40) &&
+        (!('firstName' in data) || isStr(data.firstName, 80)) &&
+        (!('lastName' in data) || isStr(data.lastName, 80)) &&
+        isReqStr(data.fullName, 1, 160) &&
+        (!('nationalId' in data) || isStr(data.nationalId, 20)) &&
+        (!('workLocation' in data) || isStr(data.workLocation, 160)) &&
+        (!('department' in data) || isStr(data.department, 160)) &&
+        (!('jobTitle' in data) || isStr(data.jobTitle, 160)) &&
+        (!('position' in data) || isStr(data.position, 160)) &&
+        (!('jobGroupCode' in data) || isStr(data.jobGroupCode, 40)) &&
+        (!('jobGroupTitle' in data) || isStr(data.jobGroupTitle, 160)) &&
+        (!('employmentType' in data) || isStr(data.employmentType, 40)) &&
+        (!('effectiveDays' in data) || isNum(data.effectiveDays)) &&
+        isNum(data.netPayable) &&
+        isNum(data.totalBenefits) &&
+        (!('overtimeAmount' in data) || isNum(data.overtimeAmount)) &&
+        (!('fridayWorkAmount' in data) || isNum(data.fridayWorkAmount)) &&
+        (!('missionAmount' in data) || isNum(data.missionAmount)) &&
+        (!('bonusAmount' in data) || isNum(data.bonusAmount)) &&
+        (!('incentiveAmount' in data) || isNum(data.incentiveAmount)) &&
+        (!('otherBenefits' in data) || isNum(data.otherBenefits)) &&
+        (!('arrearsAmount' in data) || isNum(data.arrearsAmount)) &&
+        (!('advanceAmount' in data) || isNum(data.advanceAmount)) &&
+        isNum(data.totalDeductions) &&
+        (!('taxAmount' in data) || isNum(data.taxAmount)) &&
+        (!('salaryTaxAmount' in data) || isNum(data.salaryTaxAmount)) &&
+        (!('jobWage' in data) || isNum(data.jobWage)) &&
+        (!('totalOrderFactors' in data) || isNum(data.totalOrderFactors)) &&
+        (!('baseSalaryOrder' in data) || isNum(data.baseSalaryOrder)) &&
+        (!('overtimeHours' in data) || isNum(data.overtimeHours)) &&
+        (!('fridayWorkHours' in data) || isNum(data.fridayWorkHours)) &&
+        (!('costCenterCode' in data) || isStr(data.costCenterCode, 64)) &&
+        (!('costCenterTitle' in data) || isStr(data.costCenterTitle, 160)) &&
+        (!('projectCode' in data) || isStr(data.projectCode, 64)) &&
+        (!('projectTitle' in data) || isStr(data.projectTitle, 160)) &&
+        (!('bankName' in data) || isStr(data.bankName, 80)) &&
+        (!('bankAccount' in data) || isStr(data.bankAccount, 64)) &&
+        (!('rawFields' in data) || (data.rawFields is map && data.rawFields.size() <= 260)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMiningVolume(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'period', 'unitName', 'volumeValue', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'period', 'unitName', 'activityType',
+          'metricTitle', 'volumeValue', 'targetVolume', 'unitLabel', 'status', 'notes',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 10 && data.period.matches('^[0-9]{4}-[0-9]{2}$') &&
+        isReqStr(data.unitName, 1, 160) &&
+        (!('activityType' in data) || isStr(data.activityType, 160)) &&
+        (!('metricTitle' in data) || isStr(data.metricTitle, 160)) &&
+        isNonNegNum(data.volumeValue) &&
+        (!('targetVolume' in data) || isNonNegNum(data.targetVolume)) &&
+        (!('unitLabel' in data) || isStr(data.unitLabel, 40)) &&
+        (!('status' in data) || isStr(data.status, 80)) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMiningMachinery(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'machineCode', 'machineName', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'machineCode', 'machineName', 'machineType',
+          'unitName', 'status', 'issueDescription', 'stoppedSince', 'estimatedReadyDate',
+          'operatorName', 'notes', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        isReqStr(data.machineCode, 1, 40) &&
+        isReqStr(data.machineName, 1, 160) &&
+        (!('machineType' in data) || isStr(data.machineType, 80)) &&
+        (!('unitName' in data) || isStr(data.unitName, 160)) &&
+        data.status in ['آماده به کار', 'خراب / در تعمیرگاه', 'در انتظار قطعه', 'سرویس دوره‌ای'] &&
+        (!('issueDescription' in data) || isStr(data.issueDescription, 1000)) &&
+        (!('stoppedSince' in data) || isStr(data.stoppedSince, 32)) &&
+        (!('estimatedReadyDate' in data) || isStr(data.estimatedReadyDate, 32)) &&
+        (!('operatorName' in data) || isStr(data.operatorName, 160)) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUnitReport(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'accessUids', 'period', 'unitName', 'metricName', 'actualValue', 'previousValue', 'targetValue', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'accessUids', 'period', 'unitName', 'reportCategory',
+          'metricName', 'actualValue', 'previousValue', 'targetValue', 'unitLabel',
+          'status', 'submittedBy', 'notes', 'rawFields', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.ownerUid) &&
+        isValidAccessUids(data.accessUids) &&
+        data.period is string && data.period.size() >= 6 && data.period.size() <= 10 && data.period.matches('^[0-9]{4}-[0-9]{2}$') &&
+        isReqStr(data.unitName, 1, 160) &&
+        (!('reportCategory' in data) || isStr(data.reportCategory, 120)) &&
+        isReqStr(data.metricName, 1, 200) &&
+        isNum(data.actualValue) &&
+        isNum(data.previousValue) &&
+        isNum(data.targetValue) &&
+        (!('unitLabel' in data) || isStr(data.unitLabel, 40)) &&
+        (!('status' in data) || isStr(data.status, 80)) &&
+        (!('submittedBy' in data) || isStr(data.submittedBy, 120)) &&
+        (!('notes' in data) || isStr(data.notes, 1000)) &&
+        (!('rawFields' in data) || (data.rawFields is map && data.rawFields.size() <= 120)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // ================= COLLECTION RULES =================
+
+    // Diagnostic connectivity check (non-sensitive single doc)
+    match /test/{docId} {
+      allow get: if docId == 'connection' && isSignedIn();
+    }
+
+    // Trusted Admin Registry
+    match /admins/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(uid) && isEmailVerified() && isValidAdminRole(incoming()) &&
+        incoming().uid == uid &&
+        incoming().createdAt == request.time &&
+        isAdmin();
+      allow update: if isValidId(uid) && isEmailVerified() && isValidAdminRole(incoming()) &&
+        isAdmin() &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']);
+      allow delete: if isValidId(uid) && isAdmin() && uid != request.auth.uid;
+    }
+
+    // Users & Isolated Private PII
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin() || (isEmailVerified() && existing().ownerUid == request.auth.uid));
+      allow list: if isEmailVerified() && (isBootstrappedAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(userId) && isEmailVerified() && isValidUserAccount(incoming()) &&
+        incoming().id == userId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming()) &&
+        (isAdmin() || (incoming().role != 'super_admin' && (!('roleType' in incoming()) || incoming().roleType != 'super_admin')));
+      allow update: if isValidId(userId) && isEmailVerified() && isValidUserAccount(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          (existing().ownerUid == request.auth.uid &&
+            incoming().role == existing().role &&
+            incoming().permissions == existing().permissions &&
+            incoming().isActive == existing().isActive &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'department', 'updatedAt']))
+        );
+      allow delete: if isValidId(userId) && isAdmin() && existing().role != 'super_admin';
+
+      match /private/{infoId} {
+        allow get: if isValidId(userId) && isValidId(infoId) && (isOwner(userId) || isAdmin() || (isEmailVerified() && get(/databases/$(database)/documents/users/$(userId)).data.ownerUid == request.auth.uid));
+        allow list: if isValidId(userId) && isEmailVerified() && (isBootstrappedAdmin() || existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(infoId) && infoId == 'info' && isEmailVerified() &&
+          isValidUserPrivateInfo(incoming()) &&
+          incoming().ownerUid == request.auth.uid &&
+          hasValidTimestampsOnCreate(incoming()) &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          (isOwner(userId) || isAdmin() || get(/databases/$(database)/documents/users/$(userId)).data.ownerUid == request.auth.uid);
+        allow update: if isValidId(userId) && isValidId(infoId) && infoId == 'info' && isEmailVerified() &&
+          isValidUserPrivateInfo(incoming()) &&
+          incoming().ownerUid == existing().ownerUid &&
+          hasValidTimestampsOnUpdate(incoming()) &&
+          (
+            isAdmin() ||
+            ((isOwner(userId) || existing().ownerUid == request.auth.uid) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'lastLogin', 'updatedAt']))
+          );
+        allow delete: if isValidId(userId) && isValidId(infoId) && isAdmin();
+      }
+    }
+
+    // Personnel Dossiers & Subcollection Scanned Documents
+    match /personnel/{personnelId} {
+      allow get: if isValidId(personnelId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(personnelId) && isEmailVerified() && isValidPersonnel(incoming()) &&
+        incoming().id == personnelId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming()) &&
+        (isAdmin() || request.auth.uid in incoming().accessUids);
+      allow update: if isValidId(personnelId) && isEmailVerified() && isValidPersonnel(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'employeeId', 'firstName', 'lastName', 'fullName', 'fatherName', 'shenasnamehNumber',
+              'nationalId', 'nationality', 'citizenship', 'gender', 'position', 'positionCode',
+              'jobTitle', 'jobCode', 'workLocation', 'department', 'hireDate', 'birthPlace',
+              'issuePlace', 'birthDate', 'issueDate', 'maritalStatus', 'militaryStatus',
+              'education', 'fieldOfStudy', 'phone', 'email', 'status', 'notes', 'hasDocuments', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(personnelId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+
+      match /documents/{docId} {
+        allow get: if isValidId(personnelId) && isValidId(docId) && isEmailVerified() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/personnel/$(personnelId)).data.ownerUid == request.auth.uid ||
+          request.auth.uid in get(/databases/$(database)/documents/personnel/$(personnelId)).data.accessUids
+        );
+        allow list: if isValidId(personnelId) && isEmailVerified() && (
+          isBootstrappedAdmin() ||
+          existing().ownerUid == request.auth.uid
+        );
+        allow create: if isValidId(personnelId) && isValidId(docId) && isEmailVerified() &&
+          isValidPersonnelDocument(incoming()) &&
+          incoming().id == docId &&
+          incoming().personnelId == personnelId &&
+          incoming().ownerUid == request.auth.uid &&
+          hasValidTimestampsOnCreate(incoming()) &&
+          exists(/databases/$(database)/documents/personnel/$(personnelId)) &&
+          (isAdmin() ||
+            get(/databases/$(database)/documents/personnel/$(personnelId)).data.ownerUid == request.auth.uid ||
+            request.auth.uid in get(/databases/$(database)/documents/personnel/$(personnelId)).data.accessUids);
+        allow update: if isValidId(personnelId) && isValidId(docId) && isEmailVerified() &&
+          isValidPersonnelDocument(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().personnelId == existing().personnelId &&
+          incoming().ownerUid == existing().ownerUid &&
+          hasValidTimestampsOnUpdate(incoming()) &&
+          (
+            isAdmin() ||
+            (existing().ownerUid == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['label', 'dataUrl', 'updatedAt']))
+          );
+        allow delete: if isValidId(personnelId) && isValidId(docId) && isEmailVerified() &&
+          (isAdmin() || existing().ownerUid == request.auth.uid);
+      }
+
+      match /relatives/{relativeId} {
+        allow get: if isValidId(personnelId) && isValidId(relativeId) && isEmailVerified() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/personnel/$(personnelId)).data.ownerUid == request.auth.uid ||
+          request.auth.uid in get(/databases/$(database)/documents/personnel/$(personnelId)).data.accessUids
+        );
+        allow list: if isValidId(personnelId) && isEmailVerified() && (
+          isBootstrappedAdmin() ||
+          existing().ownerUid == request.auth.uid
+        );
+        allow create: if isValidId(personnelId) && isValidId(relativeId) && isEmailVerified() &&
+          isValidPersonnelRelative(incoming()) &&
+          incoming().id == relativeId &&
+          incoming().personnelId == personnelId &&
+          incoming().ownerUid == request.auth.uid &&
+          hasValidTimestampsOnCreate(incoming()) &&
+          exists(/databases/$(database)/documents/personnel/$(personnelId)) &&
+          (isAdmin() ||
+            get(/databases/$(database)/documents/personnel/$(personnelId)).data.ownerUid == request.auth.uid ||
+            request.auth.uid in get(/databases/$(database)/documents/personnel/$(personnelId)).data.accessUids);
+        allow update: if isValidId(personnelId) && isValidId(relativeId) && isEmailVerified() &&
+          isValidPersonnelRelative(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().personnelId == existing().personnelId &&
+          incoming().ownerUid == existing().ownerUid &&
+          hasValidTimestampsOnUpdate(incoming()) &&
+          (
+            isAdmin() ||
+            (existing().ownerUid == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'personnelCode', 'personnelName', 'fullName', 'relation', 'nationalId',
+                'shenasnamehNumber', 'fatherName', 'birthDate', 'gender', 'phone',
+                'education', 'isDependent', 'insuranceCovered', 'notes', 'updatedAt'
+              ]))
+          );
+        allow delete: if isValidId(personnelId) && isValidId(relativeId) && isEmailVerified() &&
+          (isAdmin() || existing().ownerUid == request.auth.uid);
+      }
+    }
+
+    // Monthly Karaneh Records
+    match /karaneh/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidKaranehRecord(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming()) &&
+        (!('personnelId' in incoming()) || incoming().personnelId == '' || exists(/databases/$(database)/documents/personnel/$(incoming().personnelId)));
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidKaranehRecord(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'score', 'performanceCoeff', 'baseKaraneh', 'overtimeBonus',
+              'deductions', 'finalKaraneh', 'notes', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Job Groups
+    match /jobGroups/{groupId} {
+      allow get: if isValidId(groupId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(groupId) && isEmailVerified() && isValidJobGroup(incoming()) &&
+        incoming().id == groupId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(groupId) && isEmailVerified() && isValidJobGroup(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'grade', 'minBaseSalary', 'maxBaseSalary', 'maxKaranehCeiling',
+              'requiredExperienceYears', 'requiredDegree', 'description', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(groupId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Job Classifications (18-Column Table)
+    match /jobClassifications/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidJobClassification(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidJobClassification(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'workLocation', 'department', 'education', 'miningExperienceDays',
+              'totalInsuranceHistory', 'miningExperience', 'nonMiningExperience',
+              'jobGroup', 'groupGapFrom1405', 'nextGroupGap', 'jobTitle', 'position', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Personnel Commitments (with Terminal State Locking)
+    match /commitments/{commitmentId} {
+      allow get: if isValidId(commitmentId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(commitmentId) && isEmailVerified() && isValidPersonnelCommitment(incoming()) &&
+        incoming().id == commitmentId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming()) &&
+        (!('personnelId' in incoming()) || incoming().personnelId == '' || exists(/databases/$(database)/documents/personnel/$(incoming().personnelId)));
+      allow update: if isValidId(commitmentId) && isEmailVerified() && isValidPersonnelCommitment(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          (!(existing().status in ['پایان یافته', 'عودت داده شده', 'به اجرا گذاشته شده']) &&
+            (existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly(['isArchived', 'archivedAt', 'archiveCode', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['amount', 'previouslyTakenAmount', 'maxAllowedAmount', 'endDate', 'status', 'guarantorName', 'notes', 'updatedAt'])
+            ))
+        );
+      allow delete: if isValidId(commitmentId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Payroll Records
+    match /payroll/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidPayrollRecord(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidPayrollRecord(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'workLocation', 'department', 'jobTitle', 'position', 'effectiveDays',
+              'netPayable', 'totalBenefits', 'totalDeductions', 'rawFields', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Monthly Mining Operational Volumes
+    match /miningVolumes/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidMiningVolume(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidMiningVolume(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'period', 'unitName', 'activityType', 'metricTitle', 'volumeValue',
+              'targetVolume', 'unitLabel', 'status', 'notes', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Mining Fleet Machinery & Workshop Status
+    match /miningMachinery/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidMiningMachinery(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidMiningMachinery(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'machineCode', 'machineName', 'machineType', 'unitName', 'status',
+              'issueDescription', 'stoppedSince', 'estimatedReadyDate', 'operatorName', 'notes', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    // Operational Reports per Mining Unit
+    match /unitReports/{recordId} {
+      allow get: if isValidId(recordId) && isEmailVerified() && (
+        isAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow list: if isEmailVerified() && (
+        isBootstrappedAdmin() ||
+        existing().ownerUid == request.auth.uid ||
+        request.auth.uid in existing().accessUids
+      );
+      allow create: if isValidId(recordId) && isEmailVerified() && isValidUnitReport(incoming()) &&
+        incoming().id == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        hasValidTimestampsOnCreate(incoming());
+      allow update: if isValidId(recordId) && isEmailVerified() && isValidUnitReport(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        hasValidTimestampsOnUpdate(incoming()) &&
+        (
+          isAdmin() ||
+          ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'period', 'unitName', 'reportCategory', 'metricName', 'actualValue',
+              'previousValue', 'targetValue', 'unitLabel', 'status', 'submittedBy',
+              'notes', 'rawFields', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+  }
+}

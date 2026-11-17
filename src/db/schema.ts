@@ -1,0 +1,245 @@
+import { relations } from 'drizzle-orm';
+import {
+  boolean,
+  doublePrecision,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
+
+export const users = pgTable('users', {
+  id: text('id').primaryKey(),
+  uid: text('uid').unique(),
+  username: text('username').notNull().unique(),
+  passwordHash: text('password_hash'),
+  email: text('email'),
+  fullName: text('full_name').notNull(),
+  role: text('role').notNull(),
+  roleType: text('role_type'),
+  department: text('department'),
+  permissions: jsonb('permissions').notNull(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: text('created_at'),
+  lastLogin: text('last_login'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const jobGroups = pgTable('job_groups', {
+  id: text('id').primaryKey(),
+  code: text('code').notNull(),
+  title: text('title').notNull(),
+  grade: integer('grade').notNull(),
+  minBaseSalary: doublePrecision('min_base_salary').notNull().default(0),
+  maxBaseSalary: doublePrecision('max_base_salary').notNull().default(0),
+  maxKaranehCeiling: doublePrecision('max_karaneh_ceiling').notNull().default(0),
+  requiredExperienceYears: integer('required_experience_years').notNull().default(0),
+  requiredDegree: text('required_degree'),
+  description: text('description'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const personnel = pgTable('personnel', {
+  id: text('id').primaryKey(),
+  personnelCode: text('personnel_code').notNull().unique(),
+  firstName: text('first_name').notNull(),
+  lastName: text('last_name').notNull(),
+  fullName: text('full_name').notNull(),
+  nationalId: text('national_id'),
+  position: text('position'),
+  department: text('department'),
+  hireDate: text('hire_date'),
+  employmentType: text('employment_type').notNull(),
+  jobGroupId: text('job_group_id').references(() => jobGroups.id, { onDelete: 'set null' }),
+  jobGroupName: text('job_group_name'),
+  education: text('education'),
+  phone: text('phone'),
+  email: text('email'),
+  status: text('status').notNull(),
+  baseSalary: doublePrecision('base_salary').notNull().default(0),
+  notes: text('notes'),
+  documents: jsonb('documents'),
+  createdAt: text('created_at'),
+  updatedAt: text('updated_at'),
+});
+
+export const jobClassifications = pgTable('job_classifications', {
+  id: text('id').primaryKey(),
+  personnelCode: text('personnel_code').notNull().unique(),
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  workLocation: text('work_location'),
+  department: text('department'),
+  nationalId: text('national_id'),
+  education: text('education'),
+  hireDate: text('hire_date'),
+  hireMonth: text('hire_month'),
+  miningExperienceDays: text('mining_experience_days'),
+  totalInsuranceHistory: text('total_insurance_history'),
+  miningExperience: text('mining_experience'),
+  nonMiningExperience: text('non_mining_experience'),
+  jobGroup: text('job_group'),
+  groupGapFrom1405: text('group_gap_from_1405'),
+  nextGroupGap: text('next_group_gap'),
+  jobTitle: text('job_title'),
+  position: text('position'),
+  updatedAt: text('updated_at'),
+});
+
+export const karaneh = pgTable('karaneh', {
+  id: text('id').primaryKey(),
+  personnelId: text('personnel_id').references(() => personnel.id, { onDelete: 'set null' }),
+  personnelCode: text('personnel_code').notNull(),
+  fullName: text('full_name').notNull(),
+  department: text('department'),
+  position: text('position'),
+  period: text('period').notNull(),
+  score: doublePrecision('score'),
+  performanceCoeff: doublePrecision('performance_coeff'),
+  baseKaraneh: doublePrecision('base_karaneh').notNull().default(0),
+  overtimeBonus: doublePrecision('overtime_bonus').notNull().default(0),
+  deductions: doublePrecision('deductions').notNull().default(0),
+  finalKaraneh: doublePrecision('final_karaneh').notNull().default(0),
+  notes: text('notes'),
+  updatedAt: text('updated_at'),
+});
+
+export const commitments = pgTable('commitments', {
+  id: text('id').primaryKey(),
+  personnelId: text('personnel_id').references(() => personnel.id, { onDelete: 'set null' }),
+  personnelCode: text('personnel_code').notNull(),
+  personnelName: text('personnel_name').notNull(),
+  commitmentType: text('commitment_type').notNull(),
+  documentNumber: text('document_number'),
+  amount: doublePrecision('amount').notNull().default(0),
+  previouslyTakenAmount: doublePrecision('previously_taken_amount').default(0),
+  maxAllowedAmount: doublePrecision('max_allowed_amount').default(0),
+  startDate: text('start_date'),
+  endDate: text('end_date'),
+  status: text('status').notNull(),
+  isArchived: boolean('is_archived').notNull().default(false),
+  archivedAt: text('archived_at'),
+  archiveCode: text('archive_code'),
+  guarantorName: text('guarantor_name'),
+  notes: text('notes'),
+});
+
+export const payroll = pgTable('payroll', {
+  id: text('id').primaryKey(),
+  period: text('period').notNull(),
+  yearMonthLabel: text('year_month_label'),
+  employeeId: text('employee_id'),
+  personnelCode: text('personnel_code').notNull(),
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  fullName: text('full_name').notNull(),
+  nationalId: text('national_id'),
+  workLocation: text('work_location'),
+  department: text('department'),
+  jobTitle: text('job_title'),
+  position: text('position'),
+  jobGroupCode: text('job_group_code'),
+  jobGroupTitle: text('job_group_title'),
+  employmentType: text('employment_type'),
+  effectiveDays: doublePrecision('effective_days').default(0),
+  netPayable: doublePrecision('net_payable').notNull().default(0),
+  totalBenefits: doublePrecision('total_benefits').notNull().default(0),
+  overtimeAmount: doublePrecision('overtime_amount').default(0),
+  fridayWorkAmount: doublePrecision('friday_work_amount').default(0),
+  missionAmount: doublePrecision('mission_amount').default(0),
+  bonusAmount: doublePrecision('bonus_amount').default(0),
+  incentiveAmount: doublePrecision('incentive_amount').default(0),
+  otherBenefits: doublePrecision('other_benefits').default(0),
+  arrearsAmount: doublePrecision('arrears_amount').default(0),
+  advanceAmount: doublePrecision('advance_amount').default(0),
+  totalDeductions: doublePrecision('total_deductions').notNull().default(0),
+  taxAmount: doublePrecision('tax_amount').default(0),
+  salaryTaxAmount: doublePrecision('salary_tax_amount').default(0),
+  jobWage: doublePrecision('job_wage').default(0),
+  totalOrderFactors: doublePrecision('total_order_factors').default(0),
+  baseSalaryOrder: doublePrecision('base_salary_order').default(0),
+  overtimeHours: doublePrecision('overtime_hours').default(0),
+  fridayWorkHours: doublePrecision('friday_work_hours').default(0),
+  costCenterCode: text('cost_center_code'),
+  costCenterTitle: text('cost_center_title'),
+  projectCode: text('project_code'),
+  projectTitle: text('project_title'),
+  bankName: text('bank_name'),
+  bankAccount: text('bank_account'),
+  rawFields: jsonb('raw_fields'),
+  updatedAt: text('updated_at'),
+});
+
+export const miningVolumes = pgTable('mining_volumes', {
+  id: text('id').primaryKey(),
+  period: text('period').notNull(),
+  unitName: text('unit_name').notNull(),
+  activityType: text('activity_type'),
+  metricTitle: text('metric_title'),
+  volumeValue: doublePrecision('volume_value').notNull().default(0),
+  targetVolume: doublePrecision('target_volume').notNull().default(0),
+  unitLabel: text('unit_label'),
+  status: text('status'),
+  notes: text('notes'),
+  updatedAt: text('updated_at'),
+});
+
+export const miningMachinery = pgTable('mining_machinery', {
+  id: text('id').primaryKey(),
+  machineCode: text('machine_code').notNull(),
+  machineName: text('machine_name').notNull(),
+  machineType: text('machine_type'),
+  unitName: text('unit_name'),
+  status: text('status').notNull(),
+  issueDescription: text('issue_description'),
+  stoppedSince: text('stopped_since'),
+  estimatedReadyDate: text('estimated_ready_date'),
+  operatorName: text('operator_name'),
+  notes: text('notes'),
+  updatedAt: text('updated_at'),
+});
+
+export const unitReports = pgTable('unit_reports', {
+  id: text('id').primaryKey(),
+  period: text('period').notNull(),
+  unitName: text('unit_name').notNull(),
+  reportCategory: text('report_category'),
+  metricName: text('metric_name').notNull(),
+  actualValue: doublePrecision('actual_value').notNull().default(0),
+  previousValue: doublePrecision('previous_value').default(0),
+  targetValue: doublePrecision('target_value').default(0),
+  unitLabel: text('unit_label'),
+  status: text('status'),
+  submittedBy: text('submitted_by'),
+  notes: text('notes'),
+  rawFields: jsonb('raw_fields'),
+  updatedAt: text('updated_at'),
+});
+
+export const jobGroupsRelations = relations(jobGroups, ({ many }) => ({
+  personnel: many(personnel),
+}));
+
+export const personnelRelations = relations(personnel, ({ one, many }) => ({
+  jobGroup: one(jobGroups, {
+    fields: [personnel.jobGroupId],
+    references: [jobGroups.id],
+  }),
+  karanehRecords: many(karaneh),
+  commitments: many(commitments),
+}));
+
+export const karanehRelations = relations(karaneh, ({ one }) => ({
+  person: one(personnel, {
+    fields: [karaneh.personnelId],
+    references: [personnel.id],
+  }),
+}));
+
+export const commitmentsRelations = relations(commitments, ({ one }) => ({
+  person: one(personnel, {
+    fields: [commitments.personnelId],
+    references: [personnel.id],
+  }),
+}));
