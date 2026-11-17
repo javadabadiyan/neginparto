@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   HardDrive,
   Download,
@@ -28,7 +28,10 @@ import {
   Eye,
   EyeOff,
   Sparkles,
-  Shield
+  Shield,
+  Mail,
+  Send,
+  Clock
 } from 'lucide-react';
 import { DatabaseStatus } from '../types';
 import { toPersianDigits } from '../utils/persian';
@@ -94,6 +97,124 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   const [vaultLocked, setVaultLocked] = useState<boolean>(() => isGitHubVaultLocked());
   const [unlockPassInput, setUnlockPassInput] = useState('');
   const [unlockingVault, setUnlockingVault] = useState(false);
+
+  // Automated Daily Email Backup state
+  const [emailBackupSupported, setEmailBackupSupported] = useState<boolean>(true);
+  const [emailConfig, setEmailConfig] = useState({
+    enabled: true,
+    recipientEmail: 'abadiyanjavad@gmail.com',
+    dailyHour: 8,
+    dailyMinute: 0,
+    smtpHost: 'smtp.gmail.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    smtpUser: '',
+    smtpPass: '',
+    hasSmtpPass: false,
+    lastSentAt: '',
+    lastStatus: '',
+    lastError: '',
+  });
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailSendingNow, setEmailSendingNow] = useState(false);
+  const [emailFeedback, setEmailFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    api.getEmailBackupConfig()
+      .then((res: any) => {
+        if (res && res.supported === false) {
+          setEmailBackupSupported(false);
+          return;
+        }
+        if (res?.success && res.data) {
+          setEmailBackupSupported(true);
+          setEmailConfig((prev) => ({
+            ...prev,
+            ...res.data,
+            smtpPass: '',
+          }));
+        }
+      })
+      .catch(() => {
+        setEmailBackupSupported(false);
+      });
+  }, []);
+
+  const handleSaveEmailConfig = async () => {
+    try {
+      setEmailSaving(true);
+      setEmailFeedback(null);
+      const res: any = await api.saveEmailBackupConfig(emailConfig);
+      if (res?.success) {
+        setEmailConfig((prev) => ({ ...prev, ...(res.data || {}), smtpPass: '' }));
+        setEmailFeedback({ type: 'success', text: res.message || 'تنظیمات ارسال خودکار ایمیل ذخیره شد.' });
+      } else {
+        setEmailFeedback({ type: 'error', text: res?.message || 'امکان ذخیره تنظیمات ایمیل وجود ندارد.' });
+      }
+    } catch (err: any) {
+      setEmailFeedback({ type: 'error', text: err?.message || 'خطا در ذخیره تنظیمات ایمیل.' });
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const handleSendBackupEmailNow = async () => {
+    try {
+      setEmailSendingNow(true);
+      setEmailFeedback(null);
+      await api.saveEmailBackupConfig(emailConfig);
+      const res: any = await api.sendBackupEmailNow();
+      if (res?.success) {
+        setEmailConfig((prev) => ({
+          ...prev,
+          lastSentAt: res.data?.sentAt || prev.lastSentAt,
+          lastStatus: 'success',
+          lastError: '',
+        }));
+        setEmailFeedback({ type: 'success', text: res.message });
+      } else {
+        setEmailFeedback({ type: 'error', text: res?.message || 'خطا در ارسال ایمیل پشتیبان.' });
+      }
+    } catch (err: any) {
+      setEmailFeedback({ type: 'error', text: err?.message || 'خطا در ارسال ایمیل پشتیبان.' });
+    } finally {
+      setEmailSendingNow(false);
+    }
+  };
+
+  const dailyEmailWorkflowYaml = `name: Daily Backup Email to abadiyanjavad@gmail.com
+
+on:
+  schedule:
+    # Every day at 08:00 AM Iran Time (04:30 UTC)
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  send-daily-backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download database.json from Private DB Repository
+        run: |
+          curl -f -H "Authorization: Bearer \${{ secrets.DB_PAT }}" \\
+               -H "Accept: application/vnd.github.raw" \\
+               "https://api.github.com/repos/javadabadiyan/npn-private-db/contents/database.json?ref=db-data" \\
+               -o negin_parto_nasr_backup.json
+
+      - name: Email Daily Backup Attachment
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: \${{ secrets.MAIL_USER }}
+          password: \${{ secrets.MAIL_APP_PASS }}
+          subject: "پشتیبان خودکار روزانه سامانه نگین پرتو نصر"
+          to: ${emailConfig.recipientEmail || 'abadiyanjavad@gmail.com'}
+          from: "سامانه جامع شرکت نگین پرتو نصر"
+          body: "نسخه پشتیبان خودکار روزانه پایگاه داده سامانه جامع شرکت نگین پرتو نصر در پیوست ارسال گردید."
+          attachments: negin_parto_nasr_backup.json
+`;
   const activeEngine = getDetectedEngine();
   const serverEngine = dbStatus?.storageEngine;
   const engineBadge =
@@ -662,7 +783,7 @@ npm start
                     onChange={(e) => setUnlockPassInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleUnlockVault()}
                     placeholder="کلید رمزنگاری دیتابیس را وارد کنید..."
-                    className="flex-1 min-w-[220px] px-3 py-2 bg-white border border-amber-300 rounded-xl outline-none focus:ring-2 focus:ring-amber-500"
+                    className="w-full sm:flex-1 sm:min-w-[220px] px-3 py-2 bg-white border border-amber-300 rounded-xl outline-none focus:ring-2 focus:ring-amber-500"
                   />
                   <button
                     type="button"
@@ -1261,6 +1382,168 @@ npm start
             <span>{restoreError}</span>
           </div>
         )}
+      </div>
+
+      {/* Automated Daily Email Backup Panel */}
+      <div className="bg-white p-4 sm:p-6 rounded-2xl border border-indigo-200 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center shrink-0">
+              <Mail className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                ارسال خودکار روزانه فایل پشتیبان به ایمیل
+              </h3>
+              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                به‌صورت خودکار هر روز یک نسخه کامل از اطلاعات سامانه به نشانی{' '}
+                <b dir="ltr" className="text-indigo-700">{emailConfig.recipientEmail || 'abadiyanjavad@gmail.com'}</b> ایمیل می‌شود.
+              </p>
+            </div>
+          </div>
+
+          {emailConfig.lastSentAt && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl shrink-0 persian-num">
+              <Clock className="w-3.5 h-3.5" />
+              <span>آخرین ارسال: {toPersianDigits(emailConfig.lastSentAt)}</span>
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ایمیل گیرنده بکاپ روزانه</label>
+            <input
+              type="email"
+              dir="ltr"
+              value={emailConfig.recipientEmail}
+              onChange={(e) => setEmailConfig({ ...emailConfig, recipientEmail: e.target.value })}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ساعت ارسال روزانه (وقت تهران)</label>
+            <select
+              value={emailConfig.dailyHour}
+              onChange={(e) => setEmailConfig({ ...emailConfig, dailyHour: Number(e.target.value) })}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 persian-num"
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  ساعت {toPersianDigits(String(h).padStart(2, '0'))}:۰۰ روزانه
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ایمیل فرستنده (SMTP / Gmail)</label>
+            <input
+              type="email"
+              dir="ltr"
+              value={emailConfig.smtpUser}
+              onChange={(e) => setEmailConfig({ ...emailConfig, smtpUser: e.target.value })}
+              placeholder="your-sender@gmail.com"
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">
+              رمز برنامه (App Password) {emailConfig.hasSmtpPass ? '— ذخیره شده' : ''}
+            </label>
+            <input
+              type="password"
+              dir="ltr"
+              value={emailConfig.smtpPass}
+              onChange={(e) => setEmailConfig({ ...emailConfig, smtpPass: e.target.value })}
+              placeholder={emailConfig.hasSmtpPass ? '•••••••••••• (در صورت تغییر وارد کنید)' : '16-char Google App Password'}
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+          <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={emailConfig.enabled}
+              onChange={(e) => setEmailConfig({ ...emailConfig, enabled: e.target.checked })}
+              className="w-4 h-4 rounded text-indigo-600"
+            />
+            <span>ارسال خودکار روزانه فعال باشد</span>
+          </label>
+
+          {emailBackupSupported && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={emailSaving || emailSendingNow}
+                onClick={handleSaveEmailConfig}
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold disabled:opacity-50 cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5 text-amber-300" />
+                <span>{emailSaving ? 'در حال ذخیره...' : 'ذخیره تنظیمات ایمیل'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={emailSendingNow || emailSaving}
+                onClick={handleSendBackupEmailNow}
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{emailSendingNow ? 'در حال ارسال ایمیل...' : 'ارسال فوری بکاپ به ایمیل همین الان'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {emailFeedback && (
+          <div
+            className={`p-3 rounded-xl text-xs border flex items-center gap-2 ${
+              emailFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}
+          >
+            {emailFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{emailFeedback.text}</span>
+          </div>
+        )}
+
+        {/* GitHub Actions Daily Cloud Cron Option for Static GitHub Pages */}
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+          <div className="font-bold text-slate-900">
+            ارسال خودکار روزانه روی GitHub Pages (حتی وقتی کامپیوتر و مرورگر خاموش هستند):
+          </div>
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            چون سایت روی GitHub Pages فاقد سرور همیشه‌روشن است، برای اینکه حتی در زمان خاموش بودن سیستم شما هم هر روز ساعت ۰۸:۰۰ صبح فایل بکاپ مستقیم به{' '}
+            <b dir="ltr">abadiyanjavad@gmail.com</b> ارسال شود، در مخزن گیت‌هاب خود از مسیر{' '}
+            <span dir="ltr" className="font-bold">Actions → New workflow</span> فایل زیر را با نام{' '}
+            <span dir="ltr" className="font-bold">daily-email-backup.yml</span> بسازید و در بخش{' '}
+            <span dir="ltr" className="font-bold">Settings → Secrets and variables → Actions</span> سه مقدار{' '}
+            <span dir="ltr" className="font-bold">DB_PAT</span>، <span dir="ltr" className="font-bold">MAIL_USER</span> و{' '}
+            <span dir="ltr" className="font-bold">MAIL_APP_PASS</span> را ثبت کنید:
+          </p>
+          <button
+            type="button"
+            onClick={() => copyToClipboard(dailyEmailWorkflowYaml, 'daily_email_yml')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[11px] font-bold cursor-pointer"
+          >
+            {copiedCmd === 'daily_email_yml' ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>
+              {copiedCmd === 'daily_email_yml'
+                ? 'کد ارسال خودکار روزانه ایمیل کپی شد!'
+                : 'کپی کد آماده ارسال روزانه ایمیل (daily-email-backup.yml)'}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Reset Confirmation Modal */}

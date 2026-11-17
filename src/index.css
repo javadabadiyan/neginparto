@@ -17,10 +17,12 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  body {
+  html, body {
     font-family: 'Vazirmatn', system-ui, sans-serif;
     direction: rtl;
     text-align: right;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   /* Force all form controls to inherit Vazirmatn and render Persian digits */
@@ -43,10 +45,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Mobile responsive touch container */
-.responsive-table-container {
+/* Mobile responsive touch container & charts */
+.responsive-table-container,
+.overflow-x-auto {
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+.recharts-responsive-container {
+  min-width: 0 !important;
 }
 
 /* Custom smooth scrollbar for Windows and Mobile */

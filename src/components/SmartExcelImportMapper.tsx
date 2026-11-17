@@ -327,7 +327,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
 
           {/* Search & filter over target fields */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="relative flex-1 min-w-[220px]">
+            <div className="relative w-full sm:flex-1 sm:min-w-[220px]">
               <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"

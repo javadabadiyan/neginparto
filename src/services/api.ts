@@ -645,4 +645,29 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.resetDemo();
     return callBackend('/database/reset-demo', { method: 'POST' });
   },
+
+  async getEmailBackupConfig() {
+    const engine = await detectStorageEngine();
+    if (engine !== 'node') {
+      return { success: false, supported: false };
+    }
+    const res = await callBackend('/backup/email-config');
+    return { ...res, supported: true };
+  },
+
+  async saveEmailBackupConfig(config: Record<string, any>) {
+    const engine = await detectStorageEngine();
+    if (engine !== 'node') {
+      return { success: false, supported: false, message: 'ارسال ایمیل مستقیم نیازمند سرور Node.js یا GitHub Actions است.' };
+    }
+    return callBackend('/backup/email-config', { method: 'POST', body: config });
+  },
+
+  async sendBackupEmailNow() {
+    const engine = await detectStorageEngine();
+    if (engine !== 'node') {
+      return { success: false, supported: false, message: 'در حالت استاتیک GitHub Pages، از گردش‌کار روزانه GitHub Actions یا دانلود دستی استفاده کنید.' };
+    }
+    return callBackend('/backup/send-email-now', { method: 'POST' });
+  },
 };

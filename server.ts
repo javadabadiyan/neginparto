@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 import { fileURLToPath } from 'url';
 import firebaseConfig from './firebase-applet-config.json';
 import { isPostgresConfigured } from './src/db/index.ts';
@@ -3387,6 +3388,276 @@ app.post('/api/database/reset-demo', requireAuth, requirePerm('system', 'restore
   }
 });
 
+const EMAIL_BACKUP_CONFIG_FILE = path.join(DATA_DIR, 'email_backup_config.json');
+
+interface EmailBackupConfig {
+  enabled: boolean;
+  recipientEmail: string;
+  dailyHour: number;
+  dailyMinute: number;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  smtpPass: string;
+  lastSentDateKey: string;
+  lastSentAt: string;
+  lastStatus: '' | 'success' | 'error';
+  lastError: string;
+}
+
+function loadEmailBackupConfig(): EmailBackupConfig {
+  const defaults: EmailBackupConfig = {
+    enabled: true,
+    recipientEmail: process.env.BACKUP_RECIPIENT_EMAIL || 'abadiyanjavad@gmail.com',
+    dailyHour: 8,
+    dailyMinute: 0,
+    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+    smtpPort: Number(process.env.SMTP_PORT || 465),
+    smtpSecure: process.env.SMTP_SECURE !== 'false',
+    smtpUser: process.env.SMTP_USER || '',
+    smtpPass: process.env.SMTP_PASS || '',
+    lastSentDateKey: '',
+    lastSentAt: '',
+    lastStatus: '',
+    lastError: '',
+  };
+  try {
+    if (fs.existsSync(EMAIL_BACKUP_CONFIG_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(EMAIL_BACKUP_CONFIG_FILE, 'utf-8'));
+      return {
+        ...defaults,
+        ...raw,
+        recipientEmail: String(raw.recipientEmail || defaults.recipientEmail).trim() || 'abadiyanjavad@gmail.com',
+        dailyHour: Number.isFinite(Number(raw.dailyHour)) ? Math.max(0, Math.min(23, Number(raw.dailyHour))) : 8,
+        dailyMinute: Number.isFinite(Number(raw.dailyMinute)) ? Math.max(0, Math.min(59, Number(raw.dailyMinute))) : 0,
+        smtpPort: Number.isFinite(Number(raw.smtpPort)) ? Number(raw.smtpPort) : 465,
+      };
+    }
+  } catch {
+    // fallback to defaults
+  }
+  return defaults;
+}
+
+function saveEmailBackupConfig(cfg: EmailBackupConfig): void {
+  fs.writeFileSync(EMAIL_BACKUP_CONFIG_FILE, JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+}
+
+function getTehranDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const pick = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  const dateKey = `${pick('year')}-${pick('month')}-${pick('day')}`;
+  const hour = parseInt(pick('hour'), 10);
+  const minute = parseInt(pick('minute'), 10);
+  return { dateKey, hour, minute };
+}
+
+function buildFullBackupPayload() {
+  const db = loadDatabase();
+  const totalRelatives = (db.personnel || []).reduce(
+    (sum: number, p: any) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0),
+    0
+  );
+  return {
+    ...db,
+    _backupMetadata: {
+      version: '5.0-negin-parto-nasr-units-hub',
+      exportedAt: new Date().toISOString(),
+      modules: [
+        'personnel', 'relatives', 'documents', 'karaneh', 'payroll',
+        'jobGroups', 'jobClassifications', 'commitments', 'users',
+        'smartDashboard', 'ceoDashboard', 'unitOperations',
+        'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel',
+      ],
+      counts: {
+        users: (db.users || []).length,
+        personnel: (db.personnel || []).length,
+        relatives: totalRelatives,
+        karaneh: (db.karaneh || []).length,
+        payroll: (db.payroll || []).length,
+        jobGroups: (db.jobGroups || []).length,
+        jobClassifications: (db.jobClassifications || []).length,
+        commitments: (db.commitments || []).length,
+        miningVolumes: (db.miningVolumes || []).length,
+        miningMachinery: (db.miningMachinery || []).length,
+        unitReports: (db.unitReports || []).length,
+      },
+    },
+  };
+}
+
+let emailSendInProgress = false;
+
+async function sendBackupEmailNow(trigger: 'manual' | 'daily_auto'): Promise<{ sentAt: string; recipientEmail: string }> {
+  if (emailSendInProgress) {
+    throw new Error('ارسال ایمیل پشتیبان در حال انجام است؛ چند ثانیه صبر کنید.');
+  }
+  const cfg = loadEmailBackupConfig();
+  if (!cfg.recipientEmail) {
+    throw new Error('ایمیل گیرنده مشخص نشده است.');
+  }
+  if (!cfg.smtpHost || !cfg.smtpUser || !cfg.smtpPass) {
+    throw new Error('تنظیمات سرور ارسال ایمیل (SMTP User / App Password) هنوز تکمیل نشده است.');
+  }
+
+  emailSendInProgress = true;
+  try {
+    const transporter = nodemailer.createTransport({
+      host: cfg.smtpHost,
+      port: cfg.smtpPort,
+      secure: cfg.smtpSecure,
+      auth: {
+        user: cfg.smtpUser,
+        pass: cfg.smtpPass,
+      },
+    });
+
+    const payload = buildFullBackupPayload();
+    const counts = payload._backupMetadata.counts;
+    const { dateKey } = getTehranDateParts();
+    const jsonString = JSON.stringify(payload, null, 2);
+    const sizeKb = (Buffer.byteLength(jsonString, 'utf-8') / 1024).toFixed(1);
+    const faTime = new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
+
+    await transporter.sendMail({
+      from: `"سامانه جامع شرکت نگین پرتو نصر" <${cfg.smtpUser}>`,
+      to: cfg.recipientEmail,
+      subject: `پشتیبان ${trigger === 'daily_auto' ? 'خودکار روزانه' : 'فوری'} سامانه نگین پرتو نصر — ${dateKey}`,
+      html: `
+        <div dir="rtl" style="font-family: Tahoma, Arial, sans-serif; line-height: 1.8; color: #0f172a; background: #f8fafc; padding: 20px;">
+          <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+            <h2 style="margin: 0 0 8px; color: #1e293b;">نسخه پشتیبان کامل سامانه جامع شرکت نگین پرتو نصر</h2>
+            <p style="margin: 0 0 16px; color: #475569; font-size: 13px;">
+              زمان ارسال (تهران): <b>${faTime}</b> | نوع ارسال: <b>${trigger === 'daily_auto' ? 'اتوماتیک روزانه' : 'ارسال دستی'}</b>
+            </p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">تعداد پرسنل</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.personnel}</b></td></tr>
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">رکوردهای حقوق ۲۲۶ ستونی</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.payroll}</b></td></tr>
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">رکوردهای کارانه</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.karaneh}</b></td></tr>
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">آمار حجم عملیات و دیسپچینگ</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.miningVolumes}</b></td></tr>
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">ناوگان و تعمیرگاه</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.miningMachinery}</b></td></tr>
+              <tr><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;">گزارش واحدهای معدن</td><td style="padding: 6px; border-bottom: 1px solid #f1f5f9;"><b>${counts.unitReports}</b></td></tr>
+              <tr><td style="padding: 6px;">حجم فایل پیوست</td><td style="padding: 6px;"><b>${sizeKb} کیلوبایت</b></td></tr>
+            </table>
+            <p style="margin: 16px 0 0; font-size: 12px; color: #64748b;">
+              فایل JSON کامل پایگاه داده در پیوست همین ایمیل قرار دارد و در صورت نیاز از بخش «پشتیبان‌گیری و بازیابی» قابل بازگردانی است.
+            </p>
+          </div>
+        </div>
+      `,
+      attachments: [
+        {
+          filename: `negin_parto_nasr_backup_${dateKey}.json`,
+          content: jsonString,
+          contentType: 'application/json',
+        },
+      ],
+    });
+
+    const updated: EmailBackupConfig = {
+      ...cfg,
+      lastSentDateKey: dateKey,
+      lastSentAt: faTime,
+      lastStatus: 'success',
+      lastError: '',
+    };
+    saveEmailBackupConfig(updated);
+    return { sentAt: faTime, recipientEmail: cfg.recipientEmail };
+  } catch (err: any) {
+    const failed: EmailBackupConfig = {
+      ...cfg,
+      lastStatus: 'error',
+      lastError: err?.message || 'خطا در ارسال ایمیل SMTP',
+    };
+    saveEmailBackupConfig(failed);
+    throw err;
+  } finally {
+    emailSendInProgress = false;
+  }
+}
+
+app.get('/api/backup/email-config', requireAuth, requirePerm('system', 'backupDatabase'), (_req: AuthenticatedRequest, res: Response) => {
+  const cfg = loadEmailBackupConfig();
+  const { smtpPass, ...safeCfg } = cfg;
+  res.json({
+    success: true,
+    data: {
+      ...safeCfg,
+      hasSmtpPass: Boolean(smtpPass),
+    },
+  });
+});
+
+app.post('/api/backup/email-config', requireAuth, requirePerm('system', 'backupDatabase'), (req: AuthenticatedRequest, res: Response) => {
+  const current = loadEmailBackupConfig();
+  const body = req.body || {};
+  const next: EmailBackupConfig = {
+    ...current,
+    enabled: body.enabled !== undefined ? Boolean(body.enabled) : current.enabled,
+    recipientEmail: String(body.recipientEmail ?? current.recipientEmail).trim() || 'abadiyanjavad@gmail.com',
+    dailyHour: Number.isFinite(Number(body.dailyHour)) ? Math.max(0, Math.min(23, Number(body.dailyHour))) : current.dailyHour,
+    dailyMinute: Number.isFinite(Number(body.dailyMinute)) ? Math.max(0, Math.min(59, Number(body.dailyMinute))) : current.dailyMinute,
+    smtpHost: String(body.smtpHost ?? current.smtpHost).trim() || 'smtp.gmail.com',
+    smtpPort: Number.isFinite(Number(body.smtpPort)) ? Number(body.smtpPort) : current.smtpPort,
+    smtpSecure: body.smtpSecure !== undefined ? Boolean(body.smtpSecure) : current.smtpSecure,
+    smtpUser: String(body.smtpUser ?? current.smtpUser).trim(),
+    smtpPass: body.smtpPass && String(body.smtpPass).trim() ? String(body.smtpPass).trim() : current.smtpPass,
+  };
+  saveEmailBackupConfig(next);
+  const { smtpPass, ...safeNext } = next;
+  res.json({
+    success: true,
+    message: 'تنظیمات ارسال خودکار روزانه بک‌آپ به ایمیل ذخیره شد.',
+    data: { ...safeNext, hasSmtpPass: Boolean(smtpPass) },
+  });
+});
+
+app.post('/api/backup/send-email-now', requireAuth, requirePerm('system', 'backupDatabase'), async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await sendBackupEmailNow('manual');
+    res.json({
+      success: true,
+      message: `فایل پشتیبان کامل سامانه با موفقیت به ایمیل ${result.recipientEmail} ارسال شد.`,
+      data: result,
+    });
+  } catch (err: any) {
+    res.status(400).json({
+      success: false,
+      message: err?.message || 'خطا در ارسال ایمیل پشتیبان.',
+    });
+  }
+});
+
+function startDailyEmailBackupScheduler() {
+  const checkAndSend = async () => {
+    try {
+      const cfg = loadEmailBackupConfig();
+      if (!cfg.enabled || !cfg.smtpUser || !cfg.smtpPass || !cfg.recipientEmail) return;
+      const { dateKey, hour, minute } = getTehranDateParts();
+      if (cfg.lastSentDateKey === dateKey) return;
+      const currentTotalMinutes = hour * 60 + minute;
+      const targetTotalMinutes = cfg.dailyHour * 60 + cfg.dailyMinute;
+      if (currentTotalMinutes >= targetTotalMinutes) {
+        await sendBackupEmailNow('daily_auto');
+        console.log(`📧 Automated daily backup sent to ${cfg.recipientEmail} for ${dateKey}`);
+      }
+    } catch (err: any) {
+      console.warn('Daily auto-email backup check failed:', err?.message || err);
+    }
+  };
+  // Check every 5 minutes
+  setInterval(checkAndSend, 5 * 60 * 1000);
+}
+
 // Start server
 async function startServer() {
   const distPath = path.join(__dirname, 'dist');
@@ -3408,6 +3679,8 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   }
+
+  startDailyEmailBackupScheduler();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Persian HR & Karaneh Server running on http://0.0.0.0:${PORT}`);

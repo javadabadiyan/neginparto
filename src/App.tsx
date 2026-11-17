@@ -1509,7 +1509,7 @@ export default function App() {
   const canImportExcel = isSuperAdmin || userPerms.personnel.importExcel || userPerms.karaneh.importExcel;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col font-sans overflow-x-hidden">
       
       {/* Top Navbar */}
       <Navbar
@@ -1520,23 +1520,27 @@ export default function App() {
         onOpenDatabaseModal={() => setActiveTab('database')}
       />
 
-      {/* Toast Notification */}
+      {/* Responsive Toast Notification */}
       {notification && (
-        <div className="fixed bottom-5 left-5 z-50 transition-all animate-bounce">
-          <div className={`p-4 rounded-xl shadow-lg border flex items-center gap-3 text-xs font-bold ${
+        <div className="fixed bottom-3 left-3 right-3 sm:right-auto sm:left-5 sm:max-w-md z-50 transition-all no-print">
+          <div className={`p-3.5 sm:p-4 rounded-xl shadow-lg border flex items-center justify-between gap-3 text-xs font-bold ${
             notification.type === 'success'
               ? 'bg-slate-900 text-white border-slate-700'
               : 'bg-red-600 text-white border-red-700'
           }`}>
-            {notification.type === 'success' ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertCircle className="w-5 h-5 text-white shrink-0" />
-            )}
-            <span>{notification.message}</span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              {notification.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-white shrink-0" />
+              )}
+              <span className="leading-relaxed break-words">{notification.message}</span>
+            </div>
             <button
+              type="button"
               onClick={() => setNotification(null)}
-              className="mr-2 text-slate-400 hover:text-white"
+              aria-label="بستن پیام"
+              className="p-1 text-slate-400 hover:text-white shrink-0 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1545,7 +1549,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 min-w-0">
         {loading && (
           <div className="py-20 text-center">
             <div className="inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
