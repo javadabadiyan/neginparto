@@ -22,7 +22,13 @@ import {
   Save,
   ShieldAlert,
   Trash2,
-  PlugZap
+  PlugZap,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Shield
 } from 'lucide-react';
 import { DatabaseStatus } from '../types';
 import { toPersianDigits } from '../utils/persian';
@@ -33,6 +39,12 @@ import {
   GitHubConnectionTestResult,
   loadGitHubSyncConfig,
   saveGitHubSyncConfig,
+  saveGitHubSyncConfigSecure,
+  unlockGitHubVault,
+  lockGitHubSession,
+  isGitHubVaultLocked,
+  evaluatePassphraseStrength,
+  generateStrongPassphrase,
   clearGitHubSyncConfig,
   testGitHubConnection,
   pushDatabaseToGitHub,
@@ -77,6 +89,11 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   const [ghTesting, setGhTesting] = useState(false);
   const [ghTestResult, setGhTestResult] = useState<GitHubConnectionTestResult | null>(null);
   const [ghMessage, setGhMessage] = useState<{ type: 'success' | 'error'; text: string; url?: string } | null>(null);
+  const [showGhToken, setShowGhToken] = useState(false);
+  const [showGhPassphrase, setShowGhPassphrase] = useState(false);
+  const [vaultLocked, setVaultLocked] = useState<boolean>(() => isGitHubVaultLocked());
+  const [unlockPassInput, setUnlockPassInput] = useState('');
+  const [unlockingVault, setUnlockingVault] = useState(false);
   const activeEngine = getDetectedEngine();
   const serverEngine = dbStatus?.storageEngine;
   const engineBadge =
@@ -208,13 +225,62 @@ npm start
     reader.readAsText(file);
   };
 
-  const handleSaveGhConfig = () => {
-    saveGitHubSyncConfig(ghConfig);
+  const handleSaveGhConfig = async () => {
+    try {
+      const saved = await saveGitHubSyncConfigSecure(ghConfig);
+      setGhConfig(saved);
+      setVaultLocked(isGitHubVaultLocked());
+      setGhMessage({
+        type: 'success',
+        text: saved.encryptDatabase
+          ? 'تنظیمات امنیتی، رمزنگاری AES-256-GCM و گاوصندوق مرورگر با موفقیت ذخیره شدند.'
+          : saved.autoSync
+          ? 'تنظیمات مخزن گیت‌هاب و همگام‌سازی خودکار ذخیره شد.'
+          : 'تنظیمات مخزن گیت‌هاب ذخیره شد (حالت ارسال دستی).',
+      });
+    } catch (err: any) {
+      setGhMessage({ type: 'error', text: err?.message || 'خطا در ذخیره امن تنظیمات گیت‌هاب.' });
+    }
+  };
+
+  const handleUnlockVault = async () => {
+    try {
+      setUnlockingVault(true);
+      setGhMessage(null);
+      const unlocked = await unlockGitHubVault(unlockPassInput);
+      setGhConfig(unlocked);
+      setVaultLocked(false);
+      setUnlockPassInput('');
+      setGhMessage({
+        type: 'success',
+        text: 'گاوصندوق توکن گیت‌هاب و کلید رمزنگاری برای این نشست بازگشایی شد.',
+      });
+    } catch (err: any) {
+      setGhMessage({ type: 'error', text: err?.message || 'کلید رمزنگاری اشتباه است.' });
+    } finally {
+      setUnlockingVault(false);
+    }
+  };
+
+  const handlePanicLockSession = () => {
+    lockGitHubSession();
+    setGhConfig(loadGitHubSyncConfig());
+    setVaultLocked(isGitHubVaultLocked());
+    setGhTestResult(null);
     setGhMessage({
       type: 'success',
-      text: ghConfig.autoSync
-        ? 'تنظیمات مخزن گیت‌هاب و همگام‌سازی خودکار در مرورگر ذخیره شد.'
-        : 'تنظیمات مخزن گیت‌هاب در مرورگر ذخیره شد (حالت ارسال دستی).',
+      text: 'نشست امنیتی فوراً قفل شد و توکن/کلید رمزنگاری از حافظه مرورگر پاک گردید.',
+    });
+  };
+
+  const handleGenerateStrongKey = () => {
+    const strongKey = generateStrongPassphrase(24);
+    setGhConfig((prev) => ({ ...prev, encryptionPassphrase: strongKey, encryptDatabase: true }));
+    setShowGhPassphrase(true);
+    copyToClipboard(strongKey, 'gh_strong_key');
+    setGhMessage({
+      type: 'success',
+      text: 'کلید فوق‌امن ۲۴ کاراکتری تولید و در کلیپ‌بورد کپی شد! حتماً این کلید را در جای امن (مثلاً گوشی یا یادداشت رمزدار) ذخیره کنید؛ بدون این کلید هیچ‌کس (حتی مدیر سیستم) قادر به باز کردن فایل دیتابیس نخواهد بود.',
     });
   };
 
@@ -223,8 +289,9 @@ npm start
       setGhTesting(true);
       setGhTestResult(null);
       setGhMessage(null);
-      saveGitHubSyncConfig(ghConfig);
-      const res = await testGitHubConnection(ghConfig);
+      const saved = await saveGitHubSyncConfigSecure(ghConfig);
+      setGhConfig(saved);
+      const res = await testGitHubConnection(saved);
       setGhTestResult(res);
     } catch (err: any) {
       setGhMessage({ type: 'error', text: err?.message || 'خطا در بررسی اتصال به مخزن گیت‌هاب.' });
@@ -236,27 +303,29 @@ npm start
   const handleClearGhConfig = () => {
     const empty = clearGitHubSyncConfig();
     setGhConfig(empty);
+    setVaultLocked(false);
     setGhTestResult(null);
-    setGhMessage({ type: 'success', text: 'توکن و تنظیمات گیت‌هاب از این مرورگر پاک شد.' });
+    setGhMessage({ type: 'success', text: 'توکن، کلید رمزنگاری و تنظیمات گیت‌هاب به‌صورت کامل از این مرورگر پاک شد.' });
   };
 
   const handlePushToGitHub = async () => {
     try {
       setGhSyncing(true);
       setGhMessage(null);
-      saveGitHubSyncConfig(ghConfig);
+      const saved = await saveGitHubSyncConfigSecure(ghConfig);
+      setGhConfig(saved);
       const snapRes = await api.exportDatabaseSnapshot();
       if (!snapRes?.success || !snapRes.data) {
         throw new Error('امکان دریافت اسنپ‌شات دیتابیس فراهم نشد.');
       }
-      const res = await pushDatabaseToGitHub(ghConfig, snapRes.data);
+      const res = await pushDatabaseToGitHub(saved, snapRes.data);
       setGhConfig(loadGitHubSyncConfig());
-      const privacyWarning = !res.repoPrivate
-        ? ' (توجه: مخزن شما Public است؛ برای محرمانگی اطلاعات پرسنلی حتماً مخزن را Private کنید یا از یک مخزن Private جداگانه استفاده کنید.)'
-        : '';
+      const encText = res.encrypted
+        ? 'به‌صورت رمزنگاری‌شده (AES-256-GCM + SHA-256)'
+        : 'بدون رمزنگاری';
       setGhMessage({
         type: 'success',
-        text: `پایگاه داده کامل شرکت نگین پرتو نصر با موفقیت در شاخه «${ghConfig.branch}» (فایل ${ghConfig.filePath}) روی گیت‌هاب ذخیره شد.${privacyWarning}`,
+        text: `پایگاه داده کامل شرکت نگین پرتو نصر ${encText} در مخزن خصوصی «${saved.owner}/${saved.repo}» (شاخه ${saved.branch} / فایل ${saved.filePath}) ثبت شد.`,
         url: res.commitUrl,
       });
     } catch (err: any) {
@@ -270,8 +339,9 @@ npm start
     try {
       setGhSyncing(true);
       setGhMessage(null);
-      saveGitHubSyncConfig(ghConfig);
-      const pulled = await pullDatabaseFromGitHub(ghConfig);
+      const saved = await saveGitHubSyncConfigSecure(ghConfig);
+      setGhConfig(saved);
+      const pulled = await pullDatabaseFromGitHub(saved);
       const res = await api.mergeFirestoreSnapshot(pulled);
       if (!res?.success) {
         throw new Error(res?.message || 'خطا در ادغام فایل دریافتی از گیت‌هاب.');
@@ -280,7 +350,7 @@ npm start
       if (onDataReload) await onDataReload();
       setGhMessage({
         type: 'success',
-        text: `اطلاعات ذخیره شده از شاخه «${ghConfig.branch}» گیت‌هاب با موفقیت دریافت و در سامانه بارگذاری شد.`,
+        text: `اطلاعات ذخیره شده از شاخه «${saved.branch}» گیت‌هاب با موفقیت رمزگشایی، اعتبارسنجی (SHA-256) و در سامانه بارگذاری شد.`,
       });
     } catch (err: any) {
       setGhMessage({ type: 'error', text: err?.message || 'خطا در دریافت دیتابیس از گیت‌هاب.' });
@@ -514,7 +584,7 @@ npm start
                   dir="ltr"
                   value={ghConfig.owner}
                   onChange={(e) => setGhConfig({ ...ghConfig, owner: e.target.value })}
-                  placeholder="مثلاً company-user"
+                  placeholder="javadabadiyan"
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -525,7 +595,7 @@ npm start
                   dir="ltr"
                   value={ghConfig.repo}
                   onChange={(e) => setGhConfig({ ...ghConfig, repo: e.target.value })}
-                  placeholder="مثلاً npn-portal"
+                  placeholder="npn-private-db"
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
@@ -553,14 +623,175 @@ npm start
               </div>
               <div>
                 <label className="block font-bold text-slate-700 mb-1">توکن دسترسی (GitHub PAT)</label>
-                <input
-                  type="password"
-                  dir="ltr"
-                  value={ghConfig.token}
-                  onChange={(e) => setGhConfig({ ...ghConfig, token: e.target.value })}
-                  placeholder="github_pat_..."
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showGhToken ? 'text' : 'password'}
+                    dir="ltr"
+                    value={ghConfig.token}
+                    onChange={(e) => setGhConfig({ ...ghConfig, token: e.target.value })}
+                    placeholder="github_pat_..."
+                    className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGhToken(!showGhToken)}
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                    title={showGhToken ? 'مخفی کردن توکن' : 'نمایش توکن'}
+                  >
+                    {showGhToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Vault Unlock Banner when Encrypted Token Vault is locked in a new browser session */}
+            {vaultLocked && (
+              <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl space-y-3 text-xs">
+                <div className="flex items-center gap-2 font-bold text-amber-950">
+                  <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>گاوصندوق امنیتی توکن و دیتابیس گیت‌هاب قفل است</span>
+                </div>
+                <p className="text-[11px] text-amber-900 leading-relaxed">
+                  برای جلوگیری از سرقت توکن گیت‌هاب از حافظه مرورگر، توکن شما به‌صورت رمزنگاری‌شده نگهداری می‌شود. لطفاً کلید رمزنگاری خود را وارد کنید تا هم توکن و هم فایل دیتابیس بازگشایی شوند:
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="password"
+                    dir="ltr"
+                    value={unlockPassInput}
+                    onChange={(e) => setUnlockPassInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleUnlockVault()}
+                    placeholder="کلید رمزنگاری دیتابیس را وارد کنید..."
+                    className="flex-1 min-w-[220px] px-3 py-2 bg-white border border-amber-300 rounded-xl outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={unlockingVault || !unlockPassInput}
+                    onClick={handleUnlockVault}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold disabled:opacity-50 cursor-pointer"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>{unlockingVault ? 'در حال بازگشایی...' : 'بازگشایی گاوصندوق'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Zero-Knowledge Security Shield Panel */}
+            <div className="p-4 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 text-white rounded-2xl border border-slate-700 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0">
+                    <Shield className="w-4 h-4 text-emerald-300" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-bold text-white">
+                      سپر امنیتی ضدنفوذ و رمزنگاری سرتاسری (Zero-Knowledge AES-256-GCM)
+                    </h5>
+                    <p className="text-[11px] text-slate-300">
+                      اطلاعات قبل از خروج از مرورگر با الگوریتم نظامی رمزنگاری و با امضای SHA-256 ضدتغییر می‌شوند؛ بدون کلید، فایل گیت‌هاب کاملاً غیرقابل خواندن است.
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold shrink-0 ${
+                    evaluatePassphraseStrength(ghConfig.encryptionPassphrase).colorClass
+                  }`}
+                >
+                  قدرت کلید: {evaluatePassphraseStrength(ghConfig.encryptionPassphrase).label}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+                <div className="space-y-1.5">
+                  <label className="block font-bold text-indigo-200">
+                    کلید رمزنگاری دیتابیس (هرگز در گیت‌هاب ذخیره نمی‌شود)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type={showGhPassphrase ? 'text' : 'password'}
+                        dir="ltr"
+                        value={ghConfig.encryptionPassphrase}
+                        onChange={(e) => setGhConfig({ ...ghConfig, encryptionPassphrase: e.target.value })}
+                        placeholder="حداقل ۸ کاراکتر پیچیده یا کلید ۲۴ رقمی تولیدی..."
+                        className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-600 text-white placeholder-slate-400 rounded-xl outline-none focus:ring-2 focus:ring-emerald-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowGhPassphrase(!showGhPassphrase)}
+                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                        title={showGhPassphrase ? 'مخفی کردن کلید' : 'نمایش کلید'}
+                      >
+                        {showGhPassphrase ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGenerateStrongKey}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-[11px] shrink-0 cursor-pointer"
+                      title="تولید خودکار کلید فوق‌امن تصادفی و کپی در حافظه"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>تولید کلید فوق‌امن</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block font-bold text-indigo-200">
+                    نحوه نگهداری توکن گیت‌هاب در این مرورگر
+                  </label>
+                  <select
+                    value={ghConfig.credentialStorageMode}
+                    onChange={(e) =>
+                      setGhConfig({
+                        ...ghConfig,
+                        credentialStorageMode: e.target.value as 'session_only' | 'encrypted_vault',
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-600 text-white rounded-xl outline-none focus:ring-2 focus:ring-emerald-400 text-xs"
+                  >
+                    <option value="encrypted_vault">
+                      گاوصندوق رمزنگاری‌شده (توکن با کلید شما در مرورگر قفل می‌شود — پیشنهادی)
+                    </option>
+                    <option value="session_only">
+                      فقط در همین نشست مرورگر (پاک شدن خودکار توکن با بستن تب — صفر ردپا روی سیستم)
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+                <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ghConfig.encryptDatabase}
+                    onChange={(e) => setGhConfig({ ...ghConfig, encryptDatabase: e.target.checked })}
+                    className="w-4 h-4 mt-0.5 rounded text-emerald-500"
+                  />
+                  <div>
+                    <div className="font-bold text-emerald-300">رمزنگاری اجباری سرتاسری AES-256-GCM + امضای SHA-256</div>
+                    <div className="text-slate-300 mt-0.5">
+                      تمام جداول پرسنل، حقوق و گزارش‌ها قبل از ارسال رمز می‌شوند تا در صورت سرقت مخزن هم قابل خواندن نباشند.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white/5 border border-white/10 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ghConfig.requirePrivateRepo}
+                    onChange={(e) => setGhConfig({ ...ghConfig, requirePrivateRepo: e.target.checked })}
+                    className="w-4 h-4 mt-0.5 rounded text-emerald-500"
+                  />
+                  <div>
+                    <div className="font-bold text-amber-300">مسدودسازی اجباری مخزن‌های عمومی (Public Repo Blocker)</div>
+                    <div className="text-slate-300 mt-0.5">
+                      اگر مخزن گیت‌هاب به اشتباه عمومی (Public) باشد، ارسال داده‌ها به‌طور خودکار مسدود می‌شود.
+                    </div>
+                  </div>
+                </label>
               </div>
             </div>
 
@@ -582,7 +813,7 @@ npm start
                     همگام‌سازی خودکار با فایل دیتابیس گیت‌هاب (Auto-Sync)
                   </span>
                   <span className="text-[11px] text-slate-500">
-                    پس از هر ثبت، ویرایش، حذف یا آپلود اکسل به‌صورت خودکار در فایل گیت‌هاب ذخیره می‌شود و هنگام ورود، آخرین اطلاعات دریافت می‌گردد.
+                    پس از هر ثبت، ویرایش، حذف یا آپلود اکسل به‌صورت خودکار و رمزنگاری‌شده در فایل گیت‌هاب ذخیره می‌شود و هنگام ورود، آخرین اطلاعات دریافت می‌گردد.
                   </span>
                 </div>
               </label>
@@ -601,7 +832,7 @@ npm start
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold cursor-pointer"
               >
                 <Save className="w-3.5 h-3.5 text-indigo-600" />
-                <span>ذخیره تنظیمات</span>
+                <span>ذخیره امن تنظیمات</span>
               </button>
 
               <button
@@ -621,7 +852,7 @@ npm start
                 className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
               >
                 <CloudUpload className="w-4 h-4" />
-                <span>{ghSyncing ? 'در حال ثبت روی گیت‌هاب...' : `ذخیره و ارسال کل دیتابیس به ${ghConfig.branch || 'db-data'}`}</span>
+                <span>{ghSyncing ? 'در حال رمزنگاری و ثبت...' : `ذخیره رمزنگاری‌شده در ${ghConfig.branch || 'db-data'}`}</span>
               </button>
 
               <button
@@ -631,17 +862,29 @@ npm start
                 className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
               >
                 <CloudDownload className="w-4 h-4" />
-                <span>{ghSyncing ? 'در حال دریافت...' : `دریافت و بارگذاری از ${ghConfig.branch || 'db-data'}`}</span>
+                <span>{ghSyncing ? 'در حال دریافت و رمزگشایی...' : `دریافت و رمزگشایی از ${ghConfig.branch || 'db-data'}`}</span>
               </button>
 
-              {(ghConfig.token || ghConfig.repo) && (
+              {(ghConfig.token || ghConfig.encryptionPassphrase) && (
+                <button
+                  type="button"
+                  onClick={handlePanicLockSession}
+                  className="flex items-center gap-1 px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-xs font-bold cursor-pointer"
+                  title="پاک‌سازی فوری کلید و توکن از حافظه نشست بدون حذف تنظیمات مخزن"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>قفل فوری نشست</span>
+                </button>
+              )}
+
+              {(ghConfig.token || ghConfig.repo || ghConfig.hasEncryptedTokenVault) && (
                 <button
                   type="button"
                   onClick={handleClearGhConfig}
                   className="flex items-center gap-1 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer mr-auto"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>پاک کردن توکن مرورگر</span>
+                  <span>پاک کردن کامل تنظیمات مرورگر</span>
                 </button>
               )}
             </div>
@@ -660,10 +903,17 @@ npm start
                   <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 )}
                 <div className="space-y-1">
-                  <div className="font-bold">
-                    {ghTestResult.repoPrivate
-                      ? 'اتصال امن به مخزن خصوصی (Private) برقرار است'
-                      : 'اتصال برقرار شد — هشدار: مخزن عمومی (Public) است!'}
+                  <div className="font-bold flex flex-wrap items-center gap-2">
+                    <span>
+                      {ghTestResult.repoPrivate
+                        ? 'اتصال امن به مخزن خصوصی (Private) برقرار است'
+                        : 'هشدار بحرانی: مخزن عمومی (Public) است — ارسال مسدود می‌شود!'}
+                    </span>
+                    {ghTestResult.fileEncrypted === true && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px]">
+                        رمزنگاری AES-256-GCM فعال 🔒
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] leading-relaxed">{ghTestResult.message}</p>
                 </div>
@@ -719,7 +969,7 @@ npm start
                 type="button"
                 onClick={() =>
                   copyToClipboard(
-                    `name: Deploy to GitHub Pages\n\non:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\n\npermissions:\n  contents: read\n  pages: write\n  id-token: write\n\nconcurrency:\n  group: pages\n  cancel-in-progress: false\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: |\n          if [ -f package-lock.json ]; then\n            npm ci\n          else\n            npm install\n          fi\n      - run: npm run build\n      - uses: actions/configure-pages@v5\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: dist\n\n  deploy:\n    environment:\n      name: github-pages\n      url: \${{ steps.deployment.outputs.page_url }}\n    runs-on: ubuntu-latest\n    needs: build\n    steps:\n      - id: deployment\n        uses: actions/deploy-pages@v4\n`,
+                    `name: Deploy to GitHub Pages\n\non:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\n\npermissions:\n  contents: read\n  pages: write\n  id-token: write\n\nconcurrency:\n  group: pages\n  cancel-in-progress: false\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n      - run: |\n          if [ -f package-lock.json ]; then\n            npm ci --legacy-peer-deps\n          else\n            npm install --legacy-peer-deps\n          fi\n          npm install --no-save --legacy-peer-deps react-is@^19.0.0\n      - run: npm run build\n      - uses: actions/configure-pages@v5\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: dist\n\n  deploy:\n    environment:\n      name: github-pages\n      url: \${{ steps.deployment.outputs.page_url }}\n    runs-on: ubuntu-latest\n    needs: build\n    steps:\n      - id: deployment\n        uses: actions/deploy-pages@v4\n`,
                     'gh_workflow'
                   )
                 }

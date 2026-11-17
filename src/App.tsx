@@ -44,8 +44,11 @@ import {
   deleteIdsFromFirestore,
 } from './services/firebaseSync';
 import {
+  GitHubSecurityError,
   isGitHubAutoSyncEnabled,
+  isGitHubVaultLocked,
   loadGitHubSyncConfig,
+  lockGitHubSession,
   pullDatabaseFromGitHub,
   scheduleBackgroundGitHubPush,
 } from './utils/githubSync';
@@ -174,12 +177,20 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       loadAllData().then(async () => {
-        if (githubAutoPulledRef.current || !isGitHubAutoSyncEnabled()) return;
+        if (githubAutoPulledRef.current) return;
         const canRestore =
           currentUser.role === 'super_admin' ||
           currentUser.username === 'javadabadiyan' ||
           Boolean(normalizePermissions(currentUser.permissions).system?.restoreDatabase);
         if (!canRestore) return;
+
+        if (isGitHubVaultLocked()) {
+          githubAutoPulledRef.current = true;
+          showNotification('گاوصندوق دیتابیس گیت‌هاب قفل است؛ برای همگام‌سازی خودکار، در بخش «دیتابیس و گیت‌هاب» رمز رمزنگاری را وارد کنید.');
+          return;
+        }
+
+        if (!isGitHubAutoSyncEnabled()) return;
         githubAutoPulledRef.current = true;
         try {
           const cfg = loadGitHubSyncConfig();
@@ -189,7 +200,10 @@ export default function App() {
             await loadAllData();
             showNotification(`دیتابیس از فایل گیت‌هاب (${cfg.repo}/${cfg.filePath}) همگام‌سازی شد.`);
           }
-        } catch {
+        } catch (err: any) {
+          if (err instanceof GitHubSecurityError && err.code === 'E2E_LOCKED') {
+            showNotification('دیتابیس گیت‌هاب با رمزنگاری AES-256 قفل است؛ در بخش «دیتابیس و گیت‌هاب» کلید را وارد کنید.');
+          }
           // Silent if GitHub DB file has not been created yet or offline
         }
       });
@@ -298,6 +312,7 @@ export default function App() {
   const handleLogout = () => {
     localStorage.removeItem('hr_auth_token');
     localStorage.removeItem('hr_current_user');
+    lockGitHubSession();
     githubAutoPulledRef.current = false;
     signOut(auth).catch(() => {});
     setCurrentUser(null);
