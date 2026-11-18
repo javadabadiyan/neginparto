@@ -31,6 +31,8 @@ jobs:
           fi
           npm install --no-save --legacy-peer-deps react-is@^19.0.0
       - run: npm run build
+      env:
+          VITE_CLOUDFLARE_API_URL: ${{ vars.VITE_CLOUDFLARE_API_URL || secrets.VITE_CLOUDFLARE_API_URL || '' }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
