@@ -1,0 +1,72 @@
+name: Deploy Cloudflare Worker & D1 Database
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'cloudflare/**'
+      - '.github/workflows/deploy-cloudflare.yml'
+
+jobs:
+  deploy-worker:
+    if: ${{ vars.ENABLE_CLOUDFLARE_DEPLOY == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@4
+
+      - name: Ensure Cloudflare D1 Database & Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "❌ لطفاً ابتدا CLOUDFLARE_API_TOKEN و CLOUDFLARE_ACCOUNT_ID را در Settings -> Secrets -> Actions اضافه کنید."
+            exit 1
+          fi
+
+          DB_ID=$(wrangler d1 list --json | node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync(0, 'utf8');
+            try {
+              const arr = JSON.parse(raw);
+              const found = arr.find(d => d.name === 'neginparto-db');
+              if (found) console.log(found.uuid || found.id || '');
+            } catch {}
+          ")
+
+          if [ -z "$DB_ID" ]; then
+            echo "Creating Cloudflare D1 database: neginparto-db..."
+            wrangler d1 create neginparto-db || true
+            DB_ID=$(wrangler d1 list --json | node -e "
+              const fs = require('fs');
+              const raw = fs.readFileSync(0, 'utf8');
+              const arr = JSON.parse(raw);
+              const found = arr.find(d => d.name === 'neginparto-db');
+              if (found) console.log(found.uuid || found.id || '');
+            ")
+          fi
+
+          if [ -z "$DB_ID" ]; then
+            echo "❌ امکان یافتن یا ساخت دیتابیس D1 وجود نداشت."
+            exit 1
+          fi
+
+          echo "✅ D1 Database ID: $DB_ID"
+          node -e "
+            const fs = require('fs');
+            let toml = fs.readFileSync('cloudflare/wrangler.toml', 'utf8');
+            toml = toml.replace('REPLACE_WITH_YOUR_D1_DATABASE_ID', '$DB_ID');
+            fs.writeFileSync('cloudflare/wrangler.toml', toml);
+          "
+
+          wrangler d1 execute neginparto-db --remote --file=cloudflare/schema.sql --config cloudflare/wrangler.toml
+          wrangler deploy --config cloudflare/wrangler.toml
