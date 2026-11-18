@@ -31,11 +31,18 @@ import {
   Shield,
   Mail,
   Send,
-  Clock
+  Clock,
+  Cloud
 } from 'lucide-react';
 import { DatabaseStatus } from '../types';
 import { toPersianDigits } from '../utils/persian';
-import { api, getDetectedEngine } from '../services/api';
+import {
+  api,
+  getDetectedEngine,
+  getCloudflareApiUrl,
+  setCloudflareApiUrl,
+  testCloudflareConnection
+} from '../services/api';
 import { FIREBASE_META } from '../firebase';
 import {
   GitHubSyncConfig,
@@ -122,6 +129,15 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailSendingNow, setEmailSendingNow] = useState(false);
   const [emailFeedback, setEmailFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Cloudflare D1 + Workers Cloud Database state
+  const [cfUrl, setCfUrl] = useState<string>(() => getCloudflareApiUrl());
+  const [cfTesting, setCfTesting] = useState(false);
+  const [cfMigrating, setCfMigrating] = useState(false);
+  const [cfAdminUser, setCfAdminUser] = useState('javadabadiyan');
+  const [cfAdminPass, setCfAdminPass] = useState('');
+  const [showCfMigrateBox, setShowCfMigrateBox] = useState(false);
+  const [cfFeedback, setCfFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (!canBackup) {
@@ -232,7 +248,9 @@ jobs:
   const activeEngine = getDetectedEngine();
   const serverEngine = dbStatus?.storageEngine;
   const engineBadge =
-    serverEngine === 'postgres+disk'
+    serverEngine === 'cloudflare-d1' || activeEngine === 'cloudflare'
+      ? 'دیتابیس ابری دائمی و رایگان Cloudflare D1 (مشترک بین تمام مرورگرها، گوشی‌ها و GitHub Pages)'
+      : serverEngine === 'postgres+disk'
       ? 'ذخیره‌سازی مرکزی دائمی روی دیسک سرور + PostgreSQL (مستقل از مرورگر)'
       : serverEngine === 'node-disk'
       ? 'ذخیره‌سازی دائمی روی فایل دیسک سرور Node.js (مستقل از مرورگر و قابل اجرا روی هر سیستم)'
@@ -510,6 +528,120 @@ npm start
     }
   };
 
+  const handleTestCloudflare = async () => {
+    try {
+      setCfTesting(true);
+      setCfFeedback(null);
+      const res = await testCloudflareConnection(cfUrl);
+      setCfFeedback({ type: res.ok ? 'success' : 'error', text: res.message });
+    } catch (err: any) {
+      setCfFeedback({ type: 'error', text: err?.message || 'خطا در بررسی اتصال به Cloudflare Worker.' });
+    } finally {
+      setCfTesting(false);
+    }
+  };
+
+  const handleSaveAndActivateCloudflare = async () => {
+    try {
+      setCfTesting(true);
+      setCfFeedback(null);
+      const res = await testCloudflareConnection(cfUrl);
+      if (!res.ok) {
+        setCfFeedback({ type: 'error', text: res.message });
+        return;
+      }
+      const saved = setCloudflareApiUrl(res.url);
+      setCfUrl(saved);
+      setCfFeedback({
+        type: 'success',
+        text: `اتصال به Cloudflare D1 (${saved}) ذخیره و فعال شد. از این پس این مرورگر مستقیماً با دیتابیس کلودفلر کار می‌کند.`,
+      });
+      onRefreshStatus();
+      if (onDataReload) await onDataReload();
+    } catch (err: any) {
+      setCfFeedback({ type: 'error', text: err?.message || 'خطا در فعال‌سازی Cloudflare D1.' });
+    } finally {
+      setCfTesting(false);
+    }
+  };
+
+  const handleClearCloudflare = () => {
+    setCloudflareApiUrl('');
+    setCfUrl('');
+    setCfFeedback({
+      type: 'success',
+      text: 'آدرس کلودفلر از حافظه این مرورگر پاک شد و سامانه به حالت تشخیص خودکار برگشت.',
+    });
+    onRefreshStatus();
+    if (onDataReload) onDataReload();
+  };
+
+  const handleMigrateSnapshotToCloudflare = async () => {
+    if (!canRestore) {
+      setCfFeedback({ type: 'error', text: 'شما مجوز انتقال و بازیابی پایگاه داده را ندارید.' });
+      return;
+    }
+    try {
+      setCfMigrating(true);
+      setCfFeedback(null);
+      const check = await testCloudflareConnection(cfUrl);
+      if (!check.ok) {
+        setCfFeedback({ type: 'error', text: check.message });
+        return;
+      }
+      const snapRes = await api.exportDatabaseSnapshot();
+      if (!snapRes?.success || !snapRes.data) {
+        throw new Error('امکان دریافت نسخه فعلی اطلاعات سامانه وجود نداشت.');
+      }
+
+      const loginRes = await fetch(`${check.url}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: cfAdminUser.trim() || 'javadabadiyan',
+          password: cfAdminPass,
+        }),
+      });
+      const loginJson: any = await loginRes.json().catch(() => ({}));
+      if (!loginRes.ok || !loginJson?.success || !loginJson?.data?.token) {
+        throw new Error(loginJson?.message || 'احراز هویت در Cloudflare Worker ناموفق بود. نام کاربری و رمز ادمین کلودفلر را بررسی کنید.');
+      }
+
+      const cfToken = loginJson.data.token;
+      const restoreRes = await fetch(`${check.url}/api/database/restore`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfToken}`,
+        },
+        body: JSON.stringify(snapRes.data),
+      });
+      const restoreJson: any = await restoreRes.json().catch(() => ({}));
+      if (!restoreRes.ok || !restoreJson?.success) {
+        throw new Error(restoreJson?.message || 'انتقال داده‌ها به Cloudflare D1 با خطا مواجه شد.');
+      }
+
+      const saved = setCloudflareApiUrl(check.url);
+      setCfUrl(saved);
+      localStorage.setItem('hr_auth_token', cfToken);
+      if (loginJson.data.user) {
+        localStorage.setItem('hr_current_user', JSON.stringify(loginJson.data.user));
+      }
+      setCfAdminPass('');
+      setShowCfMigrateBox(false);
+      setCfFeedback({
+        type: 'success',
+        text: 'تمامی اطلاعات فعلی سامانه (پرسنل، حقوق، کارانه، عملیات معدنی، تعهدات و کاربران) با موفقیت به دیتابیس دائمی Cloudflare D1 منتقل شد!',
+      });
+      onRefreshStatus();
+      if (onDataReload) await onDataReload();
+    } catch (err: any) {
+      setCfFeedback({ type: 'error', text: err?.message || 'خطا در انتقال اطلاعات به Cloudflare D1.' });
+    } finally {
+      setCfMigrating(false);
+    }
+  };
+
   const fileSizeKb = dbStatus ? (dbStatus.fileSizeBytes / 1024).toFixed(1) : '۰';
 
   return (
@@ -632,6 +764,166 @@ npm start
               ورود با نام کاربری و رمز عبور از طریق سرور میانی (بدون تماس مستقیم مرورگر با دامنه‌های گوگل) انجام می‌شود. اگر اینترنت برخی کاربران در ایران دامنه‌های <span dir="ltr">*.run.app</span> یا <span dir="ltr">firestore.googleapis.com</span> را محدود کند، اجرای همین پروژه روی یک سرور یا رایانه داخل ایران (روش ۲) دسترسی ۱۰۰٪ بدون فیلترشکن را تضمین می‌کند.
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Cloudflare D1 + Workers Permanent Free Cloud Database Panel */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/80 text-white rounded-2xl border border-amber-500/40 p-5 sm:p-6 shadow-md space-y-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center shrink-0">
+              <Cloud className="w-6 h-6 text-amber-300" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                {activeEngine === 'cloudflare' || serverEngine === 'cloudflare-d1' ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-bold border border-emerald-400/30">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>متصل به دیتابیس ابری دائمی Cloudflare D1</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-200 text-[11px] font-bold border border-amber-400/30">
+                    وضعیت فعلی: {engineBadge}
+                  </span>
+                )}
+              </div>
+              <h3 className="text-base font-bold">
+                دیتابیس ابری دائمی و رایگان Cloudflare D1 (مشترک روی تمام مرورگرها و GitHub Pages)
+              </h3>
+              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                سایت روی GitHub Pages اجرا می‌شود و تمام داده‌ها، کاربران و سطح دسترسی‌ها به‌صورت دائمی، امن و مشترک در <b>Cloudflare D1 + Workers</b> ذخیره می‌شوند (بدون نیاز به فیلترشکن و مستقل از مرورگر).
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end text-xs">
+          <div className="lg:col-span-6">
+            <label className="block font-bold text-amber-200 mb-1">آدرس Cloudflare Worker API</label>
+            <input
+              type="url"
+              dir="ltr"
+              value={cfUrl}
+              onChange={(e) => setCfUrl(e.target.value)}
+              placeholder="https://neginparto-api.your-subdomain.workers.dev"
+              className="w-full px-3.5 py-2.5 bg-slate-950/70 border border-slate-700 text-white rounded-xl outline-none focus:ring-2 focus:ring-amber-400"
+            />
+          </div>
+
+          <div className="lg:col-span-6 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={cfTesting || cfMigrating}
+              onClick={handleTestCloudflare}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-600 disabled:opacity-50 cursor-pointer"
+            >
+              <PlugZap className="w-4 h-4 text-amber-300" />
+              <span>{cfTesting ? 'در حال بررسی...' : 'تست اتصال'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={cfTesting || cfMigrating || !cfUrl.trim()}
+              onClick={handleSaveAndActivateCloudflare}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold disabled:opacity-50 cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>ذخیره و فعال‌سازی کلودفلر</span>
+            </button>
+
+            {canRestore && (
+              <button
+                type="button"
+                disabled={cfTesting || cfMigrating || !cfUrl.trim()}
+                onClick={() => setShowCfMigrateBox((v) => !v)}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold disabled:opacity-50 cursor-pointer"
+              >
+                <CloudUpload className="w-4 h-4" />
+                <span>انتقال اطلاعات فعلی به D1</span>
+              </button>
+            )}
+
+            {cfUrl && (
+              <button
+                type="button"
+                onClick={handleClearCloudflare}
+                className="flex items-center gap-1 px-3 py-2.5 bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-500/40 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>حذف آدرس</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {showCfMigrateBox && canRestore && (
+          <div className="p-4 bg-white/5 border border-emerald-400/30 rounded-xl space-y-3 text-xs">
+            <div className="font-bold text-emerald-200">
+              انتقال یک‌کلیکی داده‌های فعلی این محیط به دیتابیس Cloudflare D1
+            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              برای تأیید هویت مدیر ارشد در سرور کلودفلر و انتقال تمام اطلاعات (پرسنل، حقوق، کارانه، عملیات معدنی، تعهدات و کاربران)، نام کاربری و رمز عبور مدیر کلودفلر را وارد کنید (پیش‌فرض کلودفلر: <span dir="ltr">javadabadiyan</span>):
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+              <div>
+                <label className="block font-bold text-slate-200 mb-1">نام کاربری مدیر در کلودفلر</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={cfAdminUser}
+                  onChange={(e) => setCfAdminUser(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950/70 border border-slate-700 text-white rounded-xl outline-none"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-200 mb-1">رمز عبور مدیر در کلودفلر</label>
+                <input
+                  type="password"
+                  dir="ltr"
+                  value={cfAdminPass}
+                  onChange={(e) => setCfAdminPass(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2 bg-slate-950/70 border border-slate-700 text-white rounded-xl outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={cfMigrating || !cfAdminPass}
+                onClick={handleMigrateSnapshotToCloudflare}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold disabled:opacity-50 cursor-pointer"
+              >
+                <CloudUpload className="w-4 h-4" />
+                <span>{cfMigrating ? 'در حال انتقال کامل...' : 'شروع انتقال به Cloudflare D1'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {cfFeedback && (
+          <div
+            className={`p-3 rounded-xl text-xs border flex items-center gap-2 ${
+              cfFeedback.type === 'success'
+                ? 'bg-emerald-950/60 border-emerald-400/40 text-emerald-200'
+                : 'bg-rose-950/60 border-rose-400/40 text-rose-200'
+            }`}
+          >
+            {cfFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{cfFeedback.text}</span>
+          </div>
+        )}
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 text-[11px] space-y-2">
+          <div className="font-bold text-amber-200">مراحل راه‌اندازی خودکار روی GitHub + Cloudflare (یک‌بار برای همیشه):</div>
+          <ol className="list-decimal pr-4 space-y-1 text-slate-300 leading-relaxed">
+            <li>در داشبورد کلودفلر (<span dir="ltr">dash.cloudflare.com</span>) مقدار <b dir="ltr">Account ID</b> و یک <b dir="ltr">API Token</b> با الگوی <span dir="ltr">Edit Cloudflare Workers</span> بسازید.</li>
+            <li>در مخزن گیت‌هاب خود در مسیر <span dir="ltr">Settings → Secrets and variables → Actions</span> دو کلید <b dir="ltr">CLOUDFLARE_API_TOKEN</b> و <b dir="ltr">CLOUDFLARE_ACCOUNT_ID</b> را در بخش <b>Secrets</b> ثبت کنید.</li>
+            <li>از تب <b>Actions</b> گیت‌هاب، گردش‌کار <b dir="ltr">Deploy Cloudflare Worker &amp; D1 Database</b> را یک‌بار اجرا کنید تا دیتابیس <span dir="ltr">neginparto-db</span> و سرویس <span dir="ltr">neginparto-api</span> خودکار ساخته شوند.</li>
+            <li>آدرس <span dir="ltr">https://neginparto-api.&lt;subdomain&gt;.workers.dev</span> را در بخش <b>Variables</b> گیت‌هاب با نام <b dir="ltr">VITE_CLOUDFLARE_API_URL</b> ذخیره کرده و <b dir="ltr">Deploy to GitHub Pages</b> را اجرا کنید.</li>
+          </ol>
         </div>
       </div>
 

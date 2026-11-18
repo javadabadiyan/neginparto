@@ -1,0 +1,2830 @@
+// Cloudflare Worker + D1 Backend for سامانه جامع شرکت نگین پرتو نصر
+// Implements 100% of the REST API with fail-closed RBAC, PBKDF2-SHA256 password hashing,
+// HMAC-SHA256 Bearer tokens, CORS for GitHub Pages, and persistent Cloudflare D1 storage.
+
+interface D1PreparedStatement {
+  bind(...values: any[]): D1PreparedStatement;
+  first<T = Record<string, any>>(colName?: string): Promise<T | null>;
+  all<T = Record<string, any>>(): Promise<{ results?: T[]; success: boolean }>;
+  run(): Promise<{ success: boolean; meta?: any }>;
+}
+
+interface D1Database {
+  prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<{ results?: T[]; success: boolean }[]>;
+}
+
+export interface Env {
+  DB: D1Database;
+  AUTH_SECRET?: string;
+  ALLOWED_ORIGIN?: string;
+}
+
+const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+// ================= CORS & RESPONSE HELPERS =================
+
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+  const origin = request.headers.get('Origin') || '*';
+  const configured = (env.ALLOWED_ORIGIN || '*').trim();
+  const allowOrigin = configured === '*' ? origin : configured;
+  return {
+    'Access-Control-Allow-Origin': allowOrigin || '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  };
+}
+
+function jsonRes(
+  request: Request,
+  env: Env,
+  payload: any,
+  status = 200,
+  extraHeaders: Record<string, string> = {}
+): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...getCorsHeaders(request, env),
+      ...extraHeaders,
+    },
+  });
+}
+
+function faDate(): string {
+  try {
+    return new Date().toLocaleDateString('fa-IR');
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function faDateTime(): string {
+  try {
+    return new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
+function genId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+}
+
+// ================= CRYPTO: PBKDF2 + SHA256 + HMAC-SHA256 =================
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+  const clean = hex.trim();
+  const out = new Uint8Array(new ArrayBuffer(clean.length / 2));
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function b64UrlEncodeBytes(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64UrlDecodeToBytes(str: string): Uint8Array | null {
+  try {
+    let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+async function hashPassword(plain: string): Promise<string> {
+  const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    textEncoder.encode(plain),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: saltBytes, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    256
+  );
+  return `pbkdf2$100000$${bytesToHex(saltBytes)}$${bytesToHex(new Uint8Array(derived))}`;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', textEncoder.encode(input));
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function verifyPassword(
+  plain: string,
+  stored: string
+): Promise<{ valid: boolean; needsMigration: boolean }> {
+  if (!stored) return { valid: false, needsMigration: false };
+
+  if (stored.startsWith('pbkdf2$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 4) return { valid: false, needsMigration: false };
+    const iterations = parseInt(parts[1], 10);
+    const saltHex = parts[2];
+    const expectedHex = parts[3];
+    if (!Number.isFinite(iterations) || !saltHex || !expectedHex) {
+      return { valid: false, needsMigration: false };
+    }
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      textEncoder.encode(plain),
+      'PBKDF2',
+      false,
+      ['deriveBits']
+    );
+    const derived = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: hexToBytes(saltHex), iterations, hash: 'SHA-256' },
+      keyMaterial,
+      256
+    );
+    const actualHex = bytesToHex(new Uint8Array(derived));
+    return { valid: timingSafeEqualStr(actualHex, expectedHex), needsMigration: false };
+  }
+
+  if (stored.startsWith('sha256$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 3) return { valid: false, needsMigration: false };
+    const actualHex = await sha256Hex(`${parts[1]}:${plain}`);
+    const valid = timingSafeEqualStr(actualHex, parts[2]);
+    return { valid, needsMigration: valid };
+  }
+
+  if (!stored.startsWith('scrypt$') && !stored.startsWith('$2')) {
+    const valid = timingSafeEqualStr(stored, plain);
+    return { valid, needsMigration: valid };
+  }
+
+  return { valid: false, needsMigration: false };
+}
+
+let cachedSecret: string | null = null;
+
+async function getAuthSecret(env: Env): Promise<string> {
+  if (env.AUTH_SECRET && env.AUTH_SECRET.trim().length >= 16) {
+    return env.AUTH_SECRET.trim();
+  }
+  if (cachedSecret) return cachedSecret;
+  const row = await env.DB.prepare('SELECT value FROM app_meta WHERE key = ?')
+    .bind('auth_secret')
+    .first<{ value: string }>();
+  if (row?.value && row.value.length >= 32) {
+    cachedSecret = row.value;
+    return cachedSecret;
+  }
+  const generated = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+  await env.DB.prepare('INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)')
+    .bind('auth_secret', generated)
+    .run();
+  const recheck = await env.DB.prepare('SELECT value FROM app_meta WHERE key = ?')
+    .bind('auth_secret')
+    .first<{ value: string }>();
+  cachedSecret = recheck?.value || generated;
+  return cachedSecret;
+}
+
+async function signHmac(secret: string, data: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    textEncoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, textEncoder.encode(data));
+  return b64UrlEncodeBytes(new Uint8Array(sig));
+}
+
+async function createAuthToken(user: any, env: Env): Promise<string> {
+  const secret = await getAuthSecret(env);
+  const payload = {
+    uid: user.id,
+    usr: user.username,
+    role: user.role,
+    exp: Date.now() + TOKEN_TTL_MS,
+  };
+  const encoded = b64UrlEncodeBytes(textEncoder.encode(JSON.stringify(payload)));
+  const sig = await signHmac(secret, encoded);
+  return `${encoded}.${sig}`;
+}
+
+async function verifyAuthToken(
+  token: string,
+  env: Env
+): Promise<{ uid: string; usr: string; exp: number } | null> {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [encoded, sig] = parts;
+    const secret = await getAuthSecret(env);
+    const expectedSig = await signHmac(secret, encoded);
+    if (!timingSafeEqualStr(sig, expectedSig)) return null;
+    const rawBytes = b64UrlDecodeToBytes(encoded);
+    if (!rawBytes) return null;
+    const payload = JSON.parse(textDecoder.decode(rawBytes));
+    if (!payload?.uid || !payload?.exp || Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// ================= RBAC (STRICT FAIL-CLOSED) =================
+
+function isSuperAdminUser(user: any): boolean {
+  if (!user) return false;
+  return user.role === 'super_admin' || user.username === 'javadabadiyan';
+}
+
+function syncLegacyPermissions(perms: any) {
+  return {
+    ...perms,
+    canManagePersonnel: Boolean(perms.personnel.create || perms.personnel.edit || perms.personnel.delete),
+    canManageKaraneh: Boolean(perms.karaneh.create || perms.karaneh.edit || perms.karaneh.delete),
+    canManageJobGroups: Boolean(perms.jobGroups.create || perms.jobGroups.edit || perms.jobGroups.delete),
+    canManageCommitments: Boolean(perms.commitments.create || perms.commitments.edit || perms.commitments.delete),
+    canManageUsers: Boolean(perms.users.create || perms.users.edit || perms.users.delete),
+    canExportExcel: Boolean(
+      perms.personnel.exportExcel ||
+      perms.karaneh.exportExcel ||
+      perms.jobGroups.exportExcel ||
+      perms.commitments.exportExcel ||
+      perms.payroll.exportExcel ||
+      perms.users.exportExcel ||
+      perms.smartDashboard?.exportExcel ||
+      perms.ceoDashboard?.exportExcel ||
+      perms.unitOperations?.exportExcel
+    ),
+    canImportExcel: Boolean(
+      perms.personnel.importExcel ||
+      perms.karaneh.importExcel ||
+      perms.jobGroups.importExcel ||
+      perms.commitments.importExcel ||
+      perms.payroll.importExcel ||
+      perms.users.importExcel ||
+      perms.ceoDashboard?.importExcel ||
+      perms.unitOperations?.importExcel
+    ),
+    canBackupRestore: Boolean(perms.system.backupDatabase || perms.system.restoreDatabase),
+  };
+}
+
+function getFullAdminPermissions() {
+  return syncLegacyPermissions({
+    personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
+    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
+    payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
+    smartDashboard: { view: true, exportExcel: true, print: true },
+    ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
+    unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] },
+  });
+}
+
+function getEmptyPermissions() {
+  return syncLegacyPermissions({
+    personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
+    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
+    payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+    smartDashboard: { view: false, exportExcel: false, print: false },
+    ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+    unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
+  });
+}
+
+function normalizePermissions(raw?: any) {
+  if (!raw || typeof raw !== 'object') return getEmptyPermissions();
+
+  const hasModernSchema = Boolean(
+    (raw.personnel && typeof raw.personnel === 'object') ||
+    (raw.karaneh && typeof raw.karaneh === 'object') ||
+    (raw.jobGroups && typeof raw.jobGroups === 'object') ||
+    (raw.commitments && typeof raw.commitments === 'object') ||
+    (raw.payroll && typeof raw.payroll === 'object') ||
+    (raw.users && typeof raw.users === 'object') ||
+    (raw.system && typeof raw.system === 'object') ||
+    (raw.smartDashboard && typeof raw.smartDashboard === 'object') ||
+    (raw.ceoDashboard && typeof raw.ceoDashboard === 'object') ||
+    (raw.unitOperations && typeof raw.unitOperations === 'object')
+  );
+
+  if (!hasModernSchema) {
+    const lp = raw.canManagePersonnel === true;
+    const lk = raw.canManageKaraneh === true;
+    const lj = raw.canManageJobGroups === true;
+    const lc = raw.canManageCommitments === true;
+    const lu = raw.canManageUsers === true;
+    const le = raw.canExportExcel === true;
+    const li = raw.canImportExcel === true;
+    const lb = raw.canBackupRestore === true;
+
+    return syncLegacyPermissions({
+      personnel: { view: lp, create: lp, edit: lp, delete: lp && lu, deleteAll: false, importExcel: lp && li, exportExcel: lp && le, viewSalary: lp, documents: lp },
+      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le },
+      jobGroups: { view: lj, create: lj, edit: lj, delete: lj && lu, deleteAll: false, importExcel: lj && li, exportExcel: lj && le },
+      commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
+      payroll: { view: lk || lp, create: lk || lp, edit: lk || lp, delete: (lk || lp) && lu, deleteAll: false, importExcel: (lk || lp) && li, exportExcel: (lk || lp) && le },
+      users: { view: lu, create: lu, edit: lu, delete: lu, deleteAll: false, importExcel: lu && li, exportExcel: lu && le },
+      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb },
+      smartDashboard: { view: false, exportExcel: false, print: false },
+      ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+      unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
+    });
+  }
+
+  const p = raw.personnel || {};
+  const k = raw.karaneh || {};
+  const jg = raw.jobGroups || {};
+  const c = raw.commitments || {};
+  const pr = raw.payroll || {};
+  const u = raw.users || {};
+  const s = raw.system || {};
+  const sd = raw.smartDashboard || {};
+  const cd = raw.ceoDashboard || {};
+  const uo = raw.unitOperations || {};
+  const b = (v: any) => v === true;
+
+  return syncLegacyPermissions({
+    personnel: { view: b(p.view), create: b(p.create), edit: b(p.edit), delete: b(p.delete), deleteAll: b(p.deleteAll), importExcel: b(p.importExcel), exportExcel: b(p.exportExcel), viewSalary: b(p.viewSalary), documents: b(p.documents) },
+    karaneh: { view: b(k.view), create: b(k.create), edit: b(k.edit), delete: b(k.delete), deleteAll: b(k.deleteAll), importExcel: b(k.importExcel), exportExcel: b(k.exportExcel) },
+    jobGroups: { view: b(jg.view), create: b(jg.create), edit: b(jg.edit), delete: b(jg.delete), deleteAll: b(jg.deleteAll), importExcel: b(jg.importExcel), exportExcel: b(jg.exportExcel) },
+    commitments: { view: b(c.view), create: b(c.create), edit: b(c.edit), delete: b(c.delete), deleteAll: b(c.deleteAll), print: b(c.print), archive: b(c.archive), importExcel: b(c.importExcel), exportExcel: b(c.exportExcel) },
+    payroll: { view: b(pr.view), create: b(pr.create), edit: b(pr.edit), delete: b(pr.delete), deleteAll: b(pr.deleteAll), importExcel: b(pr.importExcel), exportExcel: b(pr.exportExcel) },
+    users: { view: b(u.view), create: b(u.create), edit: b(u.edit), delete: b(u.delete), deleteAll: b(u.deleteAll), importExcel: b(u.importExcel), exportExcel: b(u.exportExcel) },
+    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase) },
+    smartDashboard: { view: b(sd.view), exportExcel: b(sd.exportExcel), print: b(sd.print) },
+    ceoDashboard: { view: b(cd.view), create: b(cd.create), edit: b(cd.edit), delete: b(cd.delete), deleteAll: b(cd.deleteAll), importExcel: b(cd.importExcel), exportExcel: b(cd.exportExcel), print: b(cd.print) },
+    unitOperations: { view: b(uo.view), create: b(uo.create), edit: b(uo.edit), delete: b(uo.delete), deleteAll: b(uo.deleteAll), importExcel: b(uo.importExcel), exportExcel: b(uo.exportExcel), allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [] },
+  });
+}
+
+function sanitizeUser(user: any) {
+  if (!user || typeof user !== 'object') return user;
+  const { password: _, ...rest } = user;
+  return {
+    ...rest,
+    permissions: isSuperAdminUser(user) ? getFullAdminPermissions() : normalizePermissions(user.permissions),
+  };
+}
+
+function checkPermission(user: any, section: string, action: string): boolean {
+  if (!user || !user.isActive) return false;
+  if (isSuperAdminUser(user)) return true;
+  const perms: any = normalizePermissions(user.permissions);
+  return Boolean(perms?.[section]?.[action] === true);
+}
+
+function normKey(key: string): string {
+  return String(key || '')
+    .replace(/\u200c/g, ' ')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/أ|إ/g, 'ا')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getVal(row: Record<string, any>, ...keys: string[]): any {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== null && row[k] !== '') return row[k];
+  }
+  const map = new Map<string, any>();
+  for (const [rk, rv] of Object.entries(row)) {
+    if (rv !== undefined && rv !== null && rv !== '') {
+      const nk = normKey(rk);
+      if (!map.has(nk)) map.set(nk, rv);
+    }
+  }
+  for (const k of keys) {
+    const found = map.get(normKey(k));
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function parseNum(val: any): number {
+  if (val === undefined || val === null || val === '') return 0;
+  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+  const eng = String(val)
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[,٬،\s]/g, '')
+    .replace(/ریال/g, '');
+  const n = Number(eng);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseYearMonth(rawYm: any, fallbackPeriod: string): string {
+  const eng = String(rawYm || '')
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .trim();
+  if (!eng) return fallbackPeriod;
+  const m1 = eng.match(/^(\d{4})\s*[-/]\s*(\d{1,2})$/);
+  if (m1) {
+    const mo = m1[2].padStart(2, '0');
+    if (Number(mo) >= 1 && Number(mo) <= 12) return `${m1[1]}-${mo}`;
+  }
+  const m2 = eng.match(/^(\d{4})(\d{2})$/);
+  if (m2 && Number(m2[2]) >= 1 && Number(m2[2]) <= 12) {
+    return `${m2[1]}-${m2[2]}`;
+  }
+  return fallbackPeriod;
+}
+
+function getAllowedUnitsForUser(user: any): string[] {
+  const raw = user?.permissions?.unitOperations?.allowedUnits;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x: any) => String(x || '').trim()).filter(Boolean);
+}
+
+function isUnitAllowedForUser(user: any, unitName?: string): boolean {
+  if (!user || !user.isActive) return false;
+  if (isSuperAdminUser(user) || checkPermission(user, 'ceoDashboard', 'view')) return true;
+  if (!checkPermission(user, 'unitOperations', 'view')) return false;
+  const allowed = getAllowedUnitsForUser(user);
+  if (allowed.length === 0) return true;
+  if (!unitName) return false;
+  const norm = normKey(unitName);
+  return allowed.some((a) => {
+    const na = normKey(a);
+    return na === norm || norm.includes(na) || na.includes(norm);
+  });
+}
+
+function isWorkshopOrUnitAllowed(user: any, unitName?: string): boolean {
+  return (
+    isUnitAllowedForUser(user, unitName) ||
+    isUnitAllowedForUser(user, 'واحد تعمیرگاه و ماشین‌آلات سنگین') ||
+    isUnitAllowedForUser(user, 'تعمیرگاه')
+  );
+}
+
+function isDispatchingOrUnitAllowed(user: any, unitName?: string): boolean {
+  return (
+    isUnitAllowedForUser(user, unitName) ||
+    isUnitAllowedForUser(user, 'واحد دیسپچینگ و کنترل تولید') ||
+    isUnitAllowedForUser(user, 'دیسپچینگ')
+  );
+}
+
+function hasMiningOrUnitPerm(user: any, action: string): boolean {
+  return checkPermission(user, 'ceoDashboard', action) || checkPermission(user, 'unitOperations', action);
+}
+
+function buildPresetPermissions(presetName: string) {
+  const p = String(presetName || '').trim();
+  if (p.includes('مدیر عامل') || p.includes('مدیرعامل')) {
+    return normalizePermissions({
+      personnel: { view: true, exportExcel: true, viewSalary: true, documents: true },
+      karaneh: { view: true, exportExcel: true },
+      jobGroups: { view: true, exportExcel: true },
+      commitments: { view: true, print: true, exportExcel: true },
+      payroll: { view: true, exportExcel: true },
+      system: { dashboardStats: true },
+      smartDashboard: { view: true, exportExcel: true, print: true },
+      ceoDashboard: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, print: true },
+      unitOperations: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, allowedUnits: [] },
+    });
+  }
+  if (p.includes('مدیر')) return getFullAdminPermissions();
+  if (p.includes('کارگزینی')) {
+    return normalizePermissions({
+      personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
+      karaneh: { view: true, exportExcel: true },
+      jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+      commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
+      payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+      system: { dashboardStats: true },
+      smartDashboard: { view: true, exportExcel: true, print: true },
+    });
+  }
+  if (p.includes('کارانه') || p.includes('حقوق')) {
+    return normalizePermissions({
+      personnel: { view: true, exportExcel: true, viewSalary: true },
+      karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+      jobGroups: { view: true, exportExcel: true },
+      payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+      system: { dashboardStats: true },
+      smartDashboard: { view: true, exportExcel: true },
+    });
+  }
+  return getEmptyPermissions();
+}
+
+// ================= D1 DATA ACCESS HELPERS =================
+
+function rowToUser(row: any) {
+  let permissions = {};
+  try {
+    permissions = JSON.parse(row.permissions_json || '{}');
+  } catch {
+    permissions = {};
+  }
+  return {
+    id: row.id,
+    username: row.username,
+    password: row.password,
+    fullName: row.full_name,
+    role: row.role,
+    department: row.department,
+    email: row.email || '',
+    uid: row.uid || '',
+    permissions,
+    isActive: row.is_active !== 0,
+    createdAt: row.created_at || '',
+    lastLogin: row.last_login || '',
+  };
+}
+
+async function getAllUsers(db: D1Database): Promise<any[]> {
+  const { results } = await db.prepare('SELECT * FROM users').all();
+  return (results || []).map(rowToUser);
+}
+
+async function getUserById(db: D1Database, id: string): Promise<any | null> {
+  const row = await db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+  return row ? rowToUser(row) : null;
+}
+
+async function getUserByUsername(db: D1Database, username: string): Promise<any | null> {
+  const row = await db
+    .prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
+    .bind(username.trim())
+    .first();
+  return row ? rowToUser(row) : null;
+}
+
+async function upsertUser(db: D1Database, u: any): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         username = excluded.username,
+         password = excluded.password,
+         full_name = excluded.full_name,
+         role = excluded.role,
+         department = excluded.department,
+         email = excluded.email,
+         uid = excluded.uid,
+         permissions_json = excluded.permissions_json,
+         is_active = excluded.is_active,
+         created_at = excluded.created_at,
+         last_login = excluded.last_login`
+    )
+    .bind(
+      u.id,
+      u.username,
+      u.password || '',
+      u.fullName || '',
+      u.role || 'کاربر سفارشی',
+      u.department || '',
+      u.email || '',
+      u.uid || '',
+      JSON.stringify(u.permissions || {}),
+      u.isActive === false ? 0 : 1,
+      u.createdAt || '',
+      u.lastLogin || ''
+    )
+    .run();
+}
+
+async function getJsonRows(db: D1Database, table: string, whereClause = '', binds: any[] = []): Promise<any[]> {
+  const sql = whereClause ? `SELECT data_json FROM ${table} WHERE ${whereClause}` : `SELECT data_json FROM ${table}`;
+  const stmt = binds.length > 0 ? db.prepare(sql).bind(...binds) : db.prepare(sql);
+  const { results } = await stmt.all<{ data_json: string }>();
+  const out: any[] = [];
+  for (const r of results || []) {
+    try {
+      out.push(JSON.parse(r.data_json));
+    } catch {
+      // skip malformed row
+    }
+  }
+  return out;
+}
+
+async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
+  const CHUNK = 50;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await db.batch(stmts.slice(i, i + CHUNK));
+  }
+}
+
+async function touchLastSaved(db: D1Database): Promise<void> {
+  await db
+    .prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)')
+    .bind('last_saved', faDateTime())
+    .run();
+}
+
+// ================= INITIAL SCHEMA & SEED =================
+
+async function buildInitialSeedData() {
+  return {
+    users: [
+      {
+        id: 'u-admin-1',
+        username: 'javadabadiyan',
+        password: await hashPassword('javad_5221157'),
+        fullName: 'جواد آبادیان (مدیر ارشد سامانه)',
+        role: 'super_admin',
+        department: 'مدیریت منابع انسانی و کارگزینی',
+        permissions: getFullAdminPermissions(),
+        isActive: true,
+        createdAt: '1403/01/01',
+        lastLogin: 'هم‌اکنون',
+      },
+      {
+        id: 'u-officer-2',
+        username: 'karaneh_admin',
+        password: await hashPassword('12345678'),
+        fullName: 'سارا کاظمی (کارشناس ارزیابی و کارانه)',
+        role: 'karaneh_officer',
+        department: 'اداره جبران خدمت و کارانه',
+        permissions: normalizePermissions({
+          personnel: { view: true, exportExcel: true, viewSalary: true },
+          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          jobGroups: { view: true, exportExcel: true },
+          payroll: { view: true, exportExcel: true },
+          smartDashboard: { view: true, exportExcel: true },
+          system: { dashboardStats: true },
+        }),
+        isActive: true,
+        createdAt: '1403/03/10',
+        lastLogin: '۱۴۰۳/۰۸/۰۲',
+      },
+      {
+        id: 'u-officer-3',
+        username: 'hr_expert',
+        password: await hashPassword('12345678'),
+        fullName: 'محمد امینی (کارشناس امور اداری و پرسنلی)',
+        role: 'hr_officer',
+        department: 'امور کارکنان و قراردادها',
+        permissions: normalizePermissions({
+          personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
+          karaneh: { view: true, exportExcel: true },
+          jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
+          payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          smartDashboard: { view: true, exportExcel: true, print: true },
+          system: { dashboardStats: true },
+        }),
+        isActive: true,
+        createdAt: '1403/04/15',
+        lastLogin: '۱۴۰۳/۰۸/۰۱',
+      },
+    ],
+    jobGroups: [
+      { id: 'jg-1', code: 'گروه ۱۶', title: 'مدیران ارشد و رؤسای ادارات', grade: 16, minBaseSalary: 280000000, maxBaseSalary: 450000000, maxKaranehCeiling: 120000000, requiredExperienceYears: 12, requiredDegree: 'کارشناسی ارشد یا دکتری', description: 'راهبری استراتژیک، مدیریت واحدهای ستادی و مسئولیت نهایی برنامه‌ها' },
+      { id: 'jg-2', code: 'گروه ۱۴', title: 'کارشناسان مسئول و سرپرستان', grade: 14, minBaseSalary: 220000000, maxBaseSalary: 320000000, maxKaranehCeiling: 85000000, requiredExperienceYears: 8, requiredDegree: 'کارشناسی یا کارشناسی ارشد', description: 'نظارت اجرایی، هماهنگی پروژه‌ها و هدایت تیم‌های تخصصی' },
+      { id: 'jg-3', code: 'گروه ۱۲', title: 'کارشناسان ارشد تخصصی', grade: 12, minBaseSalary: 180000000, maxBaseSalary: 260000000, maxKaranehCeiling: 65000000, requiredExperienceYears: 5, requiredDegree: 'کارشناسی مرتبط', description: 'اجرای وظایف تخصصی، تحلیل فرآیندها و توسعه سامانه‌ها' },
+      { id: 'jg-4', code: 'گروه ۱۰', title: 'کارشناسان و تکنسین‌های فنی', grade: 10, minBaseSalary: 140000000, maxBaseSalary: 200000000, maxKaranehCeiling: 50000000, requiredExperienceYears: 3, requiredDegree: 'کارشناسی یا کاردانی فنی', description: 'پشتیبانی فنی، نگهداری تجهیزات و امور اجرایی' },
+      { id: 'jg-5', code: 'گروه ۸', title: 'متصدیان اداری و پشتیبانی', grade: 8, minBaseSalary: 110000000, maxBaseSalary: 160000000, maxKaranehCeiling: 35000000, requiredExperienceYears: 1, requiredDegree: 'دیپلم یا کاردانی', description: 'دبیرخانه، بایگانی، خدمات دفتری و لجستیک' },
+    ],
+    jobClassifications: [],
+    personnel: [
+      { id: 'p-101', personnelCode: '10101', firstName: 'رضا', lastName: 'قاسمی', fullName: 'رضا قاسمی', nationalId: '0078912345', position: 'مدیر فناوری اطلاعات و سامانه‌ها', department: 'فناوری اطلاعات', hireDate: '1397/02/10', employmentType: 'رسمی', jobGroupId: 'jg-1', jobGroupName: 'گروه ۱۶ - مدیران ارشد و رؤسای ادارات', education: 'کارشناسی ارشد مهندسی نرم‌افزار', phone: '09121114567', email: 'r.ghasemi@org.ir', status: 'فعال', baseSalary: 340000000, notes: 'مسئول مستقیم تحول دیجیتال و سرورهای مرکزی', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+      { id: 'p-102', personnelCode: '10102', firstName: 'زهرا', lastName: 'کریمی', fullName: 'زهرا کریمی', nationalId: '0065432109', position: 'رئیس حسابداری و بودجه', department: 'امور مالی و اقتصادی', hireDate: '1398/05/15', employmentType: 'رسمی', jobGroupId: 'jg-2', jobGroupName: 'گروه ۱۴ - کارشناسان مسئول و سرپرستان', education: 'کارشناسی ارشد حسابداری و مدیریت مالی', phone: '09122225678', email: 'z.karimi@org.ir', status: 'فعال', baseSalary: 290000000, notes: 'ناظر بر فرآیندهای مالیاتی و محاسبات کارانه', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+      { id: 'p-103', personnelCode: '10103', firstName: 'امیرحسین', lastName: 'مرادی', fullName: 'امیرحسین مرادی', nationalId: '0451239876', position: 'کارشناس ارشد شبکه و امنیت', department: 'فناوری اطلاعات', hireDate: '1400/07/01', employmentType: 'پیمانی', jobGroupId: 'jg-3', jobGroupName: 'گروه ۱۲ - کارشناسان ارشد تخصصی', education: 'کارشناسی مهندسی فناوری اطلاعات', phone: '09123336789', email: 'a.moradi@org.ir', status: 'فعال', baseSalary: 235000000, notes: 'طراح معماری دیتابیس ابری و امنیت', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+      { id: 'p-104', personnelCode: '10104', firstName: 'فاطمه', lastName: 'صادقی', fullName: 'فاطمه صادقی', nationalId: '0032165498', position: 'کارشناس کارگزینی و تشکیلات', department: 'منابع انسانی', hireDate: '1401/03/20', employmentType: 'قراردادی', jobGroupId: 'jg-3', jobGroupName: 'گروه ۱۲ - کارشناسان ارشد تخصصی', education: 'کارشناسی مدیریت دولتی', phone: '09124447890', email: 'f.sadeghi@org.ir', status: 'فعال', baseSalary: 195000000, notes: 'مسئول ثبت و پایش تعهدات پرسنلی و پرونده‌ها', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+      { id: 'p-105', personnelCode: '10105', firstName: 'مهدی', lastName: 'نجفی', fullName: 'مهدی نجفی', nationalId: '0389874561', position: 'سرپرست خط تولید و تضمین کیفیت', department: 'تولید و عملیات', hireDate: '1399/11/12', employmentType: 'رسمی', jobGroupId: 'jg-2', jobGroupName: 'گروه ۱۴ - کارشناسان مسئول و سرپرستان', education: 'کارشناسی مهندسی صنایع', phone: '09125558901', email: 'm.najafi@org.ir', status: 'فعال', baseSalary: 275000000, notes: 'مدیریت شیفت‌های کارگاهی و راندمان خطوط', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+      { id: 'p-106', personnelCode: '10106', firstName: 'سمیرا', lastName: 'پژمان', fullName: 'سمیرا پژمان', nationalId: '0081234567', position: 'مسئول دفتر مدیرعامل و دبیرخانه', department: 'مدیریت و پشتیبانی', hireDate: '1402/01/15', employmentType: 'قراردادی', jobGroupId: 'jg-5', jobGroupName: 'گروه ۸ - متصدیان اداری و پشتیبانی', education: 'کاردانی روابط عمومی', phone: '09126669012', email: 's.pezhman@org.ir', status: 'فعال', baseSalary: 145000000, notes: 'پیگیری مکاتبات اداری و ارجاعات کارگزینی', createdAt: '1403/01/01', updatedAt: '1403/08/01' },
+    ],
+    karaneh: [
+      { id: 'k-101-07', personnelId: 'p-101', personnelCode: '10101', fullName: 'رضا قاسمی', department: 'فناوری اطلاعات', position: 'مدیر فناوری اطلاعات و سامانه‌ها', period: '1403-07', baseKaraneh: 60000000, overtimeBonus: 20000000, deductions: 0, finalKaraneh: 80000000, notes: 'تحویل فاز یک شبکه', updatedAt: '1403/07/28' },
+      { id: 'k-102-07', personnelId: 'p-102', personnelCode: '10102', fullName: 'زهرا کریمی', department: 'امور مالی و اقتصادی', position: 'رئیس حسابداری و بودجه', period: '1403-07', baseKaraneh: 48000000, overtimeBonus: 12000000, deductions: 0, finalKaraneh: 60000000, notes: 'بستن حساب‌های شش‌ماهه', updatedAt: '1403/07/28' },
+      { id: 'k-103-07', personnelId: 'p-103', personnelCode: '10103', fullName: 'امیرحسین مرادی', department: 'فناوری اطلاعات', position: 'کارشناس ارشد شبکه و امنیت', period: '1403-07', baseKaraneh: 38000000, overtimeBonus: 7000000, deductions: 0, finalKaraneh: 45000000, notes: 'پیکربندی فایروال', updatedAt: '1403/07/28' },
+      { id: 'k-104-07', personnelId: 'p-104', personnelCode: '10104', fullName: 'فاطمه صادقی', department: 'منابع انسانی', position: 'کارشناس کارگزینی و تشکیلات', period: '1403-07', baseKaraneh: 32000000, overtimeBonus: 6000000, deductions: 0, finalKaraneh: 38000000, notes: 'ساماندهی پرونده‌های فیزیکی', updatedAt: '1403/07/28' },
+      { id: 'k-105-07', personnelId: 'p-105', personnelCode: '10105', fullName: 'مهدی نجفی', department: 'تولید و عملیات', position: 'سرپرست خط تولید و تضمین کیفیت', period: '1403-07', baseKaraneh: 46000000, overtimeBonus: 14000000, deductions: 0, finalKaraneh: 60000000, notes: 'کاهش ضایعات خط A', updatedAt: '1403/07/28' },
+      { id: 'k-106-07', personnelId: 'p-106', personnelCode: '10106', fullName: 'سمیرا پژمان', department: 'مدیریت و پشتیبانی', position: 'مسئول دفتر مدیرعامل و دبیرخانه', period: '1403-07', baseKaraneh: 22000000, overtimeBonus: 4000000, deductions: 0, finalKaraneh: 26000000, notes: 'نظم در مکاتبات جلسات هیئت‌مدیره', updatedAt: '1403/07/28' },
+      { id: 'k-101-08', personnelId: 'p-101', personnelCode: '10101', fullName: 'رضا قاسمی', department: 'فناوری اطلاعات', position: 'مدیر فناوری اطلاعات و سامانه‌ها', period: '1403-08', baseKaraneh: 65000000, overtimeBonus: 28000000, deductions: 0, finalKaraneh: 93000000, notes: 'راه‌اندازی کامل دیتابیس ابری (+۱۶.۲۵٪ رشد)', updatedAt: '1403/08/29' },
+      { id: 'k-102-08', personnelId: 'p-102', personnelCode: '10102', fullName: 'زهرا کریمی', department: 'امور مالی و اقتصادی', position: 'رئیس حسابداری و بودجه', period: '1403-08', baseKaraneh: 52000000, overtimeBonus: 16000000, deductions: 0, finalKaraneh: 68000000, notes: 'ارائه گزارش تحلیلی سود و زیان واحدها (+۱۳.۳٪ رشد)', updatedAt: '1403/08/29' },
+      { id: 'k-103-08', personnelId: 'p-103', personnelCode: '10103', fullName: 'امیرحسین مرادی', department: 'فناوری اطلاعات', position: 'کارشناس ارشد شبکه و امنیت', period: '1403-08', baseKaraneh: 42000000, overtimeBonus: 11000000, deductions: 0, finalKaraneh: 53000000, notes: 'پیاده‌سازی رمزنگاری اطلاعات (+۱۷.۸٪ رشد)', updatedAt: '1403/08/29' },
+      { id: 'k-104-08', personnelId: 'p-104', personnelCode: '10104', fullName: 'فاطمه صادقی', department: 'منابع انسانی', position: 'کارشناس کارگزینی و تشکیلات', period: '1403-08', baseKaraneh: 34000000, overtimeBonus: 8000000, deductions: 0, finalKaraneh: 42000000, notes: 'ورود اطلاعات اکسل پرونده‌های پرسنلی (+۱۰.۵٪ رشد)', updatedAt: '1403/08/29' },
+      { id: 'k-105-08', personnelId: 'p-105', personnelCode: '10105', fullName: 'مهدی نجفی', department: 'تولید و عملیات', position: 'سرپرست خط تولید و تضمین کیفیت', period: '1403-08', baseKaraneh: 42000000, overtimeBonus: 10000000, deductions: 4000000, finalKaraneh: 48000000, notes: 'کسر به دلیل تاخیر در تحویل محموله خط تولید (-۲۰٪ کاهش)', updatedAt: '1403/08/29' },
+      { id: 'k-106-08', personnelId: 'p-106', personnelCode: '10106', fullName: 'سمیرا پژمان', department: 'مدیریت و پشتیبانی', position: 'مسئول دفتر مدیرعامل و دبیرخانه', period: '1403-08', baseKaraneh: 24000000, overtimeBonus: 5000000, deductions: 0, finalKaraneh: 29000000, notes: 'هماهنگی منظم همایش سالانه (+۱۱.۵٪ رشد)', updatedAt: '1403/08/29' },
+    ],
+    commitments: [
+      { id: 'cmt-1', personnelId: 'p-101', personnelCode: '10101', personnelName: 'رضا قاسمی', commitmentType: 'تعهد خدمت', amount: 1500000000, previouslyTakenAmount: 300000000, maxAllowedAmount: 2500000000, startDate: '1397/02/10', endDate: '1407/02/10', status: 'جاری و معتبر', isArchived: false, guarantorName: 'مهندس احمد باقری', notes: 'تعهد خدمت ۱۰ ساله بابت بورسیه دوره‌های امنیت پیشرفته' },
+      { id: 'cmt-2', personnelId: 'p-102', personnelCode: '10102', personnelName: 'زهرا کریمی', commitmentType: 'تعهد حسابداری', amount: 500000000, previouslyTakenAmount: 250000000, maxAllowedAmount: 1500000000, startDate: '1403/05/15', endDate: '1405/05/15', status: 'جاری و معتبر', isArchived: false, guarantorName: 'دکتر علیرضا کریمی', notes: 'تعهد حسابداری مسئول امور مالی و تنخواه گردان' },
+      { id: 'cmt-3', personnelId: 'p-103', personnelCode: '10103', personnelName: 'امیرحسین مرادی', commitmentType: 'سفته حسن انجام کار', amount: 800000000, previouslyTakenAmount: 0, maxAllowedAmount: 1200000000, startDate: '1400/07/01', endDate: '1404/07/01', status: 'جاری و معتبر', isArchived: false, guarantorName: 'پدر - حسن مرادی', notes: 'تضمین اموال رایانه‌ای و دیتاسنتر' },
+      { id: 'cmt-4', personnelId: 'p-104', personnelCode: '10104', personnelName: 'فاطمه صادقی', commitmentType: 'تعهد دوره‌های آموزشی', amount: 300000000, previouslyTakenAmount: 100000000, maxAllowedAmount: 600000000, startDate: '1402/06/01', endDate: '1404/06/01', status: 'جاری و معتبر', isArchived: false, guarantorName: '-', notes: 'تعهد خدمت دو ساله پس از گذراندن دوره طبقه‌بندی مشاغل' },
+    ],
+    payroll: [],
+    miningVolumes: [
+      { id: 'mv-140307-1', period: '1403-07', unitName: 'استخراج و معدن‌کاری', activityType: 'استخراج ماده معدنی', metricTitle: 'استخراج سینه کار اصلی', volumeValue: 44200, targetVolume: 48000, unitLabel: 'تن', status: 'تکمیل‌شده', notes: 'عملکرد مهرماه', updatedAt: '1403/07/30' },
+      { id: 'mv-140307-2', period: '1403-07', unitName: 'تراش و باطله‌برداری', activityType: 'باطله‌برداری', metricTitle: 'باطله‌برداری جبهه شمالی', volumeValue: 56000, targetVolume: 58000, unitLabel: 'مترمکعب', status: 'تکمیل‌شده', notes: 'آمار بارگیری و حمل باطله', updatedAt: '1403/07/30' },
+      { id: 'mv-140307-3', period: '1403-07', unitName: 'فرآوری و سنگ‌شکن', activityType: 'خردایش و دانه‌بندی', metricTitle: 'خوراک ورودی سنگ‌شکن', volumeValue: 39500, targetVolume: 42000, unitLabel: 'تن', status: 'تکمیل‌شده', notes: 'بهره‌برداری خط یک و دو', updatedAt: '1403/07/30' },
+      { id: 'mv-140308-1', period: '1403-08', unitName: 'استخراج و معدن‌کاری', activityType: 'استخراج ماده معدنی', metricTitle: 'استخراج سینه کار اصلی', volumeValue: 49800, targetVolume: 50000, unitLabel: 'تن', status: 'نزدیک به هدف', notes: 'رشد ۱۲.۷ درصدی نسبت به مهرماه', updatedAt: '1403/08/29' },
+      { id: 'mv-140308-2', period: '1403-08', unitName: 'تراش و باطله‌برداری', activityType: 'باطله‌برداری', metricTitle: 'باطله‌برداری جبهه شمالی', volumeValue: 63400, targetVolume: 60000, unitLabel: 'مترمکعب', status: 'فراتر از برنامه', notes: 'اضافه‌شدن یک دستگاه دامپتراک', updatedAt: '1403/08/29' },
+      { id: 'mv-140308-3', period: '1403-08', unitName: 'فرآوری و سنگ‌شکن', activityType: 'خردایش و دانه‌بندی', metricTitle: 'خوراک ورودی سنگ‌شکن', volumeValue: 45100, targetVolume: 44000, unitLabel: 'تن', status: 'فراتر از برنامه', notes: 'کاهش توقفات خط سنگ‌شکن', updatedAt: '1403/08/29' },
+    ],
+    miningMachinery: [
+      { id: 'mm-1', machineCode: 'EQ-DT-101', machineName: 'دامپتراک بلاز ۴۵ تن شماره ۱', machineType: 'دامپتراک', unitName: 'حمل و نقل و بارگیری', status: 'آماده به کار', issueDescription: 'سالم و فعال در شیفت روز و شب', stoppedSince: '-', estimatedReadyDate: '-', operatorName: 'حسین محمدی', notes: 'آماده سرویس کامل', updatedAt: '1403/08/29' },
+      { id: 'mm-2', machineCode: 'EQ-DT-102', machineName: 'دامپتراک کوماتسو HD465 شماره ۲', machineType: 'دامپتراک', unitName: 'حمل و نقل و بارگیری', status: 'آماده به کار', issueDescription: 'فعال در مسیر جبهه استخراج به سنگ‌شکن', stoppedSince: '-', estimatedReadyDate: '-', operatorName: 'مجید کریمی', notes: '', updatedAt: '1403/08/29' },
+      { id: 'mm-3', machineCode: 'EQ-EX-201', machineName: 'بیل مکانیکی کوماتسو PC400', machineType: 'بیل مکانیکی', unitName: 'استخراج و معدن‌کاری', status: 'خراب / در تعمیرگاه', issueDescription: 'نشتی جک بوم و تعویض پکینگ هیدرولیک در تعمیرگاه مرکزی', stoppedSince: '1403/08/22', estimatedReadyDate: '1403/08/28', operatorName: 'تیم تعمیرات سنگین', notes: 'کیت پکینگ تامین شد', updatedAt: '1403/08/29' },
+      { id: 'mm-4', machineCode: 'EQ-LD-301', machineName: 'لودر کاترپیلار 966H شماره ۱', machineType: 'لودر', unitName: 'فرآوری و سنگ‌شکن', status: 'در انتظار قطعه', issueDescription: 'نیاز به تعویض پمپ گیربکس و فیلترهای فشار قوی', stoppedSince: '1403/08/19', estimatedReadyDate: '1403/09/02', operatorName: 'واحد تعمیرگاه', notes: 'درخواست خرید فوری ارسال شده', updatedAt: '1403/08/29' },
+      { id: 'mm-5', machineCode: 'EQ-BD-401', machineName: 'بولدوزر کوماتسو D155A', machineType: 'بولدوزر', unitName: 'تراش و باطله‌برداری', status: 'سرویس دوره‌ای', issueDescription: 'تعویض روغن ۵۰۰ ساعته و آچارکشی زیربندی', stoppedSince: '1403/08/26', estimatedReadyDate: '1403/08/27', operatorName: 'سرویسکار سیار', notes: 'تحویل در شیفت صبح', updatedAt: '1403/08/29' },
+    ],
+    unitReports: [
+      { id: 'ur-140308-1', period: '1403-08', unitName: 'واحد فرآوری و سنگ‌شکن', reportCategory: 'تولید و فرآوری', metricName: 'خوراک ورودی به سنگ‌شکن اولیه', actualValue: 45100, previousValue: 39500, targetValue: 44000, unitLabel: 'تن', status: 'تایید شده', submittedBy: 'سرپرست سنگ‌شکن', notes: 'افزایش راندمان خط خردایش شماره ۱ و ۲', rawFields: { 'شیفت فعال': '۳ شیفت', 'ساعات کارکرد مفید': 612, 'ضریب دسترسی': '۹۴٪' }, updatedAt: '1403/08/29' },
+      { id: 'ur-140308-2', period: '1403-08', unitName: 'واحد حفاری و آتشباری', reportCategory: 'عملیات استخراج', metricName: 'متراژ حفاری چال‌های انفجاری', actualValue: 12850, previousValue: 11400, targetValue: 12500, unitLabel: 'متر', status: 'تایید شده', submittedBy: 'واحد آتشباری معدن', notes: 'تکمیل الگوی حفاری پله ۴ و ۵ شمالی', rawFields: { 'تعداد چال': 1420, 'مصرف ماده منفجره (کیلوگرم)': 18400 }, updatedAt: '1403/08/29' },
+      { id: 'ur-140308-3', period: '1403-08', unitName: 'واحد ایمنی، بهداشت و محیط زیست (HSE)', reportCategory: 'ایمنی و بازرسی', metricName: 'نرخ انطباق ایمنی شیفت‌های معدن', actualValue: 98.5, previousValue: 96.2, targetValue: 98, unitLabel: 'درصد', status: 'تایید شده', submittedBy: 'مسئول HSE', notes: 'صفر بودن حوادث منجر به فوت یا توقف کار', rawFields: { 'تعداد بازرسی': 64, 'مانور ایمنی برگزارشده': 3 }, updatedAt: '1403/08/29' },
+      { id: 'ur-140308-4', period: '1403-08', unitName: 'واحد انبار، تدارکات و بازرگانی', reportCategory: 'پشتیبانی و تامین', metricName: 'نرخ تامین به‌موقع قطعات مصرفی', actualValue: 92, previousValue: 87, targetValue: 95, unitLabel: 'درصد', status: 'در انتظار بررسی', submittedBy: 'واحد انبار مرکزی', notes: 'سفارش‌گذاری فوری پمپ گیربکس لودر 966H', rawFields: { 'تعداد حواله صادره': 318, 'اقلام بحرانی در مسیر': 4 }, updatedAt: '1403/08/29' },
+    ],
+  };
+}
+
+async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> {
+  const clearTables = [
+    'users',
+    'personnel',
+    'job_groups',
+    'job_classifications',
+    'karaneh',
+    'commitments',
+    'payroll',
+    'mining_volumes',
+    'mining_machinery',
+    'unit_reports',
+  ];
+  await db.batch(clearTables.map((t) => db.prepare(`DELETE FROM ${t}`)));
+
+  const stmts: D1PreparedStatement[] = [];
+
+  for (const u of data.users || []) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          u.id,
+          u.username,
+          u.password || '',
+          u.fullName || '',
+          u.role || 'کاربر سفارشی',
+          u.department || '',
+          u.email || '',
+          u.uid || '',
+          JSON.stringify(u.permissions || {}),
+          u.isActive === false ? 0 : 1,
+          u.createdAt || '',
+          u.lastLogin || ''
+        )
+    );
+  }
+
+  for (const p of data.personnel || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)')
+        .bind(p.id, String(p.personnelCode || ''), JSON.stringify(p), p.updatedAt || '')
+    );
+  }
+
+  for (const jg of data.jobGroups || []) {
+    stmts.push(
+      db.prepare('INSERT INTO job_groups (id, data_json) VALUES (?, ?)').bind(jg.id, JSON.stringify(jg))
+    );
+  }
+
+  for (const jc of data.jobClassifications || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
+        .bind(jc.id, String(jc.personnelCode || ''), JSON.stringify(jc))
+    );
+  }
+
+  for (const k of data.karaneh || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+        .bind(k.id, String(k.period || ''), String(k.personnelCode || ''), JSON.stringify(k))
+    );
+  }
+
+  for (const c of data.commitments || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)')
+        .bind(c.id, String(c.personnelCode || ''), JSON.stringify(c))
+    );
+  }
+
+  for (const pr of data.payroll || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+        .bind(pr.id, String(pr.period || ''), String(pr.personnelCode || ''), JSON.stringify(pr))
+    );
+  }
+
+  for (const mv of data.miningVolumes || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
+        .bind(mv.id, String(mv.period || ''), String(mv.unitName || ''), JSON.stringify(mv))
+    );
+  }
+
+  for (const mm of data.miningMachinery || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)')
+        .bind(mm.id, String(mm.machineCode || ''), JSON.stringify(mm))
+    );
+  }
+
+  for (const ur of data.unitReports || []) {
+    stmts.push(
+      db
+        .prepare('INSERT INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
+        .bind(ur.id, String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur))
+    );
+  }
+
+  await batchExecuteChunked(db, stmts);
+  await touchLastSaved(db);
+}
+
+let bootstrapPromise: Promise<void> | null = null;
+
+async function ensureBootstrapped(db: D1Database): Promise<void> {
+  if (!bootstrapPromise) {
+    bootstrapPromise = (async () => {
+      await db.batch([
+        db.prepare('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
+        db.prepare(
+          `CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
+            full_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'کاربر سفارشی',
+            department TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+            uid TEXT NOT NULL DEFAULT '', permissions_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '',
+            last_login TEXT NOT NULL DEFAULT ''
+          )`
+        ),
+        db.prepare('CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT \'\')'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_personnel_code ON personnel(personnel_code)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS job_groups (id TEXT PRIMARY KEY, data_json TEXT NOT NULL)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS job_classifications (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS karaneh (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_karaneh_period ON karaneh(period)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS payroll (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(period)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS mining_volumes (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_volumes_period ON mining_volumes(period)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS mining_machinery (id TEXT PRIMARY KEY, machine_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE TABLE IF NOT EXISTS unit_reports (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_unit_reports_period_unit ON unit_reports(period, unit_name)'),
+      ]);
+
+      const seeded = await db.prepare('SELECT value FROM app_meta WHERE key = ?').bind('seeded_v1').first<{ value: string }>();
+      const userCountRow = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>();
+      if (!seeded && (!userCountRow || Number(userCountRow.cnt) === 0)) {
+        const seed = await buildInitialSeedData();
+        await replaceAllSnapshotInD1(db, seed);
+        await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
+      } else if (!seeded) {
+        await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
+      }
+    })().catch((err) => {
+      bootstrapPromise = null;
+      throw err;
+    });
+  }
+  return bootstrapPromise;
+}
+
+// ================= AUTH MIDDLEWARE HELPER =================
+
+async function authenticate(request: Request, env: Env): Promise<{ user?: any; errorRes?: Response }> {
+  const authHeader = request.headers.get('Authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) {
+    return {
+      errorRes: jsonRes(request, env, { success: false, message: 'احراز هویت انجام نشده است. لطفاً مجدداً وارد شوید.' }, 401),
+    };
+  }
+  const verified = await verifyAuthToken(token, env);
+  if (!verified) {
+    return {
+      errorRes: jsonRes(request, env, { success: false, message: 'نشست کاربری منقضی یا نامعتبر است. لطفاً مجدداً وارد شوید.' }, 401),
+    };
+  }
+  const user = await getUserById(env.DB, verified.uid);
+  if (!user || !user.isActive) {
+    return {
+      errorRes: jsonRes(request, env, { success: false, message: 'حساب کاربری یافت نشد یا غیرفعال شده است.' }, 403),
+    };
+  }
+  return { user };
+}
+
+function forbidden(request: Request, env: Env, message = 'شما مجوز لازم برای انجام این عملیات را ندارید.'): Response {
+  return jsonRes(request, env, { success: false, message }, 403);
+}
+
+// ================= MAIN WORKER FETCH HANDLER =================
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: getCorsHeaders(request, env) });
+    }
+
+    try {
+      await ensureBootstrapped(env.DB);
+      const url = new URL(request.url);
+      let path = url.pathname;
+      if (path.startsWith('/api/')) path = path.slice(4);
+      else if (path === '/api') path = '/';
+
+      const method = request.method.toUpperCase();
+
+      // 1. Health Check (Public)
+      if (method === 'GET' && (path === '/health' || path === '/')) {
+        return jsonRes(request, env, {
+          success: true,
+          engine: 'cloudflare',
+          database: 'd1',
+          service: 'neginparto-api',
+        });
+      }
+
+      // 2. Login (Public)
+      if (method === 'POST' && path === '/auth/login') {
+        const body: any = await request.json().catch(() => ({}));
+        const username = String(body.username || '').trim();
+        const password = String(body.password || '');
+        if (!username || !password) {
+          return jsonRes(request, env, { success: false, message: 'لطفاً نام کاربری و رمز عبور را وارد کنید.' }, 400);
+        }
+        const user = await getUserByUsername(env.DB, username);
+        if (!user) {
+          return jsonRes(request, env, { success: false, message: 'نام کاربری یا رمز عبور اشتباه است.' }, 401);
+        }
+        const check = await verifyPassword(password, String(user.password || ''));
+        if (!check.valid) {
+          return jsonRes(request, env, { success: false, message: 'نام کاربری یا رمز عبور اشتباه است.' }, 401);
+        }
+        if (!user.isActive) {
+          return jsonRes(request, env, { success: false, message: 'حساب کاربری شما غیرفعال شده است. لطفاً با مدیر ارشد تماس بگیرید.' }, 403);
+        }
+        if (check.needsMigration) {
+          user.password = await hashPassword(password);
+        }
+        user.lastLogin = faDateTime();
+        await upsertUser(env.DB, user);
+        const token = await createAuthToken(user, env);
+        return jsonRes(request, env, {
+          success: true,
+          data: { user: sanitizeUser(user), token },
+        });
+      }
+
+      // All remaining routes require valid auth
+      const { user: authUser, errorRes } = await authenticate(request, env);
+      if (errorRes || !authUser) return errorRes!;
+
+      // 3. Session Verify
+      if (method === 'GET' && path === '/auth/me') {
+        return jsonRes(request, env, { success: true, data: sanitizeUser(authUser) });
+      }
+
+      // ================= USERS ROUTES =================
+      if (path === '/users' && method === 'GET') {
+        if (!checkPermission(authUser, 'users', 'view')) {
+          return jsonRes(request, env, { success: true, data: [] });
+        }
+        const users = await getAllUsers(env.DB);
+        return jsonRes(request, env, { success: true, data: users.map(sanitizeUser) });
+      }
+
+      if (path === '/users' && method === 'POST') {
+        if (!checkPermission(authUser, 'users', 'create')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const username = String(body.username || '').trim();
+        const password = String(body.password || '');
+        const fullName = String(body.fullName || '').trim();
+        if (!username || !password || !fullName) {
+          return jsonRes(request, env, { success: false, message: 'تکمیل نام کاربری، رمز عبور و نام الزامی است.' }, 400);
+        }
+        if (String(body.role || '').trim() === 'super_admin' && !isSuperAdminUser(authUser)) {
+          return forbidden(request, env, 'فقط مدیر ارشد سامانه مجاز به ایجاد حساب با نقش super_admin است.');
+        }
+        const dup = await getUserByUsername(env.DB, username);
+        if (dup) {
+          return jsonRes(request, env, { success: false, message: 'این نام کاربری قبلاً در سامانه ثبت شده است.' }, 400);
+        }
+        const perms = body.role === 'super_admin'
+          ? getFullAdminPermissions()
+          : body.permissions && typeof body.permissions === 'object'
+          ? normalizePermissions(body.permissions)
+          : getEmptyPermissions();
+
+        const newUser = {
+          id: genId('u'),
+          username,
+          password: await hashPassword(password),
+          email: body.email ? String(body.email).trim().toLowerCase() : '',
+          fullName,
+          role: body.role || 'کاربر سفارشی',
+          department: body.department || '',
+          permissions: perms,
+          isActive: true,
+          createdAt: faDate(),
+          lastLogin: '',
+        };
+        await upsertUser(env.DB, newUser);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: sanitizeUser(newUser), message: 'کاربر جدید با موفقیت ذخیره شد.' });
+      }
+
+      if (path.startsWith('/users/') && !path.includes('/batch-') && path !== '/users/delete-all') {
+        const id = decodeURIComponent(path.slice('/users/'.length));
+        if (method === 'PUT') {
+          if (!checkPermission(authUser, 'users', 'edit')) return forbidden(request, env);
+          const existing = await getUserById(env.DB, id);
+          if (!existing) return jsonRes(request, env, { success: false, message: 'کاربر یافت نشد.' }, 404);
+          const body: any = await request.json().catch(() => ({}));
+          if (!isSuperAdminUser(authUser) && (isSuperAdminUser(existing) || body.role === 'super_admin')) {
+            return forbidden(request, env, 'تغییر مشخصات یا ارتقای سطح به مدیر ارشد فقط توسط مدیر ارشد مجاز است.');
+          }
+          if (existing.username === 'javadabadiyan' && body.isActive === false) {
+            return jsonRes(request, env, { success: false, message: 'حساب ادمین ارشد (javadabadiyan) قابل غیرفعال‌سازی نیست.' }, 400);
+          }
+          const nextRole = body.role ?? existing.role;
+          const nextPermissions =
+            nextRole === 'super_admin' || existing.username === 'javadabadiyan'
+              ? getFullAdminPermissions()
+              : body.permissions !== undefined
+              ? normalizePermissions(body.permissions)
+              : normalizePermissions(existing.permissions);
+
+          const updated = {
+            ...existing,
+            fullName: body.fullName ?? existing.fullName,
+            email: body.email !== undefined ? String(body.email).trim().toLowerCase() : existing.email,
+            role: nextRole,
+            department: body.department ?? existing.department,
+            permissions: nextPermissions,
+            isActive: body.isActive ?? existing.isActive,
+            password: body.password ? await hashPassword(String(body.password)) : existing.password,
+          };
+          await upsertUser(env.DB, updated);
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, data: sanitizeUser(updated), message: 'اطلاعات و دسترسی‌های کاربر با موفقیت به‌روزرسانی شد.' });
+        }
+
+        if (method === 'DELETE') {
+          if (!checkPermission(authUser, 'users', 'delete')) return forbidden(request, env);
+          const existing = await getUserById(env.DB, id);
+          if (!existing) return jsonRes(request, env, { success: false, message: 'کاربر یافت نشد.' }, 404);
+          if (existing.username === 'javadabadiyan') {
+            return jsonRes(request, env, { success: false, message: 'امکان حذف کاربر ارشد سامانه (javadabadiyan) وجود ندارد.' }, 400);
+          }
+          await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, message: 'کاربر با موفقیت حذف گردید.' });
+        }
+      }
+
+      if (path === '/users/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'users', 'importExcel') && !checkPermission(authUser, 'users', 'create')) {
+          return forbidden(request, env, 'شما مجوز بارگذاری اکسل کاربران را ندارید.');
+        }
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        let added = 0;
+        let updated = 0;
+        for (const row of items) {
+          const username = String(getVal(row, 'username', 'نام کاربری', 'کاربر') || '').trim();
+          if (!username) continue;
+          const existing = await getUserByUsername(env.DB, username);
+          const fullName = String(getVal(row, 'fullName', 'نام و نام خانوادگی', 'نام کامل', 'نام') || username).trim();
+          const role = String(getVal(row, 'role', 'نقش', 'الگوی دسترسی', 'سمت') || existing?.role || 'viewer').trim();
+          const department = String(getVal(row, 'department', 'واحد سازمانی', 'واحد', 'بخش') || existing?.department || '').trim();
+          const rawPass = String(getVal(row, 'password', 'رمز عبور', 'کلمه عبور') || '').trim();
+          const rawActive = String(getVal(row, 'isActive', 'وضعیت', 'فعال') || '').trim();
+          const isActive = rawActive ? !['غیرفعال', 'false', '0', 'خیر'].includes(rawActive) : existing ? existing.isActive : true;
+          const isTargetSuper = role === 'super_admin' || existing?.username === 'javadabadiyan';
+          if (isTargetSuper && !isSuperAdminUser(authUser)) continue;
+
+          if (existing) {
+            const nextUser = {
+              ...existing,
+              fullName,
+              role: existing.username === 'javadabadiyan' ? 'super_admin' : role,
+              department,
+              isActive: existing.username === 'javadabadiyan' ? true : isActive,
+              password: rawPass ? await hashPassword(rawPass) : existing.password,
+              permissions: existing.username === 'javadabadiyan' ? getFullAdminPermissions() : existing.permissions,
+            };
+            await upsertUser(env.DB, nextUser);
+            updated++;
+          } else {
+            const newUser = {
+              id: genId('u'),
+              username,
+              password: await hashPassword(rawPass || '12345678'),
+              fullName,
+              role,
+              department,
+              email: '',
+              uid: '',
+              permissions: role === 'super_admin' ? getFullAdminPermissions() : buildPresetPermissions(role),
+              isActive,
+              createdAt: faDate(),
+              lastLogin: '',
+            };
+            await upsertUser(env.DB, newUser);
+            added++;
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `لیست کاربران با موفقیت وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path === '/users/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'users', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        let deletedCount = 0;
+        for (const id of ids) {
+          const u = await getUserById(env.DB, id);
+          if (u && u.username !== 'javadabadiyan') {
+            await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+            deletedCount++;
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} حساب کاربری حذف شد.` });
+      }
+
+      if (path === '/users/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'users', 'deleteAll')) return forbidden(request, env);
+        const before = await env.DB.prepare('SELECT COUNT(*) as c FROM users WHERE username != ?').bind('javadabadiyan').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM users WHERE username != ?').bind('javadabadiyan').run();
+        const deletedCount = Number(before?.c || 0);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `حساب‌های کاربری به جز مدیر ارشد (${deletedCount} کاربر) پاکسازی شدند.` });
+      }
+
+      // ================= PERSONNEL ROUTES =================
+      if (path === '/personnel' && method === 'GET') {
+        if (!checkPermission(authUser, 'personnel', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        let list = await getJsonRows(env.DB, 'personnel');
+        const hideSalary = !checkPermission(authUser, 'personnel', 'viewSalary');
+        const hideDocs = !checkPermission(authUser, 'personnel', 'documents');
+        if (hideSalary || hideDocs) {
+          list = list.map((p: any) => ({
+            ...p,
+            ...(hideSalary ? { baseSalary: 0 } : {}),
+            ...(hideDocs ? { documents: undefined } : {}),
+          }));
+        }
+        return jsonRes(request, env, { success: true, data: list });
+      }
+
+      if (path === '/personnel' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'create')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        if (!body.personnelCode || (!body.fullName && !body.firstName)) {
+          return jsonRes(request, env, { success: false, message: 'کد پرسنلی و نام پرسنل الزامی است.' }, 400);
+        }
+        const existing = await env.DB.prepare('SELECT id FROM personnel WHERE LOWER(personnel_code) = LOWER(?)')
+          .bind(String(body.personnelCode).trim())
+          .first();
+        if (existing) {
+          return jsonRes(request, env, { success: false, message: 'پرسنلی با این کد پرسنلی قبلاً ثبت شده است.' }, 400);
+        }
+        const fullName = body.fullName || `${body.firstName || ''} ${body.lastName || ''}`.trim();
+        const item = {
+          id: genId('p'),
+          ...body,
+          personnelCode: String(body.personnelCode).trim(),
+          fullName,
+          firstName: body.firstName || fullName.split(' ')[0] || '',
+          lastName: body.lastName || fullName.split(' ').slice(1).join(' ') || '',
+          baseSalary: Number(body.baseSalary || 0),
+          createdAt: faDate(),
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)')
+          .bind(item.id, item.personnelCode, JSON.stringify(item), item.updatedAt)
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: item, message: 'پرونده پرسنلی با موفقیت ذخیره شد.' });
+      }
+
+      if (path.startsWith('/personnel/') && !path.includes('/batch-') && !path.includes('/relatives/') && path !== '/personnel/delete-all') {
+        const id = decodeURIComponent(path.slice('/personnel/'.length));
+        if (method === 'PUT') {
+          if (!checkPermission(authUser, 'personnel', 'edit')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM personnel WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (!row) return jsonRes(request, env, { success: false, message: 'پرسنل یافت نشد.' }, 404);
+          const existing = JSON.parse(row.data_json);
+          const body: any = await request.json().catch(() => ({}));
+          const updated = {
+            ...existing,
+            ...body,
+            fullName: body.fullName || `${body.firstName ?? existing.firstName} ${body.lastName ?? existing.lastName}`.trim(),
+            baseSalary: body.baseSalary !== undefined ? Number(body.baseSalary) : existing.baseSalary,
+            updatedAt: faDate(),
+          };
+          await env.DB.prepare('UPDATE personnel SET personnel_code = ?, data_json = ?, updated_at = ? WHERE id = ?')
+            .bind(String(updated.personnelCode || ''), JSON.stringify(updated), updated.updatedAt, id)
+            .run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, data: updated, message: 'پرونده پرسنلی با موفقیت به‌روزرسانی شد.' });
+        }
+        if (method === 'DELETE') {
+          if (!checkPermission(authUser, 'personnel', 'delete')) return forbidden(request, env);
+          await env.DB.prepare('DELETE FROM personnel WHERE id = ?').bind(id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, message: 'پرونده پرسنلی حذف شد.' });
+        }
+      }
+
+      if (path === '/personnel/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
+
+        const existingList = await getJsonRows(env.DB, 'personnel');
+        const byCode = new Map<string, any>();
+        for (const p of existingList) byCode.set(String(p.personnelCode || '').trim(), p);
+
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const code = String(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
+          if (!code) continue;
+          const existing = byCode.get(code);
+          const firstName = String(getVal(row, 'firstName', 'نام') || '').trim();
+          const lastName = String(getVal(row, 'lastName', 'نام خانوادگي', 'نام خانوادگی') || '').trim();
+          const fullNameRaw = String(getVal(row, 'fullName', 'نام و نام خانوادگي', 'نام و نام خانوادگی') || '').trim();
+          const fullName = `${firstName} ${lastName}`.trim() || fullNameRaw || 'پرسنل';
+
+          const itemData: Record<string, any> = {
+            employeeId: String(getVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') ?? existing?.employeeId ?? ''),
+            personnelCode: code,
+            firstName: firstName || fullName.split(' ')[0] || '',
+            lastName: lastName || fullName.split(' ').slice(1).join(' ') || '',
+            fullName,
+            fatherName: String(getVal(row, 'fatherName', 'نام پدر') ?? existing?.fatherName ?? ''),
+            shenasnamehNumber: String(getVal(row, 'shenasnamehNumber', 'شماره شناسنامه') ?? existing?.shenasnamehNumber ?? ''),
+            nationalId: String(getVal(row, 'nationalId', 'كد ملي', 'کد ملی') ?? existing?.nationalId ?? ''),
+            nationality: String(getVal(row, 'nationality', 'مليت', 'ملیت') ?? existing?.nationality ?? 'ایرانی'),
+            citizenship: String(getVal(row, 'citizenship', 'تابعيت', 'تابعیت') ?? existing?.citizenship ?? 'جمهوری اسلامی ایران'),
+            gender: String(getVal(row, 'gender', 'جنسيت', 'جنسیت') ?? existing?.gender ?? ''),
+            phone: String(getVal(row, 'phone', 'تلفن همراه', 'شماره تماس', 'تلفن') ?? existing?.phone ?? ''),
+            email: String(getVal(row, 'email', 'پست الكترونيك', 'پست الکترونیک', 'ایمیل') ?? existing?.email ?? ''),
+            birthPlace: String(getVal(row, 'birthPlace', 'محل تولد') ?? existing?.birthPlace ?? ''),
+            issuePlace: String(getVal(row, 'issuePlace', 'محل صدور') ?? existing?.issuePlace ?? ''),
+            birthDate: String(getVal(row, 'birthDate', 'تاريخ تولد', 'تاریخ تولد') ?? existing?.birthDate ?? ''),
+            issueDate: String(getVal(row, 'issueDate', 'تاريخ صدور', 'تاریخ صدور') ?? existing?.issueDate ?? ''),
+            maritalStatus: String(getVal(row, 'maritalStatus', 'وضعيت تاهل', 'وضعیت تاهل', 'وضعیت تأهل') ?? existing?.maritalStatus ?? ''),
+            militaryStatus: String(getVal(row, 'militaryStatus', 'وضعيت نظام وظيفه', 'وضعیت نظام وظیفه') ?? existing?.militaryStatus ?? ''),
+            education: String(getVal(row, 'education', 'مدرك تحصيلي', 'مدرک تحصیلی', 'تحصیلات') ?? existing?.education ?? ''),
+            fieldOfStudy: String(getVal(row, 'fieldOfStudy', 'رشته تحصيلي', 'رشته تحصیلی') ?? existing?.fieldOfStudy ?? ''),
+            hireDate: String(getVal(row, 'hireDate', 'تاريخ استخدام', 'تاریخ استخدام') ?? existing?.hireDate ?? '1403/01/01'),
+            workLocation: String(getVal(row, 'workLocation', 'محل خدمت') ?? existing?.workLocation ?? ''),
+            department: String(getVal(row, 'department', 'واحد سازماني', 'واحد سازمانی', 'واحد') ?? existing?.department ?? 'عمومی'),
+            jobTitle: String(getVal(row, 'jobTitle', 'شغل') ?? existing?.jobTitle ?? ''),
+            jobCode: String(getVal(row, 'jobCode', 'كد شغل', 'کد شغل') ?? existing?.jobCode ?? ''),
+            position: String(getVal(row, 'position', 'پست', 'پست و سمت', 'پست سازمانی') ?? existing?.position ?? 'کارشناس'),
+            positionCode: String(getVal(row, 'positionCode', 'كد پست', 'کد پست') ?? existing?.positionCode ?? ''),
+            employmentType: String(getVal(row, 'employmentType', 'نوع استخدام') ?? existing?.employmentType ?? 'قراردادی'),
+            jobGroupId: String(getVal(row, 'jobGroupId') ?? existing?.jobGroupId ?? ''),
+            status: String(getVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
+            baseSalary: Number(getVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
+            notes: String(getVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
+            updatedAt: nowStr,
+          };
+
+          const merged = existing
+            ? { ...existing, ...itemData }
+            : { id: genId('p'), ...itemData, relatives: [], createdAt: nowStr };
+
+          byCode.set(code, merged);
+          if (existing) updated++;
+          else added++;
+
+          stmts.push(
+            env.DB.prepare(
+              'INSERT OR REPLACE INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)'
+            ).bind(merged.id, code, JSON.stringify(merged), nowStr)
+          );
+        }
+
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, {
+          success: true,
+          message: `ورود اطلاعات با موفقیت انجام شد: ${added} نفر جدید اضافه شدند و ${updated} پرونده به‌روزرسانی گردید.`,
+        });
+      }
+
+      if (path === '/personnel/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        if (ids.length === 0) return jsonRes(request, env, { success: false, message: 'موردی برای حذف انتخاب نشده است.' }, 400);
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM personnel WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} پرونده پرسنلی با موفقیت حذف شد.` });
+      }
+
+      if (path === '/personnel/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'deleteAll')) return forbidden(request, env);
+        const c = await env.DB.prepare('SELECT COUNT(*) as c FROM personnel').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM personnel').run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول پرسنل (${Number(c?.c || 0)} پرونده) با موفقیت پاکسازی شد.` });
+      }
+
+      if (path === '/personnel/relatives/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const allPersonnel = await getJsonRows(env.DB, 'personnel');
+        let added = 0;
+        let updated = 0;
+        let unmatched = 0;
+        const touchedParents = new Map<string, any>();
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const pCode = String(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
+          const pEmpId = String(getVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') || '').trim();
+          const pNatId = String(getVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
+          const pName = normKey(String(getVal(row, 'personnelName', 'نام کارمند', 'نام پرسنل', 'نام و نام خانوادگی کارمند') || ''));
+
+          const parent = allPersonnel.find(
+            (p: any) =>
+              (pCode && String(p.personnelCode).trim() === pCode) ||
+              (pEmpId && String(p.employeeId || '').trim() === pEmpId) ||
+              (pNatId && String(p.nationalId || '').trim() === pNatId) ||
+              (pName && normKey(String(p.fullName || '')) === pName)
+          );
+          if (!parent) {
+            unmatched++;
+            continue;
+          }
+          const relFullName = String(getVal(row, 'fullName', 'نام و نام خانوادگی بستگان', 'نام بستگان', 'نام و نام خانوادگی') || '').trim();
+          if (!relFullName) continue;
+          const relation = String(getVal(row, 'relation', 'نسبت', 'نسبت با کارمند') || 'سایر').trim();
+          const relNationalId = String(getVal(row, 'nationalId', 'کد ملی بستگان', 'كد ملي', 'کد ملی') || '').trim();
+          const rawDep = String(getVal(row, 'isDependent', 'تحت تکفل', 'تحت تکفل؟') || '').trim();
+          const rawIns = String(getVal(row, 'insuranceCovered', 'بیمه تکمیلی', 'مشمول بیمه', 'بیمه') || '').trim();
+          const isDependent = rawDep === '' ? true : !['خیر', 'نه', 'false', '0', 'ندارد'].includes(rawDep);
+          const insuranceCovered = rawIns === '' ? isDependent : !['خیر', 'نه', 'false', '0', 'ندارد'].includes(rawIns);
+
+          if (!Array.isArray(parent.relatives)) parent.relatives = [];
+          const existingIdx = parent.relatives.findIndex(
+            (r: any) =>
+              (relNationalId && String(r.nationalId || '').trim() === relNationalId) ||
+              (normKey(String(r.fullName || '')) === normKey(relFullName) && normKey(String(r.relation || '')) === normKey(relation))
+          );
+
+          const relPayload = {
+            id: existingIdx >= 0 ? parent.relatives[existingIdx].id : genId('rel'),
+            personnelId: parent.id,
+            personnelCode: parent.personnelCode,
+            personnelName: parent.fullName,
+            fullName: relFullName,
+            relation,
+            nationalId: relNationalId,
+            shenasnamehNumber: String(getVal(row, 'shenasnamehNumber', 'شماره شناسنامه') || ''),
+            fatherName: String(getVal(row, 'fatherName', 'نام پدر') || ''),
+            birthDate: String(getVal(row, 'birthDate', 'تاریخ تولد', 'تاريخ تولد') || ''),
+            gender: String(getVal(row, 'gender', 'جنسیت', 'جنسيت') || ''),
+            phone: String(getVal(row, 'phone', 'تلفن همراه', 'شماره تماس') || ''),
+            education: String(getVal(row, 'education', 'تحصیلات', 'مدرک تحصیلی') || ''),
+            isDependent,
+            insuranceCovered,
+            notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
+            updatedAt: nowStr,
+            createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : nowStr,
+          };
+
+          if (existingIdx >= 0) {
+            parent.relatives[existingIdx] = { ...parent.relatives[existingIdx], ...relPayload };
+            updated++;
+          } else {
+            parent.relatives.push(relPayload);
+            added++;
+          }
+          parent.updatedAt = nowStr;
+          touchedParents.set(parent.id, parent);
+        }
+
+        const stmts = Array.from(touchedParents.values()).map((p) =>
+          env.DB.prepare('UPDATE personnel SET data_json = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(p), p.updatedAt, p.id)
+        );
+        if (stmts.length > 0) await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, {
+          success: true,
+          added,
+          updated,
+          unmatched,
+          message: `اطلاعات بستگان با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی${unmatched > 0 ? `، ${unmatched} ردیف بدون تطابق کد پرسنلی` : ''}).`,
+        });
+      }
+
+      if (path === '/personnel/relatives/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'personnel', 'deleteAll')) return forbidden(request, env);
+        const allPersonnel = await getJsonRows(env.DB, 'personnel');
+        let deletedCount = 0;
+        const stmts: D1PreparedStatement[] = [];
+        for (const p of allPersonnel) {
+          if (Array.isArray(p.relatives) && p.relatives.length > 0) {
+            deletedCount += p.relatives.length;
+            p.relatives = [];
+            stmts.push(env.DB.prepare('UPDATE personnel SET data_json = ? WHERE id = ?').bind(JSON.stringify(p), p.id));
+          }
+        }
+        if (stmts.length > 0) await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `تمامی اطلاعات بستگان پرسنل (${deletedCount} رکورد) پاکسازی شد.` });
+      }
+
+      // ================= KARANEH ROUTES =================
+      if (path === '/karaneh' && method === 'GET') {
+        if (!checkPermission(authUser, 'karaneh', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        const period = url.searchParams.get('period');
+        const list = period
+          ? await getJsonRows(env.DB, 'karaneh', 'period = ?', [period])
+          : await getJsonRows(env.DB, 'karaneh');
+        return jsonRes(request, env, { success: true, data: list });
+      }
+
+      if (path === '/karaneh/comparison' && method === 'GET') {
+        if (!checkPermission(authUser, 'karaneh', 'view')) return forbidden(request, env);
+        const currentPeriod = url.searchParams.get('currentPeriod') || '1403-08';
+        const previousPeriod = url.searchParams.get('previousPeriod') || '1403-07';
+        const currentRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [currentPeriod]);
+        const previousRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [previousPeriod]);
+        const prevMap = new Map<string, any>();
+        for (const prev of previousRecords) prevMap.set(String(prev.personnelCode).trim(), prev);
+
+        const comparisonRows = currentRecords.map((curr: any) => {
+          const prev = prevMap.get(String(curr.personnelCode).trim());
+          const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
+          const currFinal = Number(curr.finalKaraneh || 0);
+          const diffAmount = currFinal - prevFinal;
+          const diffPercent = prevFinal > 0 ? Number(((diffAmount / prevFinal) * 100).toFixed(1)) : currFinal > 0 ? 100 : 0;
+          const trend = !prev ? 'new' : diffAmount > 0 ? 'increase' : diffAmount < 0 ? 'decrease' : 'unchanged';
+          return {
+            id: curr.id,
+            personnelId: curr.personnelId,
+            personnelCode: curr.personnelCode,
+            fullName: curr.fullName,
+            department: curr.department,
+            position: curr.position,
+            currentKaraneh: currFinal,
+            previousKaraneh: prevFinal,
+            diffAmount,
+            diffPercent,
+            trend,
+            notes: curr.notes || '',
+          };
+        });
+        const totalCurrent = comparisonRows.reduce((s, r) => s + r.currentKaraneh, 0);
+        const totalPrevious = comparisonRows.reduce((s, r) => s + r.previousKaraneh, 0);
+        const totalDiff = totalCurrent - totalPrevious;
+        const overallGrowthPercent = totalPrevious > 0 ? Number(((totalDiff / totalPrevious) * 100).toFixed(1)) : 0;
+        return jsonRes(request, env, {
+          success: true,
+          data: {
+            currentPeriod,
+            previousPeriod,
+            comparisonRows,
+            summary: {
+              totalEmployees: comparisonRows.length,
+              totalCurrent,
+              totalPrevious,
+              totalDiff,
+              overallGrowthPercent,
+              countIncreased: comparisonRows.filter((r) => r.trend === 'increase').length,
+              countDecreased: comparisonRows.filter((r) => r.trend === 'decrease').length,
+              countUnchanged: comparisonRows.filter((r) => r.trend === 'unchanged').length,
+              countNew: comparisonRows.filter((r) => r.trend === 'new').length,
+            },
+          },
+        });
+      }
+
+      if (path === '/karaneh' && method === 'POST') {
+        const kData: any = await request.json().catch(() => ({}));
+        if (!checkPermission(authUser, 'karaneh', kData.id ? 'edit' : 'create')) return forbidden(request, env);
+        if (!kData.personnelCode || !kData.period) {
+          return jsonRes(request, env, { success: false, message: 'کد پرسنلی و دوره کارانه الزامی است.' }, 400);
+        }
+        const existingRow = await env.DB.prepare('SELECT id FROM karaneh WHERE period = ? AND TRIM(personnel_code) = ?')
+          .bind(kData.period, String(kData.personnelCode).trim())
+          .first<{ id: string }>();
+        const baseKaraneh = Number(kData.baseKaraneh || 0);
+        const overtimeBonus = Number(kData.overtimeBonus || 0);
+        const deductions = Number(kData.deductions || 0);
+        const finalKaraneh = kData.finalKaraneh !== undefined ? Number(kData.finalKaraneh) : baseKaraneh + overtimeBonus - deductions;
+        const record = {
+          id: existingRow?.id || genId('k'),
+          personnelId: kData.personnelId || '',
+          personnelCode: String(kData.personnelCode).trim(),
+          fullName: kData.fullName || 'پرسنل',
+          department: kData.department || 'عمومی',
+          position: kData.position || '',
+          period: kData.period,
+          baseKaraneh,
+          overtimeBonus,
+          deductions,
+          finalKaraneh,
+          notes: kData.notes || '',
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+          .bind(record.id, record.period, record.personnelCode, JSON.stringify(record))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: record, message: 'کارانه پرسنل با موفقیت ثبت شد.' });
+      }
+
+      if (path === '/karaneh/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'karaneh', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const period = body.period;
+        const items = Array.isArray(body.items) ? body.items : [];
+        if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره کارانه و لیست رکوردها الزامی است.' }, 400);
+
+        const existingKaraneh = await getJsonRows(env.DB, 'karaneh', 'period = ?', [period]);
+        const byCode = new Map<string, any>();
+        for (const k of existingKaraneh) byCode.set(String(k.personnelCode).trim(), k);
+        const allPersonnel = await getJsonRows(env.DB, 'personnel');
+        const persMap = new Map<string, any>();
+        for (const p of allPersonnel) persMap.set(String(p.personnelCode).trim(), p);
+
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const code = String(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
+          if (!code) continue;
+          const matchingP = persMap.get(code);
+          const prev = byCode.get(code);
+          const baseKaraneh = parseNum(getVal(row, 'baseKaraneh', 'کارانه پایه', 'کارانه پایه (ریال)'));
+          const overtimeBonus = parseNum(getVal(row, 'overtimeBonus', 'پاداش', 'پاداش و اضافه‌کار', 'پاداش مازاد'));
+          const deductions = parseNum(getVal(row, 'deductions', 'کسورات'));
+          const finalRaw = getVal(row, 'finalKaraneh', 'کارانه نهایی', 'کارانه نهایی (ریال)');
+          const finalKaraneh = finalRaw !== undefined ? parseNum(finalRaw) : baseKaraneh + overtimeBonus - deductions;
+
+          const record = {
+            id: prev?.id || genId('k'),
+            personnelId: matchingP?.id || prev?.personnelId || '',
+            personnelCode: code,
+            fullName: String(getVal(row, 'fullName', 'نام و نام خانوادگی') || matchingP?.fullName || prev?.fullName || 'پرسنل'),
+            department: String(getVal(row, 'department', 'واحد سازمانی', 'واحد') || matchingP?.department || prev?.department || 'عمومی'),
+            position: String(getVal(row, 'position', 'پست', 'سمت') || matchingP?.position || prev?.position || ''),
+            period,
+            baseKaraneh,
+            overtimeBonus,
+            deductions,
+            finalKaraneh,
+            notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
+            updatedAt: nowStr,
+          };
+          if (prev) updated++;
+          else added++;
+          byCode.set(code, record);
+          stmts.push(
+            env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+              .bind(record.id, period, code, JSON.stringify(record))
+          );
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `لیست کارانه دوره ${period} با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path.startsWith('/karaneh/') && method === 'DELETE') {
+        if (!checkPermission(authUser, 'karaneh', 'delete')) return forbidden(request, env);
+        const id = decodeURIComponent(path.slice('/karaneh/'.length));
+        await env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'رکورد کارانه حذف شد.' });
+      }
+
+      if (path === '/karaneh/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'karaneh', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} رکورد کارانه حذف شد.` });
+      }
+
+      if (path === '/karaneh/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'karaneh', 'deleteAll')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        let deletedCount = 0;
+        if (body.period) {
+          const c = await env.DB.prepare('SELECT COUNT(*) as c FROM karaneh WHERE period = ?').bind(body.period).first<{ c: number }>();
+          deletedCount = Number(c?.c || 0);
+          await env.DB.prepare('DELETE FROM karaneh WHERE period = ?').bind(body.period).run();
+        } else {
+          const c = await env.DB.prepare('SELECT COUNT(*) as c FROM karaneh').first<{ c: number }>();
+          deletedCount = Number(c?.c || 0);
+          await env.DB.prepare('DELETE FROM karaneh').run();
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} رکورد کارانه پاکسازی شد.` });
+      }
+
+      // ================= JOB GROUPS ROUTES =================
+      if (path === '/job-groups' && method === 'GET') {
+        if (!checkPermission(authUser, 'jobGroups', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        return jsonRes(request, env, { success: true, data: await getJsonRows(env.DB, 'job_groups') });
+      }
+
+      if (path === '/job-groups' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'create')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        if (!body.code || !body.title) return jsonRes(request, env, { success: false, message: 'کد و عنوان گروه شغلی الزامی است.' }, 400);
+        const item = {
+          id: genId('jg'),
+          ...body,
+          grade: Number(body.grade || 1),
+          minBaseSalary: Number(body.minBaseSalary || 0),
+          maxBaseSalary: Number(body.maxBaseSalary || 0),
+          maxKaranehCeiling: Number(body.maxKaranehCeiling || 0),
+          requiredExperienceYears: Number(body.requiredExperienceYears || 0),
+        };
+        await env.DB.prepare('INSERT INTO job_groups (id, data_json) VALUES (?, ?)').bind(item.id, JSON.stringify(item)).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: item, message: 'گروه شغلی جدید با موفقیت ثبت شد.' });
+      }
+
+      if (path.startsWith('/job-groups/') && !path.includes('/batch-') && path !== '/job-groups/delete-all') {
+        const id = decodeURIComponent(path.slice('/job-groups/'.length));
+        if (method === 'PUT') {
+          if (!checkPermission(authUser, 'jobGroups', 'edit')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM job_groups WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (!row) return jsonRes(request, env, { success: false, message: 'گروه شغلی یافت نشد.' }, 404);
+          const updated = { ...JSON.parse(row.data_json), ...(await request.json().catch(() => ({}))) };
+          await env.DB.prepare('UPDATE job_groups SET data_json = ? WHERE id = ?').bind(JSON.stringify(updated), id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, data: updated, message: 'گروه شغلی به‌روزرسانی شد.' });
+        }
+        if (method === 'DELETE') {
+          if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+          await env.DB.prepare('DELETE FROM job_groups WHERE id = ?').bind(id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, message: 'گروه شغلی حذف شد.' });
+        }
+      }
+
+      if (path === '/job-groups/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        if (ids.length === 0) return jsonRes(request, env, { success: false, message: 'موردی برای حذف انتخاب نشده است.' }, 400);
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM job_groups WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} گروه شغلی حذف شد.` });
+      }
+
+      if (path === '/job-groups/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'deleteAll')) return forbidden(request, env);
+        const c = await env.DB.prepare('SELECT COUNT(*) as c FROM job_groups').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM job_groups').run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول گروه‌های شغلی (${Number(c?.c || 0)} گروه) پاکسازی شد.` });
+      }
+
+      // ================= JOB CLASSIFICATIONS ROUTES =================
+      if (path === '/job-classifications' && method === 'GET') {
+        if (!checkPermission(authUser, 'jobGroups', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        return jsonRes(request, env, { success: true, data: await getJsonRows(env.DB, 'job_classifications') });
+      }
+
+      if (path === '/job-classifications' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'create')) return forbidden(request, env);
+        const b: any = await request.json().catch(() => ({}));
+        if (!b.personnelCode && !b.nationalId && !b.lastName) {
+          return jsonRes(request, env, { success: false, message: 'کد پرسنلی یا کد ملی یا نام خانوادگی الزامی است.' }, 400);
+        }
+        const record = {
+          id: genId('jc'),
+          personnelCode: String(b.personnelCode || '').trim(),
+          firstName: String(b.firstName || '').trim(),
+          lastName: String(b.lastName || '').trim(),
+          workLocation: String(b.workLocation || '').trim(),
+          department: String(b.department || '').trim(),
+          nationalId: String(b.nationalId || '').trim(),
+          education: String(b.education || '').trim(),
+          hireDate: String(b.hireDate || '').trim(),
+          hireMonth: String(b.hireMonth || '').trim(),
+          miningExperienceDays: String(b.miningExperienceDays || '').trim(),
+          totalInsuranceHistory: String(b.totalInsuranceHistory || '').trim(),
+          miningExperience: String(b.miningExperience || '').trim(),
+          nonMiningExperience: String(b.nonMiningExperience || '').trim(),
+          jobGroup: String(b.jobGroup || '').trim(),
+          groupGapFrom1405: String(b.groupGapFrom1405 || '').trim(),
+          nextGroupGap: String(b.nextGroupGap || '').trim(),
+          jobTitle: String(b.jobTitle || '').trim(),
+          position: String(b.position || '').trim(),
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
+          .bind(record.id, record.personnelCode, JSON.stringify(record))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: record, message: 'ردیف طرح طبقه‌بندی مشاغل با موفقیت ثبت شد.' });
+      }
+
+      if (path.startsWith('/job-classifications/') && !path.includes('/batch-') && path !== '/job-classifications/delete-all') {
+        const id = decodeURIComponent(path.slice('/job-classifications/'.length));
+        if (method === 'PUT') {
+          if (!checkPermission(authUser, 'jobGroups', 'edit')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM job_classifications WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (!row) return jsonRes(request, env, { success: false, message: 'رکورد طبقه‌بندی یافت نشد.' }, 404);
+          const updated = { ...JSON.parse(row.data_json), ...(await request.json().catch(() => ({}))), updatedAt: faDate() };
+          await env.DB.prepare('UPDATE job_classifications SET personnel_code = ?, data_json = ? WHERE id = ?')
+            .bind(String(updated.personnelCode || ''), JSON.stringify(updated), id)
+            .run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, data: updated, message: 'رکورد طرح طبقه‌بندی مشاغل به‌روزرسانی شد.' });
+        }
+        if (method === 'DELETE') {
+          if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+          await env.DB.prepare('DELETE FROM job_classifications WHERE id = ?').bind(id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, message: 'رکورد طبقه‌بندی مشاغل حذف شد.' });
+        }
+      }
+
+      if (path === '/job-classifications/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const existing = await getJsonRows(env.DB, 'job_classifications');
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const code = String(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
+          const nationalId = String(getVal(row, 'nationalId', 'کد ملی', 'كد ملي') || '').trim();
+          const firstName = String(getVal(row, 'firstName', 'نام') || '').trim();
+          const lastName = String(getVal(row, 'lastName', 'نام خانوادگی', 'نام خانوادگي') || '').trim();
+          if (!code && !nationalId && !lastName) continue;
+
+          const prev = existing.find(
+            (r: any) =>
+              (code && String(r.personnelCode).trim() === code) ||
+              (nationalId && String(r.nationalId).trim() === nationalId)
+          );
+          const rec = {
+            id: prev?.id || genId('jc'),
+            personnelCode: code,
+            firstName,
+            lastName,
+            workLocation: String(getVal(row, 'workLocation', 'محل خدمت') || '').trim(),
+            department: String(getVal(row, 'department', 'واحد', 'واحد سازمانی') || '').trim(),
+            nationalId,
+            education: String(getVal(row, 'education', 'مدرک تحصیلی', 'مدرك تحصيلي') || '').trim(),
+            hireDate: String(getVal(row, 'hireDate', 'تاریخ استخدام', 'تاريخ استخدام') || '').trim(),
+            hireMonth: String(getVal(row, 'hireMonth', 'ماه استخدام') || '').trim(),
+            miningExperienceDays: String(getVal(row, 'miningExperienceDays', 'سابقه معدنی به روز') || '').trim(),
+            totalInsuranceHistory: String(getVal(row, 'totalInsuranceHistory', 'سابقه بیمه کلی') || '').trim(),
+            miningExperience: String(getVal(row, 'miningExperience', 'سابقه معدنی') || '').trim(),
+            nonMiningExperience: String(getVal(row, 'nonMiningExperience', 'سابقه غیرمعدنی') || '').trim(),
+            jobGroup: String(getVal(row, 'jobGroup', 'گروه شغلی') || '').trim(),
+            groupGapFrom1405: String(getVal(row, 'groupGapFrom1405', 'فاصله گروه از 1405 به بعد', 'فاصله گروه از ۱۴۰۵ به بعد') || '').trim(),
+            nextGroupGap: String(getVal(row, 'nextGroupGap', 'فاصله گروه بعدی') || '').trim(),
+            jobTitle: String(getVal(row, 'jobTitle', 'شغل') || '').trim(),
+            position: String(getVal(row, 'position', 'پست', 'سمت') || '').trim(),
+            updatedAt: nowStr,
+          };
+          if (prev) updated++;
+          else added++;
+          stmts.push(
+            env.DB.prepare('INSERT OR REPLACE INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
+              .bind(rec.id, rec.personnelCode, JSON.stringify(rec))
+          );
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `جدول طرح طبقه‌بندی مشاغل با موفقیت در دیتابیس ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path === '/job-classifications/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM job_classifications WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} رکورد طبقه‌بندی مشاغل حذف شد.` });
+      }
+
+      if (path === '/job-classifications/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'jobGroups', 'deleteAll')) return forbidden(request, env);
+        const c = await env.DB.prepare('SELECT COUNT(*) as c FROM job_classifications').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM job_classifications').run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `جدول طرح طبقه‌بندی مشاغل (${Number(c?.c || 0)} رکورد) پاکسازی شد.` });
+      }
+
+      // ================= COMMITMENTS ROUTES =================
+      if (path === '/commitments' && method === 'GET') {
+        if (!checkPermission(authUser, 'commitments', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        return jsonRes(request, env, { success: true, data: await getJsonRows(env.DB, 'commitments') });
+      }
+
+      if (path === '/commitments' && method === 'POST') {
+        if (!checkPermission(authUser, 'commitments', 'create')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        if (!body.personnelName || !body.commitmentType) {
+          return jsonRes(request, env, { success: false, message: 'نام پرسنل و نوع تعهد الزامی است.' }, 400);
+        }
+        const item = {
+          id: genId('cmt'),
+          ...body,
+          amount: Number(body.amount || 0),
+          previouslyTakenAmount: Number(body.previouslyTakenAmount || 0),
+          maxAllowedAmount: Number(body.maxAllowedAmount || 0),
+          isArchived: Boolean(body.isArchived),
+        };
+        await env.DB.prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)')
+          .bind(item.id, String(item.personnelCode || ''), JSON.stringify(item))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: item, message: 'سند تعهد پرسنلی با موفقیت ذخیره شد.' });
+      }
+
+      if (path.startsWith('/commitments/') && !path.includes('/batch-') && path !== '/commitments/delete-all') {
+        const id = decodeURIComponent(path.slice('/commitments/'.length));
+        if (method === 'PUT') {
+          const body: any = await request.json().catch(() => ({}));
+          const isArchiveToggle = body.isArchived !== undefined && Object.keys(body).length <= 3;
+          if (!checkPermission(authUser, 'commitments', isArchiveToggle ? 'archive' : 'edit') && !checkPermission(authUser, 'commitments', 'edit')) {
+            return forbidden(request, env);
+          }
+          const row = await env.DB.prepare('SELECT data_json FROM commitments WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (!row) return jsonRes(request, env, { success: false, message: 'تعهد یافت نشد.' }, 404);
+          const prev = JSON.parse(row.data_json);
+          const updated = {
+            ...prev,
+            ...body,
+            amount: body.amount !== undefined ? Number(body.amount) : prev.amount,
+            previouslyTakenAmount: body.previouslyTakenAmount !== undefined ? Number(body.previouslyTakenAmount) : prev.previouslyTakenAmount,
+            maxAllowedAmount: body.maxAllowedAmount !== undefined ? Number(body.maxAllowedAmount) : prev.maxAllowedAmount,
+          };
+          await env.DB.prepare('UPDATE commitments SET personnel_code = ?, data_json = ? WHERE id = ?')
+            .bind(String(updated.personnelCode || ''), JSON.stringify(updated), id)
+            .run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, data: updated, message: 'سند تعهد به‌روزرسانی شد.' });
+        }
+        if (method === 'DELETE') {
+          if (!checkPermission(authUser, 'commitments', 'delete')) return forbidden(request, env);
+          await env.DB.prepare('DELETE FROM commitments WHERE id = ?').bind(id).run();
+          await touchLastSaved(env.DB);
+          return jsonRes(request, env, { success: true, message: 'سند تعهد حذف شد.' });
+        }
+      }
+
+      if (path === '/commitments/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'commitments', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const allPers = await getJsonRows(env.DB, 'personnel');
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+
+        for (const row of items) {
+          const code = String(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
+          const matchingP = allPers.find((p: any) => String(p.personnelCode).trim() === code);
+          const name = String(getVal(row, 'personnelName', 'نام و نام خانوادگی') || matchingP?.fullName || '').trim();
+          const type = String(getVal(row, 'commitmentType', 'نوع تعهد') || 'تعهد خدمت').trim();
+          if (!name) continue;
+          const rec = {
+            id: genId('cmt'),
+            personnelId: matchingP?.id || '',
+            personnelCode: code,
+            personnelName: name,
+            commitmentType: type,
+            amount: parseNum(getVal(row, 'amount', 'مبلغ تعهد فعلی', 'مبلغ تعهد', 'مبلغ')),
+            previouslyTakenAmount: parseNum(getVal(row, 'previouslyTakenAmount', 'مبلغ قبلی', 'مبلغی که قبلاً گرفته')),
+            maxAllowedAmount: parseNum(getVal(row, 'maxAllowedAmount', 'سقف کل مجاز', 'سقف مجاز')),
+            startDate: String(getVal(row, 'startDate', 'تاریخ شروع') || faDate()),
+            endDate: String(getVal(row, 'endDate', 'تاریخ پایان') || ''),
+            status: String(getVal(row, 'status', 'وضعیت') || 'جاری و معتبر'),
+            isArchived: false,
+            guarantorName: String(getVal(row, 'guarantorName', 'ضامن') || '-'),
+            notes: String(getVal(row, 'notes', 'توضیحات') || ''),
+          };
+          stmts.push(env.DB.prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(rec.id, code, JSON.stringify(rec)));
+          added++;
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `${added} سند تعهد پرسنلی با موفقیت ذخیره شد.` });
+      }
+
+      if (path === '/commitments/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'commitments', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM commitments WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} سند تعهد پرسنلی حذف شد.` });
+      }
+
+      if (path === '/commitments/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'commitments', 'deleteAll')) return forbidden(request, env);
+        const c = await env.DB.prepare('SELECT COUNT(*) as c FROM commitments').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM commitments').run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول تعهدات پرسنلی (${Number(c?.c || 0)} سند) پاکسازی شد.` });
+      }
+
+      // ================= PAYROLL ROUTES =================
+      if (path === '/payroll' && method === 'GET') {
+        if (!checkPermission(authUser, 'payroll', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        const period = url.searchParams.get('period');
+        const list = period ? await getJsonRows(env.DB, 'payroll', 'period = ?', [period]) : await getJsonRows(env.DB, 'payroll');
+        return jsonRes(request, env, { success: true, data: list });
+      }
+
+      if (path === '/payroll/batch-import' && method === 'POST') {
+        if (!checkPermission(authUser, 'payroll', 'importExcel')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const period = body.period;
+        const useRowYearMonth = body.useRowYearMonth !== false;
+        const items = Array.isArray(body.items) ? body.items : [];
+        if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره و لیست ردیف‌های حقوق الزامی است.' }, 400);
+
+        const allPers = await getJsonRows(env.DB, 'personnel');
+        const persByCode = new Map<string, any>();
+        for (const p of allPers) persByCode.set(String(p.personnelCode).trim(), p);
+
+        const existingPay = await getJsonRows(env.DB, 'payroll');
+        const payMap = new Map<string, any>();
+        for (const r of existingPay) payMap.set(`${r.period}__${String(r.personnelCode).trim()}`, r);
+
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const code = String(getVal(row, 'كد پرسنلي', 'کد پرسنلی', 'personnelCode') || '').trim();
+          if (!code) continue;
+          const rawYm = getVal(row, 'سال/ماه', 'yearMonthLabel');
+          const targetPeriod = useRowYearMonth ? parseYearMonth(rawYm, String(period)) : String(period);
+          const firstName = String(getVal(row, 'نام', 'firstName') || '').trim();
+          const lastName = String(getVal(row, 'نام خانوادگي', 'نام خانوادگی', 'lastName') || '').trim();
+          const fullNameRaw = String(getVal(row, 'نام و نام خانوادگي', 'نام و نام خانوادگی', 'fullName') || '').trim();
+          const matchingP = persByCode.get(code);
+          const fullName = fullNameRaw || `${firstName} ${lastName}`.trim() || matchingP?.fullName || 'پرسنل';
+          const key = `${targetPeriod}__${code}`;
+          const prev = payMap.get(key);
+
+          const record = {
+            id: prev?.id || genId('pay'),
+            period: targetPeriod,
+            yearMonthLabel: String(rawYm || targetPeriod.replace('-', '/')),
+            employeeId: String(getVal(row, 'شناسه كارمند', 'شناسه کارمند', 'employeeId') || ''),
+            personnelCode: code,
+            firstName,
+            lastName,
+            fullName,
+            nationalId: String(getVal(row, 'كد ملي', 'کد ملی', 'nationalId') || matchingP?.nationalId || ''),
+            workLocation: String(getVal(row, 'محل خدمت', 'workLocation') || ''),
+            department: String(getVal(row, 'واحد سازماني', 'واحد سازمانی', 'واحد', 'department') || matchingP?.department || ''),
+            jobTitle: String(getVal(row, 'شغل', 'jobTitle') || ''),
+            position: String(getVal(row, 'پست', 'پست سازمانی', 'position') || matchingP?.position || ''),
+            jobGroupCode: String(getVal(row, 'کد گروه شغلي', 'کد گروه شغلی', 'jobGroupCode') || ''),
+            jobGroupTitle: String(getVal(row, 'عنوان گروه شغلي', 'عنوان گروه شغلی', 'jobGroupTitle') || ''),
+            employmentType: String(getVal(row, 'نوع استخدام', 'employmentType') || ''),
+            effectiveDays: parseNum(getVal(row, 'کارکرد موثر', 'effectiveDays')),
+            netPayable: parseNum(getVal(row, 'خالص پرداختی', 'netPayable')),
+            totalBenefits: parseNum(getVal(row, 'جمع مزایا', 'totalBenefits')),
+            overtimeAmount: parseNum(getVal(row, 'اضافه کاری', 'overtimeAmount')),
+            fridayWorkAmount: parseNum(getVal(row, 'جمعه کاری', 'fridayWorkAmount')),
+            missionAmount: parseNum(getVal(row, 'ماموریت ریالی', 'missionAmount')),
+            bonusAmount: parseNum(getVal(row, 'پاداش', 'پاداشِ', 'bonusAmount')),
+            incentiveAmount: parseNum(getVal(row, 'تشویقی', 'incentiveAmount')),
+            otherBenefits: parseNum(getVal(row, 'سایر مزایا', 'otherBenefits')),
+            arrearsAmount: parseNum(getVal(row, 'مابه التفاوت', 'arrearsAmount')),
+            advanceAmount: parseNum(getVal(row, 'مساعده', 'advanceAmount')),
+            totalDeductions: parseNum(getVal(row, 'جمع کسور', 'totalDeductions')),
+            taxAmount: parseNum(getVal(row, 'مالیات', 'taxAmount')),
+            salaryTaxAmount: parseNum(getVal(row, 'مالیات حقوق', 'salaryTaxAmount')),
+            jobWage: parseNum(getVal(row, 'مزد شغل', 'jobWage')),
+            totalOrderFactors: parseNum(getVal(row, 'جمع عوامل حکمی', 'جمع عوامل حكمي', 'totalOrderFactors')),
+            baseSalaryOrder: parseNum(getVal(row, 'حقوق پایه(حكم-اصلي)', 'حقوق پایه(حکم-اصلی)', 'baseSalaryOrder')),
+            overtimeHours: parseNum(getVal(row, 'ساعت اضافه کاری(کارکرد)', 'overtimeHours')),
+            fridayWorkHours: parseNum(getVal(row, 'ساعت جمعه کاری(کارکرد)', 'fridayWorkHours')),
+            costCenterCode: String(getVal(row, 'مرکز هزینه(كد تفصيل)', 'مرکز هزینه(کد تفصیل)') || ''),
+            costCenterTitle: String(getVal(row, 'مرکز هزینه(عنوان تفصيل)', 'مرکز هزینه(عنوان تفصیل)') || ''),
+            projectCode: String(getVal(row, 'پروژه(كد تفصيل)', 'پروژه(کد تفصیل)') || ''),
+            projectTitle: String(getVal(row, 'پروژه(عنوان تفصيل)', 'پروژه(عنوان تفصیل)') || ''),
+            bankName: String(getVal(row, 'نام بانک') || ''),
+            bankAccount: String(getVal(row, 'شماره حساب') || ''),
+            rawFields: row,
+            updatedAt: nowStr,
+          };
+          if (prev) updated++;
+          else added++;
+          payMap.set(key, record);
+          stmts.push(
+            env.DB.prepare('INSERT OR REPLACE INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+              .bind(record.id, targetPeriod, code, JSON.stringify(record))
+          );
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, {
+          success: true,
+          message: `فایل حقوق با موفقیت در دیتابیس ذخیره شد (${added} رکورد جدید، ${updated} رکورد به‌روزرسانی گردید).`,
+        });
+      }
+
+      if (path.startsWith('/payroll/by-period/') && method === 'DELETE') {
+        if (!checkPermission(authUser, 'payroll', 'delete')) return forbidden(request, env);
+        const period = decodeURIComponent(path.slice('/payroll/by-period/'.length));
+        await env.DB.prepare('DELETE FROM payroll WHERE period = ?').bind(period).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `لیست حقوق دوره ${period} حذف شد.` });
+      }
+
+      if (path.startsWith('/payroll/') && method === 'DELETE') {
+        if (!checkPermission(authUser, 'payroll', 'delete')) return forbidden(request, env);
+        const id = decodeURIComponent(path.slice('/payroll/'.length));
+        await env.DB.prepare('DELETE FROM payroll WHERE id = ?').bind(id).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'ردیف حقوق حذف شد.' });
+      }
+
+      if (path === '/payroll/batch-delete' && method === 'POST') {
+        if (!checkPermission(authUser, 'payroll', 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM payroll WHERE id = ?').bind(id)));
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} ردیف حقوق حذف شد.` });
+      }
+
+      if (path === '/payroll/delete-all' && method === 'POST') {
+        if (!checkPermission(authUser, 'payroll', 'deleteAll')) return forbidden(request, env);
+        const c = await env.DB.prepare('SELECT COUNT(*) as c FROM payroll').first<{ c: number }>();
+        await env.DB.prepare('DELETE FROM payroll').run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل لیست‌های حقوق (${Number(c?.c || 0)} ردیف) پاکسازی شد.` });
+      }
+
+      // ================= MINING VOLUMES ROUTES =================
+      if (path === '/mining-volumes' && method === 'GET') {
+        if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
+        const period = url.searchParams.get('period');
+        let records = period
+          ? await getJsonRows(env.DB, 'mining_volumes', 'period = ?', [period])
+          : await getJsonRows(env.DB, 'mining_volumes');
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
+          records = records.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName));
+        }
+        return jsonRes(request, env, { success: true, data: records });
+      }
+
+      if (path === '/mining-volumes' && method === 'POST') {
+        const body: any = await request.json().catch(() => ({}));
+        const action = body.id ? 'edit' : 'create';
+        const hasCeoPerm = checkPermission(authUser, 'ceoDashboard', action);
+        const hasUnitPerm = checkPermission(authUser, 'unitOperations', action) && isDispatchingOrUnitAllowed(authUser, body.unitName);
+        if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش آمار حجم معدن.');
+        if (!body.period || !body.unitName) return jsonRes(request, env, { success: false, message: 'دوره و نام واحد عملیاتی الزامی است.' }, 400);
+        const volumeValue = Number(body.volumeValue || 0);
+        const targetVolume = Number(body.targetVolume || 0);
+        const rec = {
+          id: body.id || genId('mv'),
+          period: String(body.period).trim(),
+          unitName: String(body.unitName).trim(),
+          activityType: String(body.activityType || 'عملیات معدنی').trim(),
+          metricTitle: String(body.metricTitle || body.activityType || body.unitName).trim(),
+          volumeValue: Number.isFinite(volumeValue) ? volumeValue : 0,
+          targetVolume: Number.isFinite(targetVolume) ? targetVolume : 0,
+          unitLabel: String(body.unitLabel || 'تن').trim(),
+          status: String(body.status || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim(),
+          notes: String(body.notes || '').trim(),
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
+          .bind(rec.id, rec.period, rec.unitName, JSON.stringify(rec))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: rec, message: 'آمار حجم عملیات ماهانه با موفقیت ذخیره شد.' });
+      }
+
+      if (path === '/mining-volumes/batch-import' && method === 'POST') {
+        const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
+        const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
+        if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل آمار حجم عملیات.');
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const existing = await getJsonRows(env.DB, 'mining_volumes');
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const unitName = String(getVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
+          const period = parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه'), '1403-08');
+          if (!unitName) continue;
+          if (!canCeo && !isDispatchingOrUnitAllowed(authUser, unitName)) continue;
+          const activityType = String(getVal(row, 'activityType', 'نوع عملیات / فعالیت', 'نوع عملیات', 'عملیات') || 'عملیات معدنی').trim();
+          const metricTitle = String(getVal(row, 'metricTitle', 'عنوان شاخص حجم', 'عنوان شاخص', 'شرح عملیات') || activityType).trim();
+          const volumeValue = parseNum(getVal(row, 'volumeValue', 'حجم محقق‌شده ماه', 'حجم محقق شده', 'حجم', 'مقدار'));
+          const targetVolume = parseNum(getVal(row, 'targetVolume', 'برنامه / هدف ماه', 'برنامه ماه', 'هدف ماه', 'هدف'));
+          const unitLabel = String(getVal(row, 'unitLabel', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'تن').trim();
+          const status = String(getVal(row, 'status', 'وضعیت تحقق', 'وضعیت') || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim();
+          const notes = String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim();
+          const prev = existing.find((v: any) => v.period === period && normKey(v.unitName) === normKey(unitName) && normKey(v.metricTitle) === normKey(metricTitle));
+          const rec = { id: prev?.id || genId('mv'), period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes, updatedAt: nowStr };
+          if (prev) updated++;
+          else added++;
+          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(rec.id, period, unitName, JSON.stringify(rec)));
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path.startsWith('/mining-volumes/') && method === 'DELETE') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const id = decodeURIComponent(path.slice('/mining-volumes/'.length));
+        const row = await env.DB.prepare('SELECT unit_name FROM mining_volumes WHERE id = ?').bind(id).first<{ unit_name: string }>();
+        if (row && !checkPermission(authUser, 'ceoDashboard', 'delete') && !isDispatchingOrUnitAllowed(authUser, row.unit_name)) {
+          return forbidden(request, env, 'دسترسی حذف برای این واحد محدود شده است.');
+        }
+        await env.DB.prepare('DELETE FROM mining_volumes WHERE id = ?').bind(id).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'ردیف آمار حجم حذف شد.' });
+      }
+
+      if (path === '/mining-volumes/batch-delete' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'delete');
+        let deletedCount = 0;
+        for (const id of ids) {
+          const row = await env.DB.prepare('SELECT unit_name FROM mining_volumes WHERE id = ?').bind(id).first<{ unit_name: string }>();
+          if (row && (canAll || isDispatchingOrUnitAllowed(authUser, row.unit_name))) {
+            await env.DB.prepare('DELETE FROM mining_volumes WHERE id = ?').bind(id).run();
+            deletedCount++;
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف آمار حجم حذف شد.` });
+      }
+
+      if (path === '/mining-volumes/delete-all' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'deleteAll')) return forbidden(request, env);
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'deleteAll');
+        let deletedCount = 0;
+        if (canAll) {
+          const c = await env.DB.prepare('SELECT COUNT(*) as c FROM mining_volumes').first<{ c: number }>();
+          deletedCount = Number(c?.c || 0);
+          await env.DB.prepare('DELETE FROM mining_volumes').run();
+        } else {
+          const rows = await getJsonRows(env.DB, 'mining_volumes');
+          for (const v of rows) {
+            if (isDispatchingOrUnitAllowed(authUser, v.unitName)) {
+              await env.DB.prepare('DELETE FROM mining_volumes WHERE id = ?').bind(v.id).run();
+              deletedCount++;
+            }
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `جدول آمار حجم عملیات (${deletedCount} ردیف) پاکسازی شد.` });
+      }
+
+      // ================= MINING MACHINERY ROUTES =================
+      if (path === '/mining-machinery' && method === 'GET') {
+        if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
+        let records = await getJsonRows(env.DB, 'mining_machinery');
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
+          records = records.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName));
+        }
+        return jsonRes(request, env, { success: true, data: records });
+      }
+
+      if (path === '/mining-machinery' && method === 'POST') {
+        const body: any = await request.json().catch(() => ({}));
+        const action = body.id ? 'edit' : 'create';
+        const hasCeoPerm = checkPermission(authUser, 'ceoDashboard', action);
+        const hasUnitPerm = checkPermission(authUser, 'unitOperations', action) && isWorkshopOrUnitAllowed(authUser, body.unitName);
+        if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش وضعیت ماشین‌آلات.');
+        if (!body.machineCode || !body.machineName) return jsonRes(request, env, { success: false, message: 'کد دستگاه و نام تجهیز الزامی است.' }, 400);
+        const existingRow = !body.id
+          ? await env.DB.prepare('SELECT id FROM mining_machinery WHERE TRIM(machine_code) = ?').bind(String(body.machineCode).trim()).first<{ id: string }>()
+          : null;
+        const rawStatus = String(body.status || 'آماده به کار').trim();
+        const status =
+          rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
+            ? 'خراب / در تعمیرگاه'
+            : rawStatus.includes('قطعه')
+            ? 'در انتظار قطعه'
+            : rawStatus.includes('سرویس')
+            ? 'سرویس دوره‌ای'
+            : 'آماده به کار';
+        const rec = {
+          id: body.id || existingRow?.id || genId('mm'),
+          machineCode: String(body.machineCode).trim(),
+          machineName: String(body.machineName).trim(),
+          machineType: String(body.machineType || 'تجهیز معدنی').trim(),
+          unitName: String(body.unitName || 'استخراج و معدن‌کاری').trim(),
+          status,
+          issueDescription: String(body.issueDescription || '').trim(),
+          stoppedSince: String(body.stoppedSince || '-').trim(),
+          estimatedReadyDate: String(body.estimatedReadyDate || '-').trim(),
+          operatorName: String(body.operatorName || '').trim(),
+          notes: String(body.notes || '').trim(),
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)')
+          .bind(rec.id, rec.machineCode, JSON.stringify(rec))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: rec, message: 'وضعیت تجهیز و ماشین‌آلات با موفقیت ذخیره شد.' });
+      }
+
+      if (path === '/mining-machinery/batch-import' && method === 'POST') {
+        const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
+        const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
+        if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل ماشین‌آلات.');
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const existing = await getJsonRows(env.DB, 'mining_machinery');
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          const machineCode = String(getVal(row, 'machineCode', 'کد دستگاه', 'پلاک تجهیزات', 'کد') || '').trim();
+          const machineName = String(getVal(row, 'machineName', 'نام و مدل دستگاه', 'نام دستگاه', 'مدل') || '').trim();
+          if (!machineCode || !machineName) continue;
+          const unitName = String(getVal(row, 'unitName', 'واحد مستقر', 'واحد معدن', 'واحد') || 'تعمیرگاه و ماشین‌آلات سنگین').trim();
+          if (!canCeo && !isWorkshopOrUnitAllowed(authUser, unitName)) continue;
+          const rawStatus = String(getVal(row, 'status', 'وضعیت عملیاتی', 'وضعیت') || 'آماده به کار').trim();
+          const status =
+            rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
+              ? 'خراب / در تعمیرگاه'
+              : rawStatus.includes('قطعه')
+              ? 'در انتظار قطعه'
+              : rawStatus.includes('سرویس')
+              ? 'سرویس دوره‌ای'
+              : 'آماده به کار';
+          const prev = existing.find((m: any) => String(m.machineCode).trim() === machineCode);
+          const rec = {
+            id: prev?.id || genId('mm'),
+            machineCode,
+            machineName,
+            machineType: String(getVal(row, 'machineType', 'نوع تجهیز', 'نوع') || 'تجهیز معدنی').trim(),
+            unitName,
+            status,
+            issueDescription: String(getVal(row, 'issueDescription', 'شرح خرابی / وضعیت تعمیر', 'شرح خرابی', 'علت توقف') || '').trim(),
+            stoppedSince: String(getVal(row, 'stoppedSince', 'تاریخ توقف', 'شروع توقف') || '-').trim(),
+            estimatedReadyDate: String(getVal(row, 'estimatedReadyDate', 'تخمین آماده‌به‌کار', 'تاریخ تحویل') || '-').trim(),
+            operatorName: String(getVal(row, 'operatorName', 'مسئول / اپراتور', 'اپراتور') || '').trim(),
+            notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
+            updatedAt: nowStr,
+          };
+          if (prev) updated++;
+          else added++;
+          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)').bind(rec.id, machineCode, JSON.stringify(rec)));
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path.startsWith('/mining-machinery/') && method === 'DELETE') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const id = decodeURIComponent(path.slice('/mining-machinery/'.length));
+        const row = await env.DB.prepare('SELECT data_json FROM mining_machinery WHERE id = ?').bind(id).first<{ data_json: string }>();
+        if (row && !checkPermission(authUser, 'ceoDashboard', 'delete')) {
+          const parsed = JSON.parse(row.data_json);
+          if (!isWorkshopOrUnitAllowed(authUser, parsed.unitName)) return forbidden(request, env);
+        }
+        await env.DB.prepare('DELETE FROM mining_machinery WHERE id = ?').bind(id).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'رکورد ماشین‌آلات حذف شد.' });
+      }
+
+      if (path === '/mining-machinery/batch-delete' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'delete');
+        let deletedCount = 0;
+        for (const id of ids) {
+          const row = await env.DB.prepare('SELECT data_json FROM mining_machinery WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (row && (canAll || isWorkshopOrUnitAllowed(authUser, JSON.parse(row.data_json).unitName))) {
+            await env.DB.prepare('DELETE FROM mining_machinery WHERE id = ?').bind(id).run();
+            deletedCount++;
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف ماشین‌آلات حذف شد.` });
+      }
+
+      if (path === '/mining-machinery/delete-all' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'deleteAll')) return forbidden(request, env);
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'deleteAll');
+        let deletedCount = 0;
+        if (canAll) {
+          const c = await env.DB.prepare('SELECT COUNT(*) as c FROM mining_machinery').first<{ c: number }>();
+          deletedCount = Number(c?.c || 0);
+          await env.DB.prepare('DELETE FROM mining_machinery').run();
+        } else {
+          const rows = await getJsonRows(env.DB, 'mining_machinery');
+          for (const m of rows) {
+            if (isWorkshopOrUnitAllowed(authUser, m.unitName)) {
+              await env.DB.prepare('DELETE FROM mining_machinery WHERE id = ?').bind(m.id).run();
+              deletedCount++;
+            }
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه) پاکسازی شد.` });
+      }
+
+      // ================= UNIT REPORTS ROUTES =================
+      if (path === '/unit-reports' && method === 'GET') {
+        if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
+        const period = url.searchParams.get('period');
+        const unitName = url.searchParams.get('unitName');
+        let records = period
+          ? await getJsonRows(env.DB, 'unit_reports', 'period = ?', [period])
+          : await getJsonRows(env.DB, 'unit_reports');
+        if (unitName) records = records.filter((r: any) => normKey(String(r.unitName || '')) === normKey(unitName));
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
+          records = records.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
+        }
+        return jsonRes(request, env, { success: true, data: records });
+      }
+
+      if (path === '/unit-reports' && method === 'POST') {
+        const body: any = await request.json().catch(() => ({}));
+        const action = body.id ? 'edit' : 'create';
+        const hasCeoPerm = checkPermission(authUser, 'ceoDashboard', action);
+        const hasUnitPerm = checkPermission(authUser, 'unitOperations', action) && isUnitAllowedForUser(authUser, body.unitName);
+        if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش گزارش عملیاتی واحد.');
+        if (!body.period || !body.unitName || !body.metricName) {
+          return jsonRes(request, env, { success: false, message: 'دوره، نام واحد و عنوان شاخص / فعالیت الزامی است.' }, 400);
+        }
+        const sanitizedRaw: Record<string, string | number> = {};
+        if (body.rawFields && typeof body.rawFields === 'object') {
+          for (const [k, v] of Object.entries(body.rawFields).slice(0, 100)) {
+            if (v !== undefined && v !== null && String(v).trim() !== '') {
+              sanitizedRaw[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
+            }
+          }
+        }
+        const rec = {
+          id: body.id || genId('ur'),
+          period: String(body.period).trim(),
+          unitName: String(body.unitName).trim(),
+          reportCategory: String(body.reportCategory || 'گزارش عملیاتی واحد').trim(),
+          metricName: String(body.metricName).trim(),
+          actualValue: Number.isFinite(Number(body.actualValue || 0)) ? Number(body.actualValue || 0) : 0,
+          previousValue: Number.isFinite(Number(body.previousValue || 0)) ? Number(body.previousValue || 0) : 0,
+          targetValue: Number.isFinite(Number(body.targetValue || 0)) ? Number(body.targetValue || 0) : 0,
+          unitLabel: String(body.unitLabel || 'عدد').trim(),
+          status: String(body.status || 'تایید شده').trim(),
+          submittedBy: String(body.submittedBy || authUser.fullName || '').trim(),
+          notes: String(body.notes || '').trim(),
+          rawFields: sanitizedRaw,
+          updatedAt: faDate(),
+        };
+        await env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
+          .bind(rec.id, rec.period, rec.unitName, JSON.stringify(rec))
+          .run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, data: rec, message: 'گزارش عملیاتی واحد با موفقیت ذخیره شد.' });
+      }
+
+      if (path === '/unit-reports/batch-import' && method === 'POST') {
+        const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
+        const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
+        if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل گزارش واحدها.');
+        const body: any = await request.json().catch(() => ({}));
+        const items = Array.isArray(body.items) ? body.items : [];
+        const existing = await getJsonRows(env.DB, 'unit_reports');
+        const stmts: D1PreparedStatement[] = [];
+        let added = 0;
+        let updated = 0;
+        const nowStr = faDate();
+
+        for (const row of items) {
+          if (!row || typeof row !== 'object') continue;
+          const unitName = String(getVal(row, 'unitName', 'واحد عملیاتی معدن', 'نام واحد', 'واحد', 'بخش') || body.unitName || '').trim();
+          const period = parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه') || body.period || '1403-08', '1403-08');
+          const metricName = String(getVal(row, 'metricName', 'عنوان شاخص / فعالیت', 'شرح شاخص', 'فعالیت', 'عنوان', 'موضوع') || '').trim();
+          if (!unitName || !metricName) continue;
+          if (!canCeo && !isUnitAllowedForUser(authUser, unitName)) continue;
+
+          const reportCategory = String(getVal(row, 'reportCategory', 'دسته‌بندی گزارش', 'نوع گزارش', 'گروه فعالیت') || body.reportCategory || 'گزارش عملیاتی واحد').trim();
+          const actualValue = parseNum(getVal(row, 'actualValue', 'مقدار محقق‌شده', 'عملکرد ماه جاری', 'عملکرد', 'مقدار', 'مقدار فعلی'));
+          const previousValue = parseNum(getVal(row, 'previousValue', 'مقدار ماه قبل', 'عملکرد ماه قبل', 'دوره قبل'));
+          const targetValue = parseNum(getVal(row, 'targetValue', 'هدف / برنامه', 'برنامه ماه', 'هدف'));
+          const unitLabel = String(getVal(row, 'unitLabel', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'عدد').trim();
+          const status = String(getVal(row, 'status', 'وضعیت گزارش', 'وضعیت') || 'تایید شده').trim();
+          const submittedBy = String(getVal(row, 'submittedBy', 'ثبت‌کننده / مسئول واحد', 'مسئول واحد', 'ثبت‌کننده') || authUser.fullName || '').trim();
+          const notes = String(getVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim();
+          const rawFields: Record<string, string | number> = {};
+          const incomingRaw = row.rawFields && typeof row.rawFields === 'object' ? row.rawFields : row;
+          for (const [k, v] of Object.entries(incomingRaw).slice(0, 100)) {
+            if (v !== undefined && v !== null && String(v).trim() !== '') {
+              rawFields[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
+            }
+          }
+          const prev = existing.find((r: any) => r.period === period && normKey(r.unitName) === normKey(unitName) && normKey(r.metricName) === normKey(metricName));
+          const rec = { id: prev?.id || genId('ur'), period, unitName, reportCategory, metricName, actualValue, previousValue, targetValue, unitLabel, status, submittedBy, notes, rawFields, updatedAt: nowStr };
+          if (prev) updated++;
+          else added++;
+          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(rec.id, period, unitName, JSON.stringify(rec)));
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
+      }
+
+      if (path.startsWith('/unit-reports/') && method === 'DELETE') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const id = decodeURIComponent(path.slice('/unit-reports/'.length));
+        const row = await env.DB.prepare('SELECT unit_name FROM unit_reports WHERE id = ?').bind(id).first<{ unit_name: string }>();
+        if (row && !checkPermission(authUser, 'ceoDashboard', 'delete') && !isUnitAllowedForUser(authUser, row.unit_name)) {
+          return forbidden(request, env);
+        }
+        await env.DB.prepare('DELETE FROM unit_reports WHERE id = ?').bind(id).run();
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'ردیف گزارش عملیاتی واحد حذف شد.' });
+      }
+
+      if (path === '/unit-reports/batch-delete' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'delete');
+        let deletedCount = 0;
+        for (const id of ids) {
+          const row = await env.DB.prepare('SELECT unit_name FROM unit_reports WHERE id = ?').bind(id).first<{ unit_name: string }>();
+          if (row && (canAll || isUnitAllowedForUser(authUser, row.unit_name))) {
+            await env.DB.prepare('DELETE FROM unit_reports WHERE id = ?').bind(id).run();
+            deletedCount++;
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف گزارش واحد حذف شد.` });
+      }
+
+      if (path === '/unit-reports/delete-all' && method === 'POST') {
+        if (!hasMiningOrUnitPerm(authUser, 'deleteAll')) return forbidden(request, env);
+        const canAll = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'deleteAll');
+        let deletedCount = 0;
+        if (canAll) {
+          const c = await env.DB.prepare('SELECT COUNT(*) as c FROM unit_reports').first<{ c: number }>();
+          deletedCount = Number(c?.c || 0);
+          await env.DB.prepare('DELETE FROM unit_reports').run();
+        } else {
+          const rows = await getJsonRows(env.DB, 'unit_reports');
+          for (const r of rows) {
+            if (isUnitAllowedForUser(authUser, r.unitName)) {
+              await env.DB.prepare('DELETE FROM unit_reports WHERE id = ?').bind(r.id).run();
+              deletedCount++;
+            }
+          }
+        }
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, deletedCount, message: `گزارش‌های واحدهای عملیاتی (${deletedCount} ردیف) پاکسازی شد.` });
+      }
+
+      // ================= DATABASE STATUS, BACKUP & RESTORE =================
+      if (path === '/database/status' && method === 'GET') {
+        const users = await getAllUsers(env.DB);
+        const personnel = await getJsonRows(env.DB, 'personnel');
+        const karaneh = await getJsonRows(env.DB, 'karaneh');
+        const payroll = await getJsonRows(env.DB, 'payroll');
+        const jobGroups = await getJsonRows(env.DB, 'job_groups');
+        const jobClassifications = await getJsonRows(env.DB, 'job_classifications');
+        const commitments = await getJsonRows(env.DB, 'commitments');
+        const miningVolumes = await getJsonRows(env.DB, 'mining_volumes');
+        const miningMachinery = await getJsonRows(env.DB, 'mining_machinery');
+        const unitReports = await getJsonRows(env.DB, 'unit_reports');
+        const metaRow = await env.DB.prepare('SELECT value FROM app_meta WHERE key = ?').bind('last_saved').first<{ value: string }>();
+
+        const payrollPeriodsCount = new Set(payroll.map((p: any) => p.period).filter(Boolean)).size;
+        const karanehPeriodsCount = new Set(karaneh.map((k: any) => k.period).filter(Boolean)).size;
+        const totalPersonnelWithDocs = personnel.filter((p: any) => {
+          const d = p.documents || {};
+          return Boolean(d.nationalCardImage || (d.shenasnamehPages && d.shenasnamehPages.length > 0));
+        }).length;
+        const totalActiveUsers = users.filter((u: any) => u.isActive !== false).length;
+        const totalRelatives = personnel.reduce((s: number, p: any) => s + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
+
+        const canStats =
+          isSuperAdminUser(authUser) ||
+          checkPermission(authUser, 'system', 'dashboardStats') ||
+          checkPermission(authUser, 'system', 'backupDatabase') ||
+          checkPermission(authUser, 'system', 'restoreDatabase');
+        const canPers = canStats || checkPermission(authUser, 'personnel', 'view');
+        const canKar = canStats || checkPermission(authUser, 'karaneh', 'view');
+        const canPay = canStats || checkPermission(authUser, 'payroll', 'view');
+        const canUsers = canStats || checkPermission(authUser, 'users', 'view');
+        const canJg = canStats || checkPermission(authUser, 'jobGroups', 'view');
+        const canCmt = canStats || checkPermission(authUser, 'commitments', 'view');
+        const canMining = canStats || hasMiningOrUnitPerm(authUser, 'view');
+
+        return jsonRes(request, env, {
+          success: true,
+          data: {
+            storageLocation: 'دیتابیس ابری دائمی و رایگان Cloudflare D1',
+            storageEngine: 'cloudflare-d1',
+            totalPersonnel: canPers ? personnel.length : 0,
+            totalRelatives: canPers ? totalRelatives : 0,
+            totalKaranehRecords: canKar ? karaneh.length : 0,
+            totalPayrollRecords: canPay ? payroll.length : 0,
+            totalUsers: canUsers ? users.length : 0,
+            totalActiveUsers: canUsers ? totalActiveUsers : 0,
+            totalPersonnelWithDocs: canPers ? totalPersonnelWithDocs : 0,
+            payrollPeriodsCount: canPay ? payrollPeriodsCount : 0,
+            karanehPeriodsCount: canKar ? karanehPeriodsCount : 0,
+            totalJobGroups: canJg ? jobGroups.length : 0,
+            totalJobClassifications: canJg ? jobClassifications.length : 0,
+            totalCommitments: canCmt ? commitments.length : 0,
+            totalArchivedCommitments: canCmt ? commitments.filter((c: any) => c.isArchived).length : 0,
+            totalMiningVolumes: canMining ? miningVolumes.length : 0,
+            totalMiningMachinery: canMining ? miningMachinery.length : 0,
+            totalUnitReports: canMining ? unitReports.length : 0,
+            fileSizeBytes: 0,
+            lastSaved: metaRow?.value || faDateTime(),
+            isLocalHost: false,
+            hostPlatform: 'cloudflare-workers-d1',
+            authProtected: true,
+            schemaVersion: '5.0-negin-parto-nasr-units-hub',
+          },
+        });
+      }
+
+      if (path === '/database/export-snapshot' && method === 'GET') {
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'system', 'backupDatabase')) {
+          return forbidden(request, env, 'شما مجوز دریافت اسنپ‌شات همگام‌سازی را ندارید.');
+        }
+        const users = (await getAllUsers(env.DB)).map(sanitizeUser);
+        return jsonRes(request, env, {
+          success: true,
+          data: {
+            users,
+            personnel: await getJsonRows(env.DB, 'personnel'),
+            karaneh: await getJsonRows(env.DB, 'karaneh'),
+            jobGroups: await getJsonRows(env.DB, 'job_groups'),
+            jobClassifications: await getJsonRows(env.DB, 'job_classifications'),
+            commitments: await getJsonRows(env.DB, 'commitments'),
+            payroll: await getJsonRows(env.DB, 'payroll'),
+            miningVolumes: await getJsonRows(env.DB, 'mining_volumes'),
+            miningMachinery: await getJsonRows(env.DB, 'mining_machinery'),
+            unitReports: await getJsonRows(env.DB, 'unit_reports'),
+          },
+        });
+      }
+
+      if (path === '/database/backup' && method === 'GET') {
+        if (!checkPermission(authUser, 'system', 'backupDatabase')) return forbidden(request, env);
+        const users = await getAllUsers(env.DB);
+        const personnel = await getJsonRows(env.DB, 'personnel');
+        const karaneh = await getJsonRows(env.DB, 'karaneh');
+        const jobGroups = await getJsonRows(env.DB, 'job_groups');
+        const jobClassifications = await getJsonRows(env.DB, 'job_classifications');
+        const commitments = await getJsonRows(env.DB, 'commitments');
+        const payroll = await getJsonRows(env.DB, 'payroll');
+        const miningVolumes = await getJsonRows(env.DB, 'mining_volumes');
+        const miningMachinery = await getJsonRows(env.DB, 'mining_machinery');
+        const unitReports = await getJsonRows(env.DB, 'unit_reports');
+        const totalRelatives = personnel.reduce((s: number, p: any) => s + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
+
+        const payload = {
+          users,
+          personnel,
+          karaneh,
+          jobGroups,
+          jobClassifications,
+          commitments,
+          payroll,
+          miningVolumes,
+          miningMachinery,
+          unitReports,
+          _backupMetadata: {
+            version: '5.0-negin-parto-nasr-units-hub',
+            exportedAt: new Date().toISOString(),
+            engine: 'cloudflare-d1',
+            counts: {
+              users: users.length,
+              personnel: personnel.length,
+              relatives: totalRelatives,
+              karaneh: karaneh.length,
+              payroll: payroll.length,
+              jobGroups: jobGroups.length,
+              jobClassifications: jobClassifications.length,
+              commitments: commitments.length,
+              miningVolumes: miningVolumes.length,
+              miningMachinery: miningMachinery.length,
+              unitReports: unitReports.length,
+            },
+          },
+        };
+        return jsonRes(request, env, payload, 200, {
+          'Content-Disposition': `attachment; filename=hr_database_backup_${Date.now()}.json`,
+        });
+      }
+
+      if (path === '/database/restore' && method === 'POST') {
+        if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
+        const incoming: any = await request.json().catch(() => ({}));
+        if (!incoming || !Array.isArray(incoming.users) || !Array.isArray(incoming.personnel)) {
+          return jsonRes(request, env, { success: false, message: 'ساختار فایل پشتیبان معتبر نیست.' }, 400);
+        }
+        const restoredUsers = [];
+        for (const u of incoming.users) {
+          const copy = { ...u };
+          if (copy.password && !String(copy.password).startsWith('pbkdf2$') && !String(copy.password).startsWith('sha256$')) {
+            if (String(copy.password).startsWith('scrypt$')) {
+              // Preserve default password fallback if migrating from Node scrypt$
+              copy.password = copy.username === 'javadabadiyan' ? await hashPassword('javad_5221157') : await hashPassword('12345678');
+            } else {
+              copy.password = await hashPassword(String(copy.password));
+            }
+          }
+          restoredUsers.push(copy);
+        }
+        await replaceAllSnapshotInD1(env.DB, { ...incoming, users: restoredUsers });
+        return jsonRes(request, env, { success: true, message: 'پایگاه داده Cloudflare D1 با موفقیت بازیابی گردید.' });
+      }
+
+      if (path === '/database/reset-demo' && method === 'POST') {
+        if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
+        const seed = await buildInitialSeedData();
+        await replaceAllSnapshotInD1(env.DB, seed);
+        return jsonRes(request, env, { success: true, message: 'داده‌های اولیه در دیتابیس Cloudflare D1 بازنشانی شدند.' });
+      }
+
+      if (path === '/database/merge-firestore' && method === 'POST') {
+        if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
+        const incoming: any = await request.json().catch(() => ({}));
+        if (!incoming || typeof incoming !== 'object') {
+          return jsonRes(request, env, { success: false, message: 'ساختار داده‌های ارسالی نامعتبر است.' }, 400);
+        }
+        const stmts: D1PreparedStatement[] = [];
+        for (const p of incoming.personnel || []) {
+          if (p?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)').bind(p.id, String(p.personnelCode || ''), JSON.stringify(p), p.updatedAt || ''));
+        }
+        for (const k of incoming.karaneh || []) {
+          if (k?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)').bind(k.id, String(k.period || ''), String(k.personnelCode || ''), JSON.stringify(k)));
+        }
+        for (const jg of incoming.jobGroups || []) {
+          if (jg?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO job_groups (id, data_json) VALUES (?, ?)').bind(jg.id, JSON.stringify(jg)));
+        }
+        for (const jc of incoming.jobClassifications || []) {
+          if (jc?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(jc.id, String(jc.personnelCode || ''), JSON.stringify(jc)));
+        }
+        for (const c of incoming.commitments || []) {
+          if (c?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(c.id, String(c.personnelCode || ''), JSON.stringify(c)));
+        }
+        for (const pr of incoming.payroll || []) {
+          if (pr?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)').bind(pr.id, String(pr.period || ''), String(pr.personnelCode || ''), JSON.stringify(pr)));
+        }
+        for (const mv of incoming.miningVolumes || []) {
+          if (mv?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(mv.id, String(mv.period || ''), String(mv.unitName || ''), JSON.stringify(mv)));
+        }
+        for (const mm of incoming.miningMachinery || []) {
+          if (mm?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)').bind(mm.id, String(mm.machineCode || ''), JSON.stringify(mm)));
+        }
+        for (const ur of incoming.unitReports || []) {
+          if (ur?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(ur.id, String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur)));
+        }
+        if (Array.isArray(incoming.users)) {
+          const existingUsers = await getAllUsers(env.DB);
+          const existingMap = new Map(existingUsers.map((u: any) => [String(u.id), u]));
+          for (const u of incoming.users) {
+            if (!u || !u.id || u.username === 'javadabadiyan') continue;
+            const prev = existingMap.get(String(u.id));
+            const mergedUser = prev
+              ? { ...prev, ...u, password: prev.password }
+              : {
+                  ...u,
+                  password:
+                    u.password && (String(u.password).startsWith('pbkdf2$') || String(u.password).startsWith('sha256$'))
+                      ? u.password
+                      : await hashPassword('12345678'),
+                };
+            stmts.push(
+              env.DB
+                .prepare(
+                  `INSERT OR REPLACE INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                )
+                .bind(
+                  mergedUser.id,
+                  mergedUser.username,
+                  mergedUser.password || '',
+                  mergedUser.fullName || '',
+                  mergedUser.role || 'کاربر سفارشی',
+                  mergedUser.department || '',
+                  mergedUser.email || '',
+                  mergedUser.uid || '',
+                  JSON.stringify(mergedUser.permissions || {}),
+                  mergedUser.isActive === false ? 0 : 1,
+                  mergedUser.createdAt || '',
+                  mergedUser.lastLogin || ''
+                )
+            );
+          }
+        }
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, { success: true, message: 'اطلاعات با موفقیت در پایگاه داده Cloudflare D1 ادغام شد.' });
+      }
+
+      return jsonRes(request, env, { success: false, message: `مسیر ${path} یافت نشد.` }, 404);
+    } catch (err: any) {
+      return jsonRes(
+        request,
+        env,
+        { success: false, message: err?.message || 'خطای داخلی سرور Cloudflare Worker' },
+        500
+      );
+    }
+  },
+};

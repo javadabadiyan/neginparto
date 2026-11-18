@@ -14,15 +14,71 @@ import {
 } from '../types';
 import { embeddedDb } from './embeddedDb';
 
-export type StorageEngine = 'node' | 'php' | 'indexeddb';
+export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
+
+const LS_CLOUDFLARE_API_URL_KEY = 'npn_cloudflare_api_url_v1';
 
 let detectedEngine: StorageEngine | null = null;
 let engineDetectPromise: Promise<StorageEngine> | null = null;
 
-async function probeJsonEndpoint(url: string, expectedEngine: 'node' | 'php'): Promise<boolean> {
+export function normalizeCloudflareUrl(raw: string): string {
+  const trimmed = String(raw || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`;
+  return trimmed;
+}
+
+export function getCloudflareApiUrl(): string {
+  try {
+    const lsVal = typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CLOUDFLARE_API_URL_KEY) || '' : '';
+    if (lsVal.trim()) return normalizeCloudflareUrl(lsVal);
+  } catch {
+    // ignore storage read error
+  }
+  const envVal = (import.meta as any)?.env?.VITE_CLOUDFLARE_API_URL || '';
+  return normalizeCloudflareUrl(String(envVal));
+}
+
+export function setCloudflareApiUrl(rawUrl: string): string {
+  const normalized = normalizeCloudflareUrl(rawUrl);
+  try {
+    if (normalized) {
+      localStorage.setItem(LS_CLOUDFLARE_API_URL_KEY, normalized);
+    } else {
+      localStorage.removeItem(LS_CLOUDFLARE_API_URL_KEY);
+    }
+  } catch {
+    // ignore storage write error
+  }
+  resetDetectedEngine();
+  return normalized;
+}
+
+export function resetDetectedEngine(): void {
+  detectedEngine = null;
+  engineDetectPromise = null;
+}
+
+export async function testCloudflareConnection(rawUrl: string): Promise<{ ok: boolean; url: string; message: string }> {
+  const url = normalizeCloudflareUrl(rawUrl);
+  if (!url) {
+    return { ok: false, url: '', message: 'آدرس Cloudflare Worker را وارد کنید.' };
+  }
+  const ok = await probeJsonEndpoint(`${url}/api/health`, 'cloudflare');
+  if (ok) {
+    return { ok: true, url, message: 'اتصال به سرور Cloudflare Worker و دیتابیس D1 با موفقیت برقرار شد.' };
+  }
+  return {
+    ok: false,
+    url,
+    message: 'پاسخ معتبری از آدرس Cloudflare Worker دریافت نشد. آدرس Worker و Binding دیتابیس D1 را بررسی کنید.',
+  };
+}
+
+async function probeJsonEndpoint(url: string, expectedEngine: 'node' | 'php' | 'cloudflare'): Promise<boolean> {
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), 3500) : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
@@ -44,6 +100,26 @@ export async function detectStorageEngine(): Promise<StorageEngine> {
   if (detectedEngine) return detectedEngine;
   if (!engineDetectPromise) {
     engineDetectPromise = (async () => {
+      let explicitLsCfUrl = '';
+      try {
+        explicitLsCfUrl =
+          typeof localStorage !== 'undefined'
+            ? normalizeCloudflareUrl(localStorage.getItem(LS_CLOUDFLARE_API_URL_KEY) || '')
+            : '';
+      } catch {
+        explicitLsCfUrl = '';
+      }
+      const cfUrl = getCloudflareApiUrl();
+      const isStaticGithub =
+        typeof window !== 'undefined' && window.location.hostname.toLowerCase().endsWith('.github.io');
+
+      if ((explicitLsCfUrl || isStaticGithub) && cfUrl) {
+        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare')) {
+          detectedEngine = 'cloudflare';
+          return 'cloudflare';
+        }
+      }
+
       if (await probeJsonEndpoint('./api/health', 'node')) {
         detectedEngine = 'node';
         return 'node';
@@ -51,6 +127,10 @@ export async function detectStorageEngine(): Promise<StorageEngine> {
       if (await probeJsonEndpoint('./api.php?r=/health', 'php')) {
         detectedEngine = 'php';
         return 'php';
+      }
+      if (cfUrl && (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare'))) {
+        detectedEngine = 'cloudflare';
+        return 'cloudflare';
       }
       detectedEngine = 'indexeddb';
       return 'indexeddb';
@@ -98,7 +178,12 @@ async function callBackend(
 
   const method = options.method || 'GET';
   const isPhp = engine === 'php';
-  const url = isPhp ? buildPhpUrl(route, method) : `./api${route}`;
+  const isCloudflare = engine === 'cloudflare';
+  const url = isPhp
+    ? buildPhpUrl(route, method)
+    : isCloudflare
+    ? `${getCloudflareApiUrl()}/api${route}`
+    : `./api${route}`;
   const fetchMethod = isPhp && method !== 'GET' ? 'POST' : method;
 
   const res = await fetch(url, {
@@ -609,7 +694,12 @@ export const api = {
   async downloadBackup(): Promise<boolean> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.downloadBackup();
-    const url = engine === 'php' ? buildPhpUrl('/database/backup', 'GET') : './api/database/backup';
+    const url =
+      engine === 'php'
+        ? buildPhpUrl('/database/backup', 'GET')
+        : engine === 'cloudflare'
+        ? `${getCloudflareApiUrl()}/api/database/backup`
+        : './api/database/backup';
     const res = await fetch(url, { headers: getHeaders(engine === 'php') });
     if (!res.ok) return false;
     const blob = await res.blob();

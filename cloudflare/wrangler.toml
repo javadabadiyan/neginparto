@@ -1,0 +1,14 @@
+name = "neginparto-api"
+main = "worker.ts"
+compatibility_date = "2025-01-01"
+
+# Cloudflare D1 Database Binding (Free & Permanent)
+# Replace database_id with your D1 ID if deploying manually,
+# or use the included GitHub Actions workflow which provisions and binds it automatically.
+[[d1_databases]]
+binding = "DB"
+database_name = "neginparto-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+ALLOWED_ORIGIN = "*"
