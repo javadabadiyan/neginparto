@@ -133,7 +133,7 @@ export default function App() {
           if (res && res.success && res.data) {
             setCurrentUser(res.data);
             localStorage.setItem('hr_current_user', JSON.stringify(res.data));
-          } else {
+          } else if (res && (res.status === 401 || res.status === 403)) {
             localStorage.removeItem('hr_current_user');
             localStorage.removeItem('hr_auth_token');
             setCurrentUser(null);
@@ -302,6 +302,13 @@ export default function App() {
 
     loadAllData().then(async () => {
       if (githubAutoPulledRef.current) return;
+      // Cloudflare D1 is the single authoritative multi-browser/multi-device database;
+      // never auto-overwrite D1 records on startup with an older GitHub snapshot.
+      const activeEngine = await api.detectEngine().catch(() => null);
+      if (activeEngine === 'cloudflare') {
+        githubAutoPulledRef.current = true;
+        return;
+      }
       const canRestore =
         currentUser.role === 'super_admin' ||
         currentUser.username === 'javadabadiyan' ||
