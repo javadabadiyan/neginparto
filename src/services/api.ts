@@ -208,7 +208,7 @@ function buildPhpUrl(route: string, method: string): string {
   return `./api.php?${params.toString()}`;
 }
 
-async function callBackend(
+async function callBackendOnce(
   route: string,
   options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number } = {}
 ): Promise<any> {
@@ -267,7 +267,7 @@ async function callBackend(
 
   try {
     const parsed = JSON.parse(text);
-    if (!res.ok && parsed && typeof parsed === 'object' && parsed.success !== false) {
+    if (!res.ok && parsed && typeof parsed === 'object') {
       return { ...parsed, success: false, status: res.status };
     }
     return parsed;
@@ -281,6 +281,23 @@ async function callBackend(
         : `پاسخ نامعتبر از سرور دریافت شد (کد وضعیت ${res.status}).`,
     };
   }
+}
+
+async function callBackend(
+  route: string,
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; retries?: number } = {}
+): Promise<any> {
+  const method = options.method || 'GET';
+  const maxRetries = options.retries ?? (method === 'GET' ? 2 : 0);
+  let lastRes: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    lastRes = await callBackendOnce(route, options);
+    if (lastRes && lastRes.success !== false) return lastRes;
+    const retryable = Boolean(lastRes?.networkError || lastRes?.timeout || (lastRes?.status && lastRes.status >= 502));
+    if (!retryable || attempt >= maxRetries) return lastRes;
+    await new Promise((r) => setTimeout(r, 550 * (attempt + 1)));
+  }
+  return lastRes;
 }
 
 function compactPayrollItemForUpload(item: any): any {
@@ -444,6 +461,47 @@ function unwrapArrayResponse<T>(json: any, fallbackError: string): T[] {
   return json.data as T[];
 }
 
+async function fetchPaginatedCloudflareList<T>(
+  baseRoute: string,
+  pageSize: number,
+  fallbackError: string,
+  startOffset = 0,
+  initialItems: T[] = [],
+  knownTotal?: number
+): Promise<T[]> {
+  const sep = baseRoute.includes('?') ? '&' : '?';
+  let results = [...initialItems];
+  let offset = startOffset;
+
+  const first = await callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${offset}`, { timeoutMs: 35000 });
+  const firstBatch = unwrapArrayResponse<T>(first, fallbackError);
+  results = results.concat(firstBatch);
+
+  const total = typeof first?.total === 'number' ? first.total : knownTotal ?? results.length;
+  const hasMore = first?.hasMore !== undefined ? Boolean(first.hasMore) : firstBatch.length === pageSize && results.length < total;
+  if (!hasMore || firstBatch.length === 0) return results;
+
+  const offsets: number[] = [];
+  for (let next = offset + firstBatch.length; next < total; next += pageSize) {
+    offsets.push(next);
+  }
+  // Fetch remaining pages in waves of 2 concurrent requests to avoid saturating connection or Worker RAM
+  for (let i = 0; i < offsets.length; i += 2) {
+    const wave = offsets.slice(i, i + 2);
+    const pages = await Promise.all(
+      wave.map((off) =>
+        callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${off}`, { timeoutMs: 35000 }).then((r) =>
+          unwrapArrayResponse<T>(r, fallbackError)
+        )
+      )
+    );
+    for (const p of pages) {
+      results = results.concat(p);
+    }
+  }
+  return results;
+}
+
 export const api = {
   detectEngine: detectStorageEngine,
 
@@ -521,9 +579,13 @@ export const api = {
   },
 
   // Personnel
-  async getPersonnel(): Promise<Personnel[]> {
+  async getPersonnel(options?: { lite?: boolean }): Promise<Personnel[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPersonnel();
+    if (engine === 'cloudflare') {
+      const route = options?.lite ? '/personnel?lite=1' : '/personnel';
+      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 350 : 200, 'خطا در دریافت اطلاعات پرسنل');
+    }
     const json = await callBackend('/personnel');
     return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت اطلاعات پرسنل');
   },
@@ -551,9 +613,9 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.batchImportPersonnel(items);
     return sendBatchInChunks(
       items,
-      70,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk } }),
-      3
+      50,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
+      2
     );
   },
 
@@ -591,6 +653,9 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getKaraneh(period);
     const route = period ? `/karaneh?period=${encodeURIComponent(period)}` : '/karaneh';
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<KaranehRecord>(route, 600, 'خطا در دریافت اطلاعات کارانه');
+    }
     const json = await callBackend(route);
     return unwrapArrayResponse<KaranehRecord>(json, 'خطا در دریافت اطلاعات کارانه');
   },
@@ -788,6 +853,9 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPayroll(period);
     const route = period ? `/payroll?period=${encodeURIComponent(period)}` : '/payroll';
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<PayrollRecord>(route, 150, 'خطا در دریافت لیست حقوق و دستمزد');
+    }
     const json = await callBackend(route, { timeoutMs: 45000 });
     return unwrapArrayResponse<PayrollRecord>(json, 'خطا در دریافت لیست حقوق و دستمزد');
   },
@@ -798,8 +866,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      20,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk } }),
+      15,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 45000 }),
       2
     );
   },
@@ -1015,15 +1083,77 @@ export const api = {
         timeoutMs: wantLite ? 35000 : 65000,
       });
       if (json?.success && json?.data) {
-        return { ...json.data, isLite: Boolean(json.data.lite) };
+        const d = json.data;
+        let personnelList: Personnel[] = Array.isArray(d.personnel) ? d.personnel : [];
+        let karanehList: KaranehRecord[] = Array.isArray(d.karaneh) ? d.karaneh : [];
+        let payrollList: PayrollRecord[] = Array.isArray(d.payroll) ? d.payroll : [];
+
+        const personnelTotal = Number(d.personnelTotal ?? d.dbStatus?.totalPersonnel ?? personnelList.length);
+        const karanehTotal = Number(d.karanehTotal ?? d.dbStatus?.totalKaranehRecords ?? karanehList.length);
+        const payrollTotal = Number(d.payrollTotal ?? d.dbStatus?.totalPayrollRecords ?? payrollList.length);
+
+        const extraLoads: Promise<void>[] = [];
+        if (personnelTotal > personnelList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<Personnel>(
+              wantLite ? '/personnel?lite=1' : '/personnel',
+              wantLite ? 350 : 200,
+              'خطا در دریافت ادامه لیست پرسنل',
+              personnelList.length,
+              personnelList,
+              personnelTotal
+            ).then((full) => {
+              personnelList = full;
+            })
+          );
+        }
+        if (karanehTotal > karanehList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<KaranehRecord>(
+              '/karaneh',
+              600,
+              'خطا در دریافت ادامه لیست کارانه',
+              karanehList.length,
+              karanehList,
+              karanehTotal
+            ).then((full) => {
+              karanehList = full;
+            })
+          );
+        }
+        if (!wantLite && payrollTotal > payrollList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<PayrollRecord>(
+              '/payroll',
+              150,
+              'خطا در دریافت ادامه لیست حقوق',
+              payrollList.length,
+              payrollList,
+              payrollTotal
+            ).then((full) => {
+              payrollList = full;
+            })
+          );
+        }
+        if (extraLoads.length > 0) {
+          await Promise.all(extraLoads);
+        }
+
+        return {
+          ...d,
+          personnel: personnelList,
+          karaneh: karanehList,
+          payroll: payrollList,
+          isLite: Boolean(d.lite),
+        };
       }
-      if (!wantLite && (json?.networkError || json?.timeout)) {
-        throw new Error(json.message || 'خطا در اتصال به سرور کلودفلر');
+      if (json?.status !== 404) {
+        throw new Error(json?.message || 'خطا در اتصال به سرور کلودفلر');
       }
     }
 
     const [pData, kData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
-      api.getPersonnel(),
+      api.getPersonnel({ lite: wantLite }),
       api.getKaraneh(),
       wantLite ? Promise.resolve([] as PayrollRecord[]) : api.getPayroll(),
       api.getJobGroups(),

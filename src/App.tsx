@@ -92,7 +92,7 @@ export default function App() {
   };
 
   const afterUploadRefresh = async () => {
-    await loadAllData({ silent: true });
+    await loadAllData({ silent: true, force: true });
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -196,10 +196,11 @@ export default function App() {
     }
   };
 
-  const loadAllData = async (options?: { silent?: boolean; retryAttempt?: number }) => {
+  const loadAllData = async (options?: { silent?: boolean; retryAttempt?: number; force?: boolean }) => {
     const silent = Boolean(options?.silent);
+    const force = Boolean(options?.force);
     const retryAttempt = Number(options?.retryAttempt || 0);
-    if (isReloadingDataRef.current && silent) return;
+    if (isReloadingDataRef.current && silent && !force) return;
     isReloadingDataRef.current = true;
     const activeUserId = loadedForUserIdRef.current;
     try {
@@ -218,17 +219,33 @@ export default function App() {
         setSyncingData(false);
       }
 
-      // Phase 2: Hydrate heavy payroll + personnel documents in background without blocking interaction
+      // Phase 2: Hydrate ONLY skipped heavy slices (payroll / scanned docs) in background without re-downloading all tables
       if (bundle.isLite) {
-        api
-          .getBootstrapData({ lite: false })
-          .then((fullBundle) => {
-            if (loadedForUserIdRef.current !== activeUserId) return;
-            applyBundleToState(fullBundle, false);
-          })
-          .catch(() => {
-            // Non-fatal; payroll/documents will refresh on next sync or tab visit
-          });
+        const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
+        const perms = currentUser
+          ? isAdmin
+            ? getFullAdminPermissions()
+            : normalizePermissions(currentUser.permissions)
+          : null;
+        const needPayroll =
+          Number(bundle.dbStatus?.totalPayrollRecords || 0) > 0 && Boolean(isAdmin || perms?.payroll?.view);
+        const needDocs =
+          Number(bundle.dbStatus?.totalPersonnelWithDocs || 0) > 0 && Boolean(isAdmin || perms?.personnel?.documents);
+
+        if (needPayroll || needDocs) {
+          Promise.all([
+            needPayroll ? api.getPayroll() : Promise.resolve(null),
+            needDocs ? api.getPersonnel({ lite: false }) : Promise.resolve(null),
+          ])
+            .then(([payData, fullPersData]) => {
+              if (loadedForUserIdRef.current !== activeUserId) return;
+              if (Array.isArray(payData)) setPayrollList(payData);
+              if (Array.isArray(fullPersData) && fullPersData.length > 0) setPersonnelList(fullPersData);
+            })
+            .catch(() => {
+              // Non-fatal; payroll/documents will refresh on next sync or tab visit
+            });
+        }
       }
     } catch (err: any) {
       console.error('Error loading data:', err);
