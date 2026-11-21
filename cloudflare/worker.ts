@@ -1095,73 +1095,70 @@ async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> 
   await touchLastSaved(db);
 }
 
-let bootstrapPromise: Promise<void> | null = null;
+let isBootstrappedInIsolate = false;
 
 async function ensureBootstrapped(db: D1Database): Promise<void> {
-  if (!bootstrapPromise) {
-    bootstrapPromise = (async () => {
-      try {
-        const fastCheck = await db
-          .prepare('SELECT value FROM app_meta WHERE key = ?')
-          .bind('seeded_v1')
-          .first<{ value: string }>();
-        if (fastCheck?.value === 'true') {
-          return;
-        }
-      } catch {
-        // Table does not exist yet — proceed to create schema below
-      }
+  if (isBootstrappedInIsolate) return;
 
-      await db.batch([
-        db.prepare('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
-        db.prepare(
-          `CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
-            full_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'کاربر سفارشی',
-            department TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
-            uid TEXT NOT NULL DEFAULT '', permissions_json TEXT NOT NULL DEFAULT '{}',
-            is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '',
-            last_login TEXT NOT NULL DEFAULT ''
-          )`
-        ),
-        db.prepare('CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT \'\')'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_personnel_code ON personnel(personnel_code)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS job_groups (id TEXT PRIMARY KEY, data_json TEXT NOT NULL)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS job_classifications (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS karaneh (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_karaneh_period ON karaneh(period)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS payroll (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(period)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS mining_volumes (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_volumes_period ON mining_volumes(period)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS mining_machinery (id TEXT PRIMARY KEY, machine_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE TABLE IF NOT EXISTS unit_reports (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_unit_reports_period_unit ON unit_reports(period, unit_name)'),
-      ]);
-
-      const seeded = await db.prepare('SELECT value FROM app_meta WHERE key = ?').bind('seeded_v1').first<{ value: string }>();
-      if (!seeded) {
-        const counts = await Promise.all([
-          db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(*) as cnt FROM personnel').first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(*) as cnt FROM karaneh').first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(*) as cnt FROM payroll').first<{ cnt: number }>(),
-          db.prepare('SELECT COUNT(*) as cnt FROM commitments').first<{ cnt: number }>(),
-        ]);
-        const hasAnyExistingData = counts.some((row) => Number(row?.cnt || 0) > 0);
-        if (!hasAnyExistingData) {
-          const seed = await buildInitialSeedData();
-          await replaceAllSnapshotInD1(db, seed);
-        }
-        await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
-      }
-    })().catch((err) => {
-      bootstrapPromise = null;
-      throw err;
-    });
+  try {
+    const fastCheck = await db
+      .prepare('SELECT value FROM app_meta WHERE key = ?')
+      .bind('seeded_v1')
+      .first<{ value: string }>();
+    if (fastCheck?.value === 'true') {
+      isBootstrappedInIsolate = true;
+      return;
+    }
+  } catch {
+    // Table does not exist yet — proceed to create schema below
   }
-  return bootstrapPromise;
+
+  await db.batch([
+    db.prepare('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
+        full_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'کاربر سفارشی',
+        department TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+        uid TEXT NOT NULL DEFAULT '', permissions_json TEXT NOT NULL DEFAULT '{}',
+        is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '',
+        last_login TEXT NOT NULL DEFAULT ''
+      )`
+    ),
+    db.prepare('CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT \'\')'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_personnel_code ON personnel(personnel_code)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS job_groups (id TEXT PRIMARY KEY, data_json TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS job_classifications (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS karaneh (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_karaneh_period ON karaneh(period)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS payroll (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(period)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS mining_volumes (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_volumes_period ON mining_volumes(period)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS mining_machinery (id TEXT PRIMARY KEY, machine_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS unit_reports (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_unit_reports_period_unit ON unit_reports(period, unit_name)'),
+  ]);
+
+  const seeded = await db.prepare('SELECT value FROM app_meta WHERE key = ?').bind('seeded_v1').first<{ value: string }>();
+  if (!seeded) {
+    const counts = await Promise.all([
+      db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>(),
+      db.prepare('SELECT COUNT(*) as cnt FROM personnel').first<{ cnt: number }>(),
+      db.prepare('SELECT COUNT(*) as cnt FROM karaneh').first<{ cnt: number }>(),
+      db.prepare('SELECT COUNT(*) as cnt FROM payroll').first<{ cnt: number }>(),
+      db.prepare('SELECT COUNT(*) as cnt FROM commitments').first<{ cnt: number }>(),
+    ]);
+    const hasAnyExistingData = counts.some((row) => Number(row?.cnt || 0) > 0);
+    if (!hasAnyExistingData) {
+      const seed = await buildInitialSeedData();
+      await replaceAllSnapshotInD1(db, seed);
+    }
+    await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
+  }
+
+  isBootstrappedInIsolate = true;
 }
 
 // ================= AUTH MIDDLEWARE HELPER =================
