@@ -196,8 +196,9 @@ export default function App() {
     }
   };
 
-  const loadAllData = async (options?: { silent?: boolean }) => {
+  const loadAllData = async (options?: { silent?: boolean; retryAttempt?: number }) => {
     const silent = Boolean(options?.silent);
+    const retryAttempt = Number(options?.retryAttempt || 0);
     if (isReloadingDataRef.current && silent) return;
     isReloadingDataRef.current = true;
     const activeUserId = loadedForUserIdRef.current;
@@ -232,6 +233,14 @@ export default function App() {
     } catch (err: any) {
       console.error('Error loading data:', err);
       if (!silent) {
+        if (retryAttempt < 1 && loadedForUserIdRef.current === activeUserId) {
+          setTimeout(() => {
+            if (loadedForUserIdRef.current === activeUserId) {
+              void loadAllData({ silent: false, retryAttempt: retryAttempt + 1 });
+            }
+          }, 2500);
+          return;
+        }
         const msg = err?.message || 'خطا در بارگذاری اطلاعات از پایگاه داده سرور';
         setSyncError(msg);
         showNotification(msg, 'error');

@@ -1141,12 +1141,19 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
       ]);
 
       const seeded = await db.prepare('SELECT value FROM app_meta WHERE key = ?').bind('seeded_v1').first<{ value: string }>();
-      const userCountRow = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>();
-      if (!seeded && (!userCountRow || Number(userCountRow.cnt) === 0)) {
-        const seed = await buildInitialSeedData();
-        await replaceAllSnapshotInD1(db, seed);
-        await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
-      } else if (!seeded) {
+      if (!seeded) {
+        const counts = await Promise.all([
+          db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(*) as cnt FROM personnel').first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(*) as cnt FROM karaneh').first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(*) as cnt FROM payroll').first<{ cnt: number }>(),
+          db.prepare('SELECT COUNT(*) as cnt FROM commitments').first<{ cnt: number }>(),
+        ]);
+        const hasAnyExistingData = counts.some((row) => Number(row?.cnt || 0) > 0);
+        if (!hasAnyExistingData) {
+          const seed = await buildInitialSeedData();
+          await replaceAllSnapshotInD1(db, seed);
+        }
         await db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('seeded_v1', 'true').run();
       }
     })().catch((err) => {
@@ -1291,11 +1298,29 @@ export default {
           !canPers
             ? Promise.resolve('[]')
             : hideSalary && hideDocs
-            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0)")
+            ? getRawJsonArrayString(
+                env.DB,
+                'personnel',
+                '',
+                [],
+                "CASE WHEN json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) ELSE data_json END"
+              )
             : hideSalary
-            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_set(data_json, '$.baseSalary', 0)")
+            ? getRawJsonArrayString(
+                env.DB,
+                'personnel',
+                '',
+                [],
+                "CASE WHEN json_valid(data_json) THEN json_set(data_json, '$.baseSalary', 0) ELSE data_json END"
+              )
             : hideDocs
-            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_remove(data_json, '$.documents')")
+            ? getRawJsonArrayString(
+                env.DB,
+                'personnel',
+                '',
+                [],
+                "CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END"
+              )
             : getRawJsonArrayString(env.DB, 'personnel'),
           canKar ? getRawJsonArrayString(env.DB, 'karaneh') : Promise.resolve('[]'),
           canPay ? getRawJsonArrayString(env.DB, 'payroll') : Promise.resolve('[]'),
@@ -1533,11 +1558,11 @@ export default {
         const hideDocs = !checkPermission(authUser, 'personnel', 'documents');
         const selectExpr =
           hideSalary && hideDocs
-            ? "json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0)"
+            ? "CASE WHEN json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) ELSE data_json END"
             : hideSalary
-            ? "json_set(data_json, '$.baseSalary', 0)"
+            ? "CASE WHEN json_valid(data_json) THEN json_set(data_json, '$.baseSalary', 0) ELSE data_json END"
             : hideDocs
-            ? "json_remove(data_json, '$.documents')"
+            ? "CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END"
             : 'data_json';
         const rawArr = await getRawJsonArrayString(env.DB, 'personnel', '', [], selectExpr);
         return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);

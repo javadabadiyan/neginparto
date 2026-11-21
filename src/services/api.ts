@@ -437,6 +437,13 @@ async function sendBatchInChunks(
   };
 }
 
+function unwrapArrayResponse<T>(json: any, fallbackError: string): T[] {
+  if (!json || json.success === false || !Array.isArray(json.data)) {
+    throw new Error(json?.message || fallbackError);
+  }
+  return json.data as T[];
+}
+
 export const api = {
   detectEngine: detectStorageEngine,
 
@@ -472,7 +479,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getUsers();
     const json = await callBackend('/users');
-    return json.data || [];
+    return unwrapArrayResponse<User>(json, 'خطا در دریافت لیست کاربران');
   },
 
   async createUser(user: Partial<User> & { password?: string }) {
@@ -518,7 +525,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPersonnel();
     const json = await callBackend('/personnel');
-    return json.data || [];
+    return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت اطلاعات پرسنل');
   },
 
   async createPersonnel(personnel: Partial<Personnel>) {
@@ -585,7 +592,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getKaraneh(period);
     const route = period ? `/karaneh?period=${encodeURIComponent(period)}` : '/karaneh';
     const json = await callBackend(route);
-    return json.data || [];
+    return unwrapArrayResponse<KaranehRecord>(json, 'خطا در دریافت اطلاعات کارانه');
   },
 
   async getKaranehComparison(currentPeriod: string, previousPeriod: string): Promise<{
@@ -651,7 +658,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getJobGroups();
     const json = await callBackend('/job-groups');
-    return json.data || [];
+    return unwrapArrayResponse<JobGroup>(json, 'خطا در دریافت گروه‌های شغلی');
   },
 
   async createJobGroup(group: Partial<JobGroup>) {
@@ -689,7 +696,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getJobClassifications();
     const json = await callBackend('/job-classifications');
-    return json.data || [];
+    return unwrapArrayResponse<JobClassificationRecord>(json, 'خطا در دریافت طبقه‌بندی مشاغل');
   },
 
   async createJobClassification(record: Partial<JobClassificationRecord>) {
@@ -735,7 +742,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getCommitments();
     const json = await callBackend('/commitments');
-    return json.data || [];
+    return unwrapArrayResponse<PersonnelCommitment>(json, 'خطا در دریافت تعهدات پرسنلی');
   },
 
   async createCommitment(commitment: Partial<PersonnelCommitment>) {
@@ -781,8 +788,8 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPayroll(period);
     const route = period ? `/payroll?period=${encodeURIComponent(period)}` : '/payroll';
-    const json = await callBackend(route);
-    return json.data || [];
+    const json = await callBackend(route, { timeoutMs: 45000 });
+    return unwrapArrayResponse<PayrollRecord>(json, 'خطا در دریافت لیست حقوق و دستمزد');
   },
 
   async batchImportPayroll(period: string, items: any[], useRowYearMonth = true) {
@@ -827,7 +834,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getMiningVolumes(period);
     const route = period ? `/mining-volumes?period=${encodeURIComponent(period)}` : '/mining-volumes';
     const json = await callBackend(route);
-    return json.data || [];
+    return unwrapArrayResponse<MiningVolumeRecord>(json, 'خطا در دریافت آمار تولید معدن');
   },
 
   async saveMiningVolume(record: Partial<MiningVolumeRecord>) {
@@ -866,7 +873,7 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getMiningMachinery();
     const json = await callBackend('/mining-machinery');
-    return json.data || [];
+    return unwrapArrayResponse<MiningMachineryRecord>(json, 'خطا در دریافت وضعیت ماشین‌آلات');
   },
 
   async saveMiningMachinery(record: Partial<MiningMachineryRecord>) {
@@ -911,7 +918,7 @@ export const api = {
     const qs = params.toString();
     const route = qs ? `/unit-reports?${qs}` : '/unit-reports';
     const json = await callBackend(route);
-    return json.data || [];
+    return unwrapArrayResponse<UnitOperationalReport>(json, 'خطا در دریافت گزارش واحدها');
   },
 
   async saveUnitReport(record: Partial<UnitOperationalReport>) {
@@ -1050,6 +1057,9 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getDatabaseStatus();
     const json = await callBackend('/database/status');
+    if (!json || json.success === false || !json.data) {
+      throw new Error(json?.message || 'خطا در دریافت وضعیت پایگاه داده');
+    }
     return json.data;
   },
 
