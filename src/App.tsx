@@ -74,6 +74,8 @@ export default function App() {
   const [firebaseSyncing, setFirebaseSyncing] = useState<boolean>(false);
   const githubAutoPulledRef = useRef<boolean>(false);
 
+  const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Notification Toast
   const [notification, setNotification] = useState<{
     type: 'success' | 'error';
@@ -81,10 +83,13 @@ export default function App() {
   } | null>(null);
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    if (notifTimerRef.current) {
+      clearTimeout(notifTimerRef.current);
+    }
     setNotification({ message, type });
-    setTimeout(() => {
+    notifTimerRef.current = setTimeout(() => {
       setNotification(null);
-    }, 4000);
+    }, type === 'error' ? 7500 : 4500);
   };
 
   // Check stored auth session & listen for 401 unauthorized events
@@ -112,12 +117,16 @@ export default function App() {
       }
     }
 
-    const onUnauthorized = () => {
+    const onUnauthorized = (ev: Event) => {
+      const customMsg = (ev as CustomEvent<{ message?: string }>)?.detail?.message;
       localStorage.removeItem('hr_auth_token');
       localStorage.removeItem('hr_current_user');
       setCurrentUser(null);
       setActiveTab('dashboard');
-      showNotification('نشست کاربری شما منقضی شده است. لطفاً مجدداً وارد شوید.', 'error');
+      showNotification(
+        customMsg || 'نشست کاربری شما منقضی شده است. لطفاً مجدداً وارد شوید.',
+        'error'
+      );
     };
 
     window.addEventListener('hr:unauthorized', onUnauthorized);
@@ -416,8 +425,8 @@ export default function App() {
         showNotification(res.message || 'خطا در ورود اکسل.', 'error');
         return false;
       }
-    } catch (e) {
-      showNotification('خطا در ارسال فایل اکسل.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال فایل اکسل.', 'error');
       return false;
     }
   };
@@ -485,8 +494,8 @@ export default function App() {
         showNotification(res.message || 'خطا در بارگذاری کارانه.', 'error');
         return false;
       }
-    } catch (e) {
-      showNotification('خطا در پردازش فایل اکسل کارانه.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در پردازش فایل اکسل کارانه.', 'error');
       return false;
     }
   };
@@ -609,8 +618,8 @@ export default function App() {
         showNotification(res.message || 'خطا در ورود اکسل طبقه‌بندی مشاغل.', 'error');
         return false;
       }
-    } catch {
-      showNotification('خطا در ارسال فایل اکسل طبقه‌بندی مشاغل.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال فایل اکسل طبقه‌بندی مشاغل.', 'error');
       return false;
     }
   };
@@ -683,8 +692,8 @@ export default function App() {
         showNotification(res.message || 'خطا در بارگذاری اکسل تعهدات.', 'error');
         return false;
       }
-    } catch {
-      showNotification('خطا در ارسال فایل اکسل تعهدات.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال فایل اکسل تعهدات.', 'error');
       return false;
     }
   };
@@ -761,8 +770,8 @@ export default function App() {
         showNotification(res.message || 'خطا در ورود گروهی کاربران.', 'error');
         return false;
       }
-    } catch {
-      showNotification('خطا در ارسال فایل اکسل کاربران.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال فایل اکسل کاربران.', 'error');
       return false;
     }
   };
@@ -787,8 +796,8 @@ export default function App() {
         showNotification(res.message || 'خطا در بارگذاری فایل حقوق.', 'error');
         return false;
       }
-    } catch {
-      showNotification('خطا در پردازش فایل اکسل حقوق.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در پردازش فایل اکسل حقوق.', 'error');
       return false;
     }
   };
@@ -1009,8 +1018,8 @@ export default function App() {
       }
       showNotification(res.message || 'خطا در ورود اطلاعات بستگان.', 'error');
       return false;
-    } catch {
-      showNotification('خطا در ارسال اطلاعات بستگان.', 'error');
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال اطلاعات بستگان.', 'error');
       return false;
     }
   };
@@ -1226,9 +1235,10 @@ export default function App() {
       }
       showNotification(res.message || 'خطا در ورود اکسل آمار حجم.', 'error');
       return { success: false, message: res.message };
-    } catch {
-      showNotification('خطا در ورود اکسل آمار حجم.', 'error');
-      return { success: false, message: 'خطای شبکه' };
+    } catch (e: any) {
+      const msg = e?.message || 'خطا در ورود اکسل آمار حجم.';
+      showNotification(msg, 'error');
+      return { success: false, message: msg };
     }
   };
 
@@ -1318,9 +1328,10 @@ export default function App() {
       }
       showNotification(res.message || 'خطا در ورود اکسل ماشین‌آلات.', 'error');
       return { success: false, message: res.message };
-    } catch {
-      showNotification('خطا در ورود اکسل ماشین‌آلات.', 'error');
-      return { success: false, message: 'خطای شبکه' };
+    } catch (e: any) {
+      const msg = e?.message || 'خطا در ورود اکسل ماشین‌آلات.';
+      showNotification(msg, 'error');
+      return { success: false, message: msg };
     }
   };
 
@@ -1411,9 +1422,10 @@ export default function App() {
       }
       showNotification(res.message || 'خطا در ورود اکسل گزارش واحد.', 'error');
       return { success: false, message: res.message };
-    } catch {
-      showNotification('خطا در ورود اکسل گزارش واحد.', 'error');
-      return { success: false, message: 'خطای شبکه' };
+    } catch (e: any) {
+      const msg = e?.message || 'خطا در ورود اکسل گزارش واحد.';
+      showNotification(msg, 'error');
+      return { success: false, message: msg };
     }
   };
 
@@ -1533,7 +1545,7 @@ export default function App() {
 
       {/* Responsive Toast Notification */}
       {notification && (
-        <div className="fixed bottom-3 left-3 right-3 sm:right-auto sm:left-5 sm:max-w-md z-50 transition-all no-print">
+        <div className="fixed bottom-3 left-3 right-3 sm:right-auto sm:left-5 sm:max-w-lg z-50 transition-all no-print">
           <div className={`p-3.5 sm:p-4 rounded-xl shadow-lg border flex items-center justify-between gap-3 text-xs font-bold ${
             notification.type === 'success'
               ? 'bg-slate-900 text-white border-slate-700'
@@ -1551,7 +1563,7 @@ export default function App() {
               type="button"
               onClick={() => setNotification(null)}
               aria-label="بستن پیام"
-              className="p-1 text-slate-400 hover:text-white shrink-0 cursor-pointer"
+              className="p-1 text-slate-300 hover:text-white shrink-0 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1560,7 +1572,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 min-w-0">
+      <main className="flex-1 w-full max-w-[1440px] mx-auto px-2.5 sm:px-5 lg:px-6 py-3.5 sm:py-5 min-w-0">
         {loading && (
           <div className="py-20 text-center">
             <div className="inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
@@ -1852,8 +1864,8 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="no-print border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 text-center font-medium">
+      <footer className="no-print border-t border-slate-200 bg-white py-3.5 text-center text-xs text-slate-500">
+        <div className="max-w-[1440px] mx-auto px-4 text-center font-medium">
           طراحی و کد نویسی جواد آبادیان
         </div>
       </footer>

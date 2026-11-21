@@ -552,6 +552,27 @@ npm start
       }
       const saved = setCloudflareApiUrl(res.url);
       setCfUrl(saved);
+
+      // Check whether current browser token is valid on this Cloudflare Worker
+      const token = localStorage.getItem('hr_auth_token') || '';
+      if (token) {
+        const meRes = await fetch(`${saved}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        }).catch(() => null);
+
+        if (meRes && (meRes.status === 401 || meRes.status === 403)) {
+          window.dispatchEvent(
+            new CustomEvent('hr:unauthorized', {
+              detail: {
+                message: `اتصال به Cloudflare D1 (${saved}) ذخیره و فعال شد. برای بارگذاری و ثبت اطلاعات روی سرور کلودفلر، لطفاً مجدداً وارد حساب کاربری خود شوید.`,
+              },
+            })
+          );
+          return;
+        }
+      }
+
       setCfFeedback({
         type: 'success',
         text: `اتصال به Cloudflare D1 (${saved}) ذخیره و فعال شد. از این پس این مرورگر مستقیماً با دیتابیس کلودفلر کار می‌کند.`,
@@ -567,10 +588,13 @@ npm start
 
   const handleClearCloudflare = () => {
     setCloudflareApiUrl('');
-    setCfUrl('');
+    const fallbackUrl = getCloudflareApiUrl();
+    setCfUrl(fallbackUrl);
     setCfFeedback({
       type: 'success',
-      text: 'آدرس کلودفلر از حافظه این مرورگر پاک شد و سامانه به حالت تشخیص خودکار برگشت.',
+      text: fallbackUrl
+        ? `تنظیم دستی مرورگر پاک شد و آدرس پیش‌فرض سامانه (${fallbackUrl}) جایگزین گردید.`
+        : 'آدرس کلودفلر از حافظه این مرورگر پاک شد و سامانه به حالت تشخیص خودکار برگشت.',
     });
     onRefreshStatus();
     if (onDataReload) onDataReload();

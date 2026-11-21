@@ -18,11 +18,22 @@ export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
 
 const LS_CLOUDFLARE_API_URL_KEY = 'npn_cloudflare_api_url_v1';
 
+const DEFAULT_GITHUB_CLOUDFLARE_URL = 'https://neginparto-api.ci-runner-223bd6.workers.dev';
+
 let detectedEngine: StorageEngine | null = null;
 let engineDetectPromise: Promise<StorageEngine> | null = null;
 
+function toAsciiDigits(raw: string): string {
+  return String(raw || '')
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+}
+
 export function normalizeCloudflareUrl(raw: string): string {
-  const trimmed = String(raw || '').trim().replace(/\/+$/, '');
+  const trimmed = toAsciiDigits(String(raw || ''))
+    .replace(/[\u200c\u200e\u200f\ufeff]/g, '')
+    .trim()
+    .replace(/\/+$/, '');
   if (!trimmed) return '';
   if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`;
   return trimmed;
@@ -36,7 +47,13 @@ export function getCloudflareApiUrl(): string {
     // ignore storage read error
   }
   const envVal = (import.meta as any)?.env?.VITE_CLOUDFLARE_API_URL || '';
-  return normalizeCloudflareUrl(String(envVal));
+  if (String(envVal).trim()) {
+    return normalizeCloudflareUrl(String(envVal));
+  }
+  if (typeof window !== 'undefined' && window.location.hostname.toLowerCase() === 'javadabadiyan.github.io') {
+    return DEFAULT_GITHUB_CLOUDFLARE_URL;
+  }
+  return '';
 }
 
 export function setCloudflareApiUrl(rawUrl: string): string {
@@ -64,21 +81,63 @@ export async function testCloudflareConnection(rawUrl: string): Promise<{ ok: bo
   if (!url) {
     return { ok: false, url: '', message: 'آدرس Cloudflare Worker را وارد کنید.' };
   }
-  const ok = await probeJsonEndpoint(`${url}/api/health`, 'cloudflare');
-  if (ok) {
-    return { ok: true, url, message: 'اتصال به سرور Cloudflare Worker و دیتابیس D1 با موفقیت برقرار شد.' };
-  }
-  return {
-    ok: false,
-    url,
-    message: 'پاسخ معتبری از آدرس Cloudflare Worker دریافت نشد. آدرس Worker و Binding دیتابیس D1 را بررسی کنید.',
-  };
-}
-
-async function probeJsonEndpoint(url: string, expectedEngine: 'node' | 'php' | 'cloudflare'): Promise<boolean> {
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+    const res = await fetch(`${url}/api/health`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (timer) clearTimeout(timer);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        url,
+        message: `سرور Cloudflare Worker خطای HTTP ${res.status} برگرداند. Binding دیتابیس D1 یا وضعیت Worker را بررسی کنید.`,
+      };
+    }
+
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('application/json')) {
+      return {
+        ok: false,
+        url,
+        message: 'آدرس واردشده پاسخ JSON برنگرداند. مطمئن شوید آدرس صحیح *.workers.dev را وارد کرده‌اید.',
+      };
+    }
+
+    const json: any = await res.json().catch(() => null);
+    if (json && json.success === true && json.engine === 'cloudflare') {
+      return { ok: true, url, message: 'اتصال به سرور Cloudflare Worker و دیتابیس D1 با موفقیت برقرار شد.' };
+    }
+    return {
+      ok: false,
+      url,
+      message: json?.message || 'پاسخ سلامت سرویس کلودفلر معتبر نیست.',
+    };
+  } catch (err: any) {
+    const isAbort = err?.name === 'AbortError';
+    return {
+      ok: false,
+      url,
+      message: isAbort
+        ? 'زمان انتظار برای اتصال به Cloudflare Worker به پایان رسید (Timeout). اتصال اینترنت را بررسی کنید.'
+        : 'امکان برقراری ارتباط شبکه‌ای با Cloudflare Worker وجود ندارد. آدرس یا دسترسی اینترنت را بررسی کنید.',
+    };
+  }
+}
+
+async function probeJsonEndpoint(
+  url: string,
+  expectedEngine: 'node' | 'php' | 'cloudflare',
+  timeoutMs = 7500
+): Promise<boolean> {
+  try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     const res = await fetch(url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
@@ -114,21 +173,27 @@ export async function detectStorageEngine(): Promise<StorageEngine> {
         typeof window !== 'undefined' && window.location.hostname.toLowerCase().endsWith('.github.io');
 
       if ((explicitLsCfUrl || isStaticGithub) && cfUrl) {
-        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare')) {
+        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 7500)) {
+          detectedEngine = 'cloudflare';
+          return 'cloudflare';
+        }
+        // Single quick retry in case of cold-start / mobile radio wakeup
+        await new Promise((r) => setTimeout(r, 350));
+        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 8500)) {
           detectedEngine = 'cloudflare';
           return 'cloudflare';
         }
       }
 
-      if (await probeJsonEndpoint('./api/health', 'node')) {
+      if (await probeJsonEndpoint('./api/health', 'node', 3500)) {
         detectedEngine = 'node';
         return 'node';
       }
-      if (await probeJsonEndpoint('./api.php?r=/health', 'php')) {
+      if (await probeJsonEndpoint('./api.php?r=/health', 'php', 3500)) {
         detectedEngine = 'php';
         return 'php';
       }
-      if (cfUrl && (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare'))) {
+      if (cfUrl && (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 7500))) {
         detectedEngine = 'cloudflare';
         return 'cloudflare';
       }
@@ -186,11 +251,24 @@ async function callBackend(
     : `./api${route}`;
   const fetchMethod = isPhp && method !== 'GET' ? 'POST' : method;
 
-  const res = await fetch(url, {
-    method: fetchMethod,
-    headers: getHeaders(isPhp),
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: fetchMethod,
+      headers: getHeaders(isPhp),
+      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    });
+  } catch (networkErr: any) {
+    const isCorsOrOffline = networkErr instanceof TypeError;
+    return {
+      success: false,
+      message: isCorsOrOffline
+        ? isCloudflare
+          ? 'خطای ارتباط با سرور Cloudflare Worker. اتصال اینترنت، آدرس Worker یا حجم درخواست را بررسی کنید.'
+          : 'خطای ارتباط شبکه‌ای با سرور پایگاه داده.'
+        : networkErr?.message || 'خطا در ارسال درخواست به سرور.',
+    };
+  }
 
   if (res.status === 401 && !options.skipAuthRedirect) {
     window.dispatchEvent(new CustomEvent('hr:unauthorized'));
@@ -198,13 +276,117 @@ async function callBackend(
 
   const text = await res.text();
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    if (!res.ok && parsed && typeof parsed === 'object' && parsed.success !== false) {
+      return { ...parsed, success: false, status: res.status };
+    }
+    return parsed;
   } catch {
+    const isCfWorkerLimit = res.status === 503 || res.status === 500 || /Worker|exceeded|1102/i.test(text);
     return {
       success: false,
-      message: 'پاسخ نامعتبر از سرور دریافت شد.',
+      status: res.status,
+      message: isCfWorkerLimit
+        ? `خطای سرور (کد ${res.status}): پردازش یا محدودیت منابع سرور کلودفلر رخ داد. لطفاً بخش‌های کوچک‌تر یا نسخه به‌روز Worker را بررسی کنید.`
+        : `پاسخ نامعتبر از سرور دریافت شد (کد وضعیت ${res.status}).`,
     };
   }
+}
+
+function compactPayrollItemForUpload(item: any): any {
+  if (!item || typeof item !== 'object') return item;
+  const raw = item.rawFields;
+  if (!raw || typeof raw !== 'object') return item;
+  const compactRaw: Record<string, any> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    compactRaw[k] = v;
+  }
+  return { ...item, rawFields: compactRaw };
+}
+
+async function sendBatchInChunks(
+  items: any[],
+  chunkSize: number,
+  sendChunk: (chunk: any[], chunkIndex: number, totalChunks: number) => Promise<any>
+): Promise<any> {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { success: false, message: 'هیچ ردیف معتبری در فایل اکسل برای ثبت وجود ندارد.' };
+  }
+
+  const totalChunks = Math.ceil(items.length / chunkSize);
+  let totalInserted = 0;
+  let totalUpdated = 0;
+  let totalSkipped = 0;
+  let totalMatched = 0;
+  let totalUnmatched = 0;
+  let totalAddedRelatives = 0;
+  let lastMessage = '';
+
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = items.slice(i * chunkSize, (i + 1) * chunkSize);
+    const res = await sendChunk(slice, i, totalChunks);
+    if (!res || !res.success) {
+      const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
+      const progressNote =
+        totalChunks > 1 ? ` (توقف در دسته ${i + 1} از ${totalChunks})` : '';
+      return {
+        success: false,
+        message: `${baseMsg}${progressNote}`,
+        data: res?.data,
+      };
+    }
+    const d = res.data || {};
+    totalInserted += Number(d.inserted || 0);
+    totalUpdated += Number(d.updated || 0);
+    totalSkipped += Number(d.skipped || 0);
+    totalMatched += Number(d.matched || 0);
+    totalUnmatched += Number(d.unmatched || 0);
+    totalAddedRelatives += Number(d.addedRelatives || 0);
+    if (res.message) lastMessage = res.message;
+  }
+
+  if (totalChunks === 1 && lastMessage) {
+    return {
+      success: true,
+      message: lastMessage,
+      data: {
+        totalProcessed: items.length,
+        inserted: totalInserted,
+        updated: totalUpdated,
+        skipped: totalSkipped,
+        matched: totalMatched,
+        unmatched: totalUnmatched,
+        addedRelatives: totalAddedRelatives,
+      },
+    };
+  }
+
+  const parts: string[] = [];
+  if (totalInserted > 0) parts.push(`${totalInserted} ردیف جدید`);
+  if (totalUpdated > 0) parts.push(`${totalUpdated} ردیف به‌روزرسانی`);
+  if (totalAddedRelatives > 0) parts.push(`${totalAddedRelatives} بستگان`);
+  if (totalMatched > 0) parts.push(`${totalMatched} ردیف منطبق`);
+  if (totalSkipped > 0) parts.push(`${totalSkipped} ردیف ردشده`);
+  const summaryMsg =
+    parts.length > 0
+      ? `بارگذاری اکسل با موفقیت انجام شد (${parts.join('، ')}).`
+      : lastMessage || `تعداد ${items.length} ردیف با موفقیت در پایگاه داده ثبت شد.`;
+
+  return {
+    success: true,
+    message: summaryMsg,
+    data: {
+      totalProcessed: items.length,
+      inserted: totalInserted,
+      updated: totalUpdated,
+      skipped: totalSkipped,
+      matched: totalMatched,
+      unmatched: totalUnmatched,
+      addedRelatives: totalAddedRelatives,
+    },
+  };
 }
 
 export const api = {
@@ -266,7 +448,9 @@ export const api = {
   async batchImportUsers(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportUsers(items);
-    return callBackend('/users/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 15, (chunk) =>
+      callBackend('/users/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async batchDeleteUsers(ids: string[]) {
@@ -310,7 +494,9 @@ export const api = {
   async batchImportPersonnel(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportPersonnel(items);
-    return callBackend('/personnel/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 35, (chunk) =>
+      callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async batchDeletePersonnel(ids: string[]) {
@@ -328,7 +514,9 @@ export const api = {
   async batchImportRelatives(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportRelatives(items);
-    return callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 35, (chunk) =>
+      callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async deleteAllRelatives() {
@@ -378,7 +566,9 @@ export const api = {
   async batchImportKaraneh(period: string, items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportKaraneh(period, items);
-    return callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items } });
+    return sendBatchInChunks(items, 40, (chunk) =>
+      callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk } })
+    );
   },
 
   async deleteKaraneh(id: string) {
@@ -466,7 +656,9 @@ export const api = {
   async batchImportJobClassifications(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportJobClassifications(items);
-    return callBackend('/job-classifications/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 40, (chunk) =>
+      callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async batchDeleteJobClassifications(ids: string[]) {
@@ -510,7 +702,9 @@ export const api = {
   async batchImportCommitments(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportCommitments(items);
-    return callBackend('/commitments/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 40, (chunk) =>
+      callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async batchDeleteCommitments(ids: string[]) {
@@ -537,7 +731,10 @@ export const api = {
   async batchImportPayroll(period: string, items: any[], useRowYearMonth = true) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportPayroll(period, items, useRowYearMonth);
-    return callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items } });
+    const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
+    return sendBatchInChunks(compacted, 15, (chunk) =>
+      callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk } })
+    );
   },
 
   async deletePayrollRecord(id: string) {
@@ -582,7 +779,9 @@ export const api = {
   async batchImportMiningVolumes(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportMiningVolumes(items);
-    return callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 40, (chunk) =>
+      callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async deleteMiningVolume(id: string) {
@@ -619,7 +818,9 @@ export const api = {
   async batchImportMiningMachinery(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportMiningMachinery(items);
-    return callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items } });
+    return sendBatchInChunks(items, 40, (chunk) =>
+      callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk } })
+    );
   },
 
   async deleteMiningMachinery(id: string) {
@@ -662,7 +863,13 @@ export const api = {
   async batchImportUnitReports(payload: { unitName?: string; period?: string; reportCategory?: string; items: any[] }) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportUnitReports(payload);
-    return callBackend('/unit-reports/batch-import', { method: 'POST', body: payload });
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    return sendBatchInChunks(items, 25, (chunk) =>
+      callBackend('/unit-reports/batch-import', {
+        method: 'POST',
+        body: { ...payload, items: chunk },
+      })
+    );
   },
 
   async deleteUnitReport(id: string) {

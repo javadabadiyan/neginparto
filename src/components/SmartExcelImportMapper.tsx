@@ -211,14 +211,14 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
           {onDownloadTemplate && (
             <button
               type="button"
               onClick={onDownloadTemplate}
-              className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5"
+              className="px-3 py-2 min-h-[38px] rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 shrink-0" />
               <span>{templateLabel}</span>
             </button>
           )}
@@ -226,7 +226,8 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              aria-label="بستن"
+              className="p-2 min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -247,7 +248,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
       {!workbookInfo ? (
         <div
           onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/70 hover:bg-indigo-50/30 rounded-2xl p-8 text-center cursor-pointer transition-all"
+          className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/70 hover:bg-indigo-50/30 rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all"
         >
           <div className="w-12 h-12 mx-auto rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-indigo-600 mb-3">
             {loadingFile ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Upload className="w-6 h-6" />}
@@ -255,17 +256,17 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
           <p className="text-sm font-bold text-slate-800">
             {loadingFile ? 'در حال آنالیز هوشمند ساختار فایل اکسل...' : 'انتخاب فایل اکسل (.xlsx / .xls / .csv)'}
           </p>
-          <p className="text-xs text-slate-500 mt-1.5">
+          <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
             پشتیبانی از شناسایی خودکار سطر سرستون، چند شیت، حروف فارسی/عربی (ي/ی و ك/ک) و تطبیق خودکار با پیش‌نمایش زنده
           </p>
         </div>
       ) : (
         <div className="space-y-4">
           {/* File summary & sheet / header-row controls */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
-            <div className="flex items-center gap-2.5 md:col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+            <div className="flex flex-wrap items-center gap-2.5 sm:col-span-2">
               <FileSpreadsheet className="w-5 h-5 text-emerald-600 shrink-0" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-xs font-bold text-slate-800 truncate">{workbookInfo.fileName}</p>
                 <p className="text-[11px] text-slate-500">
                   {toPersianDigits(extracted.rows.length)} ردیف داده • {toPersianDigits(extracted.headers.length)} ستون در فایل •{' '}
@@ -277,7 +278,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="mr-auto px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                className="px-2.5 py-1.5 min-h-[36px] rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 تعویض فایل
               </button>
@@ -476,12 +477,12 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
             {onCancel && (
               <button
                 type="button"
                 onClick={onCancel}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50"
+                className="px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 cursor-pointer"
               >
                 انصراف
               </button>
@@ -490,7 +491,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
               type="button"
               disabled={submitting || extracted.rows.length === 0 || matchedCount === 0}
               onClick={handleConfirmImport}
-              className={`px-5 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${accentBtnClass}`}
+              className={`px-5 py-2.5 min-h-[42px] rounded-xl text-white text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer ${accentBtnClass}`}
             >
               {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               <span>

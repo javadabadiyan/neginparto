@@ -25,10 +25,18 @@
     overflow-x: hidden;
   }
 
-  /* Force all form controls to inherit Vazirmatn and render Persian digits */
+  /* Force all form controls to inherit Vazirmatn; keep Persian digits only for RTL inputs */
   input, select, textarea, button {
     font-family: 'Vazirmatn', system-ui, sans-serif !important;
     font-feature-settings: "ss01" on, "tnum" on !important;
+  }
+
+  input[dir="ltr"],
+  textarea[dir="ltr"],
+  input[type="url"],
+  input[type="email"],
+  [dir="ltr"] {
+    font-feature-settings: normal !important;
   }
 
   /* Table numbers, amounts, dates, codes */
@@ -45,6 +53,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Hide scrollbars cleanly on horizontal nav strips while preserving swipe/wheel scroll */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Mobile responsive touch container & charts */
 .responsive-table-container,
 .overflow-x-auto {
@@ -55,6 +72,13 @@
 
 .recharts-responsive-container {
   min-width: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Custom smooth scrollbar for Windows and Mobile */
