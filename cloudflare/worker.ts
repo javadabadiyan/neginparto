@@ -682,9 +682,12 @@ async function getRawJsonArrayString(
   db: D1Database,
   table: string,
   whereClause = '',
-  binds: any[] = []
+  binds: any[] = [],
+  selectExpr = 'data_json'
 ): Promise<string> {
-  const sql = whereClause ? `SELECT data_json FROM ${table} WHERE ${whereClause}` : `SELECT data_json FROM ${table}`;
+  const sql = whereClause
+    ? `SELECT ${selectExpr} as data_json FROM ${table} WHERE ${whereClause}`
+    : `SELECT ${selectExpr} as data_json FROM ${table}`;
   const stmt = binds.length > 0 ? db.prepare(sql).bind(...binds) : db.prepare(sql);
   const { results } = await stmt.all<{ data_json: string }>();
   const parts: string[] = [];
@@ -1287,16 +1290,12 @@ export default {
         ] = await Promise.all([
           !canPers
             ? Promise.resolve('[]')
-            : hideSalary || hideDocs
-            ? getJsonRows(env.DB, 'personnel').then((rows) =>
-                JSON.stringify(
-                  rows.map((p: any) => ({
-                    ...p,
-                    ...(hideSalary ? { baseSalary: 0 } : {}),
-                    ...(hideDocs ? { documents: undefined } : {}),
-                  }))
-                )
-              )
+            : hideSalary && hideDocs
+            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0)")
+            : hideSalary
+            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_set(data_json, '$.baseSalary', 0)")
+            : hideDocs
+            ? getRawJsonArrayString(env.DB, 'personnel', '', [], "json_remove(data_json, '$.documents')")
             : getRawJsonArrayString(env.DB, 'personnel'),
           canKar ? getRawJsonArrayString(env.DB, 'karaneh') : Promise.resolve('[]'),
           canPay ? getRawJsonArrayString(env.DB, 'payroll') : Promise.resolve('[]'),
@@ -1530,17 +1529,18 @@ export default {
       // ================= PERSONNEL ROUTES =================
       if (path === '/personnel' && method === 'GET') {
         if (!checkPermission(authUser, 'personnel', 'view')) return jsonRes(request, env, { success: true, data: [] });
-        let list = await getJsonRows(env.DB, 'personnel');
         const hideSalary = !checkPermission(authUser, 'personnel', 'viewSalary');
         const hideDocs = !checkPermission(authUser, 'personnel', 'documents');
-        if (hideSalary || hideDocs) {
-          list = list.map((p: any) => ({
-            ...p,
-            ...(hideSalary ? { baseSalary: 0 } : {}),
-            ...(hideDocs ? { documents: undefined } : {}),
-          }));
-        }
-        return jsonRes(request, env, { success: true, data: list });
+        const selectExpr =
+          hideSalary && hideDocs
+            ? "json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0)"
+            : hideSalary
+            ? "json_set(data_json, '$.baseSalary', 0)"
+            : hideDocs
+            ? "json_remove(data_json, '$.documents')"
+            : 'data_json';
+        const rawArr = await getRawJsonArrayString(env.DB, 'personnel', '', [], selectExpr);
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/personnel' && method === 'POST') {

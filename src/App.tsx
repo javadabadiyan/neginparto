@@ -64,6 +64,7 @@ export default function App() {
     }
   });
   const [syncingData, setSyncingData] = useState<boolean>(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Core Data Lists
   const [personnelList, setPersonnelList] = useState<Personnel[]>([]);
@@ -203,6 +204,7 @@ export default function App() {
     try {
       if (!silent) {
         setSyncingData(true);
+        setSyncError(null);
       }
 
       const useLiteFirst = !silent && activeTab !== 'payroll' && activeTab !== 'ceo-dashboard';
@@ -210,6 +212,7 @@ export default function App() {
       if (loadedForUserIdRef.current !== activeUserId) return;
 
       applyBundleToState(bundle, useLiteFirst && payrollList.length > 0);
+      setSyncError(null);
       if (!silent) {
         setSyncingData(false);
       }
@@ -229,7 +232,9 @@ export default function App() {
     } catch (err: any) {
       console.error('Error loading data:', err);
       if (!silent) {
-        showNotification(err?.message || 'خطا در بارگذاری اطلاعات از پایگاه داده سرور', 'error');
+        const msg = err?.message || 'خطا در بارگذاری اطلاعات از پایگاه داده سرور';
+        setSyncError(msg);
+        showNotification(msg, 'error');
       }
     } finally {
       isReloadingDataRef.current = false;
@@ -1723,6 +1728,19 @@ export default function App() {
               <div className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
               <span>در حال دریافت آخرین اطلاعات از پایگاه داده ابری کلودفلر...</span>
             </div>
+          </div>
+        )}
+
+        {syncError && !syncingData && (
+          <div className="mb-3 px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-800 font-semibold">
+            <span>{syncError}</span>
+            <button
+              type="button"
+              onClick={() => loadAllData()}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold transition cursor-pointer"
+            >
+              تلاش مجدد دریافت اطلاعات
+            </button>
           </div>
         )}
 

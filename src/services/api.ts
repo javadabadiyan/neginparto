@@ -227,7 +227,7 @@ async function callBackend(
     : `./api${route}`;
   const fetchMethod = isPhp && method !== 'GET' ? 'POST' : method;
 
-  const timeoutMs = options.timeoutMs ?? 20000;
+  const timeoutMs = options.timeoutMs ?? 30000;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timerId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
@@ -1002,15 +1002,15 @@ export const api = {
     isLite?: boolean;
   }> {
     const engine = await detectStorageEngine();
+    const wantLite = Boolean(options?.lite);
     if (engine === 'cloudflare') {
-      const wantLite = Boolean(options?.lite);
       const json = await callBackend(wantLite ? '/bootstrap?lite=1' : '/bootstrap', {
-        timeoutMs: wantLite ? 15000 : 35000,
+        timeoutMs: wantLite ? 35000 : 65000,
       });
       if (json?.success && json?.data) {
         return { ...json.data, isLite: Boolean(json.data.lite) };
       }
-      if (json?.networkError || json?.timeout) {
+      if (!wantLite && (json?.networkError || json?.timeout)) {
         throw new Error(json.message || 'خطا در اتصال به سرور کلودفلر');
       }
     }
@@ -1018,7 +1018,7 @@ export const api = {
     const [pData, kData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
       api.getPersonnel(),
       api.getKaraneh(),
-      api.getPayroll(),
+      wantLite ? Promise.resolve([] as PayrollRecord[]) : api.getPayroll(),
       api.getJobGroups(),
       api.getJobClassifications(),
       api.getCommitments(),
@@ -1042,7 +1042,7 @@ export const api = {
       users: uData || [],
       dbStatus: sData || null,
       syncVersion: (sData as any)?.syncVersion,
-      isLite: false,
+      isLite: wantLite,
     };
   },
 
