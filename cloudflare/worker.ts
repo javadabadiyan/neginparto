@@ -695,11 +695,109 @@ async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[])
   }
 }
 
-async function touchLastSaved(db: D1Database): Promise<void> {
-  await db
-    .prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)')
-    .bind('last_saved', faDateTime())
-    .run();
+async function touchLastSaved(db: D1Database): Promise<string> {
+  const version = String(Date.now());
+  await db.batch([
+    db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('last_saved', faDateTime()),
+    db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('sync_version', version),
+  ]);
+  return version;
+}
+
+async function getSyncMeta(db: D1Database): Promise<{ syncVersion: string; lastSaved: string }> {
+  const { results } = await db
+    .prepare("SELECT key, value FROM app_meta WHERE key IN ('sync_version', 'last_saved')")
+    .all<{ key: string; value: string }>();
+  let syncVersion = '1';
+  let lastSaved = '';
+  for (const r of results || []) {
+    if (r.key === 'sync_version' && r.value) syncVersion = String(r.value);
+    if (r.key === 'last_saved' && r.value) lastSaved = String(r.value);
+  }
+  return { syncVersion, lastSaved: lastSaved || faDateTime() };
+}
+
+async function computeDatabaseStatus(db: D1Database, authUser: any) {
+  const [
+    persAgg,
+    karAgg,
+    payAgg,
+    usrAgg,
+    jgRow,
+    jcRow,
+    cmtAgg,
+    mvRow,
+    mmRow,
+    urRow,
+    meta,
+  ] = await Promise.all([
+    db
+      .prepare(
+        `SELECT
+           COUNT(*) as total,
+           COALESCE(SUM(CASE WHEN COALESCE(json_extract(data_json, '$.documents.nationalCardImage'), '') != '' OR COALESCE(json_array_length(json_extract(data_json, '$.documents.shenasnamehPages')), 0) > 0 THEN 1 ELSE 0 END), 0) as docsCount,
+           COALESCE(SUM(COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0)), 0) as relCount
+         FROM personnel`
+      )
+      .first<any>(),
+    db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM karaneh').first<any>(),
+    db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM payroll').first<any>(),
+    db.prepare('SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN is_active != 0 THEN 1 ELSE 0 END), 0) as activeTotal FROM users').first<any>(),
+    db.prepare('SELECT COUNT(*) as total FROM job_groups').first<any>(),
+    db.prepare('SELECT COUNT(*) as total FROM job_classifications').first<any>(),
+    db
+      .prepare(
+        `SELECT COUNT(*) as total,
+                COALESCE(SUM(CASE WHEN json_extract(data_json, '$.isArchived') = 1 THEN 1 ELSE 0 END), 0) as archivedTotal
+         FROM commitments`
+      )
+      .first<any>(),
+    db.prepare('SELECT COUNT(*) as total FROM mining_volumes').first<any>(),
+    db.prepare('SELECT COUNT(*) as total FROM mining_machinery').first<any>(),
+    db.prepare('SELECT COUNT(*) as total FROM unit_reports').first<any>(),
+    getSyncMeta(db),
+  ]);
+
+  const canStats =
+    isSuperAdminUser(authUser) ||
+    checkPermission(authUser, 'system', 'dashboardStats') ||
+    checkPermission(authUser, 'system', 'backupDatabase') ||
+    checkPermission(authUser, 'system', 'restoreDatabase');
+  const canPers = canStats || checkPermission(authUser, 'personnel', 'view');
+  const canKar = canStats || checkPermission(authUser, 'karaneh', 'view');
+  const canPay = canStats || checkPermission(authUser, 'payroll', 'view');
+  const canUsers = canStats || checkPermission(authUser, 'users', 'view');
+  const canJg = canStats || checkPermission(authUser, 'jobGroups', 'view');
+  const canCmt = canStats || checkPermission(authUser, 'commitments', 'view');
+  const canMining = canStats || hasMiningOrUnitPerm(authUser, 'view');
+
+  return {
+    storageLocation: 'دیتابیس ابری دائمی و رایگان Cloudflare D1',
+    storageEngine: 'cloudflare-d1',
+    totalPersonnel: canPers ? Number(persAgg?.total || 0) : 0,
+    totalRelatives: canPers ? Number(persAgg?.relCount || 0) : 0,
+    totalKaranehRecords: canKar ? Number(karAgg?.total || 0) : 0,
+    totalPayrollRecords: canPay ? Number(payAgg?.total || 0) : 0,
+    totalUsers: canUsers ? Number(usrAgg?.total || 0) : 0,
+    totalActiveUsers: canUsers ? Number(usrAgg?.activeTotal || 0) : 0,
+    totalPersonnelWithDocs: canPers ? Number(persAgg?.docsCount || 0) : 0,
+    payrollPeriodsCount: canPay ? Number(payAgg?.periods || 0) : 0,
+    karanehPeriodsCount: canKar ? Number(karAgg?.periods || 0) : 0,
+    totalJobGroups: canJg ? Number(jgRow?.total || 0) : 0,
+    totalJobClassifications: canJg ? Number(jcRow?.total || 0) : 0,
+    totalCommitments: canCmt ? Number(cmtAgg?.total || 0) : 0,
+    totalArchivedCommitments: canCmt ? Number(cmtAgg?.archivedTotal || 0) : 0,
+    totalMiningVolumes: canMining ? Number(mvRow?.total || 0) : 0,
+    totalMiningMachinery: canMining ? Number(mmRow?.total || 0) : 0,
+    totalUnitReports: canMining ? Number(urRow?.total || 0) : 0,
+    fileSizeBytes: 0,
+    lastSaved: meta.lastSaved,
+    syncVersion: meta.syncVersion,
+    isLocalHost: false,
+    hostPlatform: 'cloudflare-workers-d1',
+    authProtected: true,
+    schemaVersion: '5.0-negin-parto-nasr-units-hub',
+  };
 }
 
 // ================= INITIAL SCHEMA & SEED =================
@@ -1033,11 +1131,13 @@ export default {
 
       // 1. Health Check (Public)
       if (method === 'GET' && (path === '/health' || path === '/')) {
+        const meta = await getSyncMeta(env.DB);
         return jsonRes(request, env, {
           success: true,
           engine: 'cloudflare',
           database: 'd1',
           service: 'neginparto-api',
+          syncVersion: meta.syncVersion,
         });
       }
 
@@ -1079,6 +1179,93 @@ export default {
       // 3. Session Verify
       if (method === 'GET' && path === '/auth/me') {
         return jsonRes(request, env, { success: true, data: sanitizeUser(authUser) });
+      }
+
+      // 4. Lightweight Sync Version Polling (for cross-browser real-time updates)
+      if (method === 'GET' && path === '/sync-version') {
+        const meta = await getSyncMeta(env.DB);
+        return jsonRes(request, env, { success: true, data: meta });
+      }
+
+      // 5. Unified Single-Request Bootstrap (loads all permitted data in 1 round-trip)
+      if (method === 'GET' && path === '/bootstrap') {
+        const canPers = checkPermission(authUser, 'personnel', 'view');
+        const canKar = checkPermission(authUser, 'karaneh', 'view');
+        const canPay = checkPermission(authUser, 'payroll', 'view');
+        const canJg = checkPermission(authUser, 'jobGroups', 'view');
+        const canCmt = checkPermission(authUser, 'commitments', 'view');
+        const canMining = hasMiningOrUnitPerm(authUser, 'view');
+        const canUsers = checkPermission(authUser, 'users', 'view');
+        const isCeoOrSuper = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
+
+        const [
+          rawPersonnel,
+          karaneh,
+          payroll,
+          jobGroups,
+          jobClassifications,
+          commitments,
+          rawVolumes,
+          rawMachinery,
+          rawReports,
+          rawUsers,
+          dbStatus,
+          meta,
+        ] = await Promise.all([
+          canPers ? getJsonRows(env.DB, 'personnel') : Promise.resolve([]),
+          canKar ? getJsonRows(env.DB, 'karaneh') : Promise.resolve([]),
+          canPay ? getJsonRows(env.DB, 'payroll') : Promise.resolve([]),
+          canJg ? getJsonRows(env.DB, 'job_groups') : Promise.resolve([]),
+          canJg ? getJsonRows(env.DB, 'job_classifications') : Promise.resolve([]),
+          canCmt ? getJsonRows(env.DB, 'commitments') : Promise.resolve([]),
+          canMining ? getJsonRows(env.DB, 'mining_volumes') : Promise.resolve([]),
+          canMining ? getJsonRows(env.DB, 'mining_machinery') : Promise.resolve([]),
+          canMining ? getJsonRows(env.DB, 'unit_reports') : Promise.resolve([]),
+          canUsers ? getAllUsers(env.DB) : Promise.resolve([]),
+          computeDatabaseStatus(env.DB, authUser),
+          getSyncMeta(env.DB),
+        ]);
+
+        let personnel = rawPersonnel;
+        if (canPers) {
+          const hideSalary = !checkPermission(authUser, 'personnel', 'viewSalary');
+          const hideDocs = !checkPermission(authUser, 'personnel', 'documents');
+          if (hideSalary || hideDocs) {
+            personnel = rawPersonnel.map((p: any) => ({
+              ...p,
+              ...(hideSalary ? { baseSalary: 0 } : {}),
+              ...(hideDocs ? { documents: undefined } : {}),
+            }));
+          }
+        }
+
+        const miningVolumes = isCeoOrSuper
+          ? rawVolumes
+          : rawVolumes.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName));
+        const miningMachinery = isCeoOrSuper
+          ? rawMachinery
+          : rawMachinery.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName));
+        const unitReports = isCeoOrSuper
+          ? rawReports
+          : rawReports.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
+
+        return jsonRes(request, env, {
+          success: true,
+          data: {
+            personnel,
+            karaneh,
+            payroll,
+            jobGroups,
+            jobClassifications,
+            commitments,
+            miningVolumes,
+            miningMachinery,
+            unitReports,
+            users: rawUsers.map(sanitizeUser),
+            dbStatus,
+            syncVersion: meta.syncVersion,
+          },
+        });
       }
 
       // ================= USERS ROUTES =================
@@ -2794,68 +2981,10 @@ export default {
 
       // ================= DATABASE STATUS, BACKUP & RESTORE =================
       if (path === '/database/status' && method === 'GET') {
-        const users = await getAllUsers(env.DB);
-        const personnel = await getJsonRows(env.DB, 'personnel');
-        const karaneh = await getJsonRows(env.DB, 'karaneh');
-        const payroll = await getJsonRows(env.DB, 'payroll');
-        const jobGroups = await getJsonRows(env.DB, 'job_groups');
-        const jobClassifications = await getJsonRows(env.DB, 'job_classifications');
-        const commitments = await getJsonRows(env.DB, 'commitments');
-        const miningVolumes = await getJsonRows(env.DB, 'mining_volumes');
-        const miningMachinery = await getJsonRows(env.DB, 'mining_machinery');
-        const unitReports = await getJsonRows(env.DB, 'unit_reports');
-        const metaRow = await env.DB.prepare('SELECT value FROM app_meta WHERE key = ?').bind('last_saved').first<{ value: string }>();
-
-        const payrollPeriodsCount = new Set(payroll.map((p: any) => p.period).filter(Boolean)).size;
-        const karanehPeriodsCount = new Set(karaneh.map((k: any) => k.period).filter(Boolean)).size;
-        const totalPersonnelWithDocs = personnel.filter((p: any) => {
-          const d = p.documents || {};
-          return Boolean(d.nationalCardImage || (d.shenasnamehPages && d.shenasnamehPages.length > 0));
-        }).length;
-        const totalActiveUsers = users.filter((u: any) => u.isActive !== false).length;
-        const totalRelatives = personnel.reduce((s: number, p: any) => s + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
-
-        const canStats =
-          isSuperAdminUser(authUser) ||
-          checkPermission(authUser, 'system', 'dashboardStats') ||
-          checkPermission(authUser, 'system', 'backupDatabase') ||
-          checkPermission(authUser, 'system', 'restoreDatabase');
-        const canPers = canStats || checkPermission(authUser, 'personnel', 'view');
-        const canKar = canStats || checkPermission(authUser, 'karaneh', 'view');
-        const canPay = canStats || checkPermission(authUser, 'payroll', 'view');
-        const canUsers = canStats || checkPermission(authUser, 'users', 'view');
-        const canJg = canStats || checkPermission(authUser, 'jobGroups', 'view');
-        const canCmt = canStats || checkPermission(authUser, 'commitments', 'view');
-        const canMining = canStats || hasMiningOrUnitPerm(authUser, 'view');
-
+        const statusData = await computeDatabaseStatus(env.DB, authUser);
         return jsonRes(request, env, {
           success: true,
-          data: {
-            storageLocation: 'دیتابیس ابری دائمی و رایگان Cloudflare D1',
-            storageEngine: 'cloudflare-d1',
-            totalPersonnel: canPers ? personnel.length : 0,
-            totalRelatives: canPers ? totalRelatives : 0,
-            totalKaranehRecords: canKar ? karaneh.length : 0,
-            totalPayrollRecords: canPay ? payroll.length : 0,
-            totalUsers: canUsers ? users.length : 0,
-            totalActiveUsers: canUsers ? totalActiveUsers : 0,
-            totalPersonnelWithDocs: canPers ? totalPersonnelWithDocs : 0,
-            payrollPeriodsCount: canPay ? payrollPeriodsCount : 0,
-            karanehPeriodsCount: canKar ? karanehPeriodsCount : 0,
-            totalJobGroups: canJg ? jobGroups.length : 0,
-            totalJobClassifications: canJg ? jobClassifications.length : 0,
-            totalCommitments: canCmt ? commitments.length : 0,
-            totalArchivedCommitments: canCmt ? commitments.filter((c: any) => c.isArchived).length : 0,
-            totalMiningVolumes: canMining ? miningVolumes.length : 0,
-            totalMiningMachinery: canMining ? miningMachinery.length : 0,
-            totalUnitReports: canMining ? unitReports.length : 0,
-            fileSizeBytes: 0,
-            lastSaved: metaRow?.value || faDateTime(),
-            isLocalHost: false,
-            hostPlatform: 'cloudflare-workers-d1',
-            authProtected: true,
-            schemaVersion: '5.0-negin-parto-nasr-units-hub',
-          },
+          data: statusData,
         });
       }
 

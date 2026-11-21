@@ -18,7 +18,7 @@ export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
 
 const LS_CLOUDFLARE_API_URL_KEY = 'npn_cloudflare_api_url_v1';
 
-const DEFAULT_GITHUB_CLOUDFLARE_URL = 'https://neginparto-api.ci-runner-223bd6.workers.dev';
+const DEFAULT_CLOUDFLARE_API_URL = 'https://neginparto-api.ci-runner-223bd6.workers.dev';
 
 let detectedEngine: StorageEngine | null = null;
 let engineDetectPromise: Promise<StorageEngine> | null = null;
@@ -50,10 +50,7 @@ export function getCloudflareApiUrl(): string {
   if (String(envVal).trim()) {
     return normalizeCloudflareUrl(String(envVal));
   }
-  if (typeof window !== 'undefined' && window.location.hostname.toLowerCase() === 'javadabadiyan.github.io') {
-    return DEFAULT_GITHUB_CLOUDFLARE_URL;
-  }
-  return '';
+  return DEFAULT_CLOUDFLARE_API_URL;
 }
 
 export function setCloudflareApiUrl(rawUrl: string): string {
@@ -159,44 +156,37 @@ export async function detectStorageEngine(): Promise<StorageEngine> {
   if (detectedEngine) return detectedEngine;
   if (!engineDetectPromise) {
     engineDetectPromise = (async () => {
-      let explicitLsCfUrl = '';
-      try {
-        explicitLsCfUrl =
-          typeof localStorage !== 'undefined'
-            ? normalizeCloudflareUrl(localStorage.getItem(LS_CLOUDFLARE_API_URL_KEY) || '')
-            : '';
-      } catch {
-        explicitLsCfUrl = '';
-      }
       const cfUrl = getCloudflareApiUrl();
-      const isStaticGithub =
-        typeof window !== 'undefined' && window.location.hostname.toLowerCase().endsWith('.github.io');
 
-      if ((explicitLsCfUrl || isStaticGithub) && cfUrl) {
-        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 7500)) {
+      // Always prioritize the shared Cloudflare D1 database across ALL browsers, phones, previews, and GitHub Pages
+      if (cfUrl) {
+        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 6500)) {
           detectedEngine = 'cloudflare';
           return 'cloudflare';
         }
-        // Single quick retry in case of cold-start / mobile radio wakeup
-        await new Promise((r) => setTimeout(r, 350));
-        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 8500)) {
+        await new Promise((r) => setTimeout(r, 300));
+        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 8000)) {
           detectedEngine = 'cloudflare';
           return 'cloudflare';
         }
       }
 
-      if (await probeJsonEndpoint('./api/health', 'node', 3500)) {
+      if (await probeJsonEndpoint('./api/health', 'node', 2500)) {
         detectedEngine = 'node';
         return 'node';
       }
-      if (await probeJsonEndpoint('./api.php?r=/health', 'php', 3500)) {
+      if (await probeJsonEndpoint('./api.php?r=/health', 'php', 2500)) {
         detectedEngine = 'php';
         return 'php';
       }
-      if (cfUrl && (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 7500))) {
-        detectedEngine = 'cloudflare';
+
+      // Never permanently lock into browser-local IndexedDB when Cloudflare is configured;
+      // allow subsequent calls to re-detect Cloudflare once network recovers.
+      if (cfUrl) {
+        engineDetectPromise = null;
         return 'cloudflare';
       }
+
       detectedEngine = 'indexeddb';
       return 'indexeddb';
     })();
@@ -890,7 +880,94 @@ export const api = {
     return callBackend('/unit-reports/delete-all', { method: 'POST' });
   },
 
-  // Database status & backup
+  // Database status, fast single-request bootstrap & real-time sync version
+  async getSyncVersion(): Promise<{ syncVersion: string; lastSaved?: string } | null> {
+    const engine = await detectStorageEngine();
+    if (engine === 'indexeddb') return null;
+    if (engine === 'cloudflare') {
+      const cfUrl = getCloudflareApiUrl();
+      try {
+        const res = await fetch(`${cfUrl}/api/sync-version`, {
+          method: 'GET',
+          headers: getHeaders(false),
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const json: any = await res.json().catch(() => null);
+          if (json?.success && json?.data?.syncVersion) {
+            return {
+              syncVersion: String(json.data.syncVersion),
+              lastSaved: json.data.lastSaved,
+            };
+          }
+        }
+        if (res.status === 404) {
+          // Fallback to /health on older Worker deployments
+          const hRes = await fetch(`${cfUrl}/api/health`, { cache: 'no-store' });
+          const hJson: any = await hRes.json().catch(() => null);
+          if (hJson?.syncVersion) {
+            return { syncVersion: String(hJson.syncVersion) };
+          }
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  },
+
+  async getBootstrapData(): Promise<{
+    personnel: Personnel[];
+    karaneh: KaranehRecord[];
+    payroll: PayrollRecord[];
+    jobGroups: JobGroup[];
+    jobClassifications: JobClassificationRecord[];
+    commitments: PersonnelCommitment[];
+    miningVolumes: MiningVolumeRecord[];
+    miningMachinery: MiningMachineryRecord[];
+    unitReports: UnitOperationalReport[];
+    users: User[];
+    dbStatus: DatabaseStatus | null;
+    syncVersion?: string;
+  }> {
+    const engine = await detectStorageEngine();
+    if (engine === 'cloudflare') {
+      const json = await callBackend('/bootstrap');
+      if (json?.success && json?.data) {
+        return json.data;
+      }
+    }
+
+    const [pData, kData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
+      api.getPersonnel(),
+      api.getKaraneh(),
+      api.getPayroll(),
+      api.getJobGroups(),
+      api.getJobClassifications(),
+      api.getCommitments(),
+      api.getMiningVolumes(),
+      api.getMiningMachinery(),
+      api.getUnitReports(),
+      api.getUsers(),
+      api.getDatabaseStatus(),
+    ]);
+
+    return {
+      personnel: pData || [],
+      karaneh: kData || [],
+      payroll: payData || [],
+      jobGroups: jData || [],
+      jobClassifications: jcData || [],
+      commitments: cData || [],
+      miningVolumes: volData || [],
+      miningMachinery: machData || [],
+      unitReports: urData || [],
+      users: uData || [],
+      dbStatus: sData || null,
+      syncVersion: (sData as any)?.syncVersion,
+    };
+  },
+
   async getDatabaseStatus(): Promise<DatabaseStatus> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getDatabaseStatus();

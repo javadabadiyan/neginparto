@@ -3,20 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Navbar } from './components/Navbar';
 import { LoginScreen } from './components/LoginScreen';
 import { DashboardOverview } from './components/DashboardOverview';
-import { PersonnelModule } from './components/PersonnelModule';
-import { KaranehModule } from './components/KaranehModule';
-import { JobGroupsModule } from './components/JobGroupsModule';
-import { CommitmentsModule } from './components/CommitmentsModule';
-import { UsersModule } from './components/UsersModule';
-import { PayrollModule } from './components/PayrollModule';
-import { LocalHostDatabaseModule } from './components/LocalHostDatabaseModule';
-import { SmartPersonnelDashboard } from './components/SmartPersonnelDashboard';
-import { CeoDashboardModule } from './components/CeoDashboardModule';
-import { UnitOperationsModule } from './components/UnitOperationsModule';
+
+const PersonnelModule = lazy(() => import('./components/PersonnelModule').then((m) => ({ default: m.PersonnelModule })));
+const KaranehModule = lazy(() => import('./components/KaranehModule').then((m) => ({ default: m.KaranehModule })));
+const JobGroupsModule = lazy(() => import('./components/JobGroupsModule').then((m) => ({ default: m.JobGroupsModule })));
+const CommitmentsModule = lazy(() => import('./components/CommitmentsModule').then((m) => ({ default: m.CommitmentsModule })));
+const UsersModule = lazy(() => import('./components/UsersModule').then((m) => ({ default: m.UsersModule })));
+const PayrollModule = lazy(() => import('./components/PayrollModule').then((m) => ({ default: m.PayrollModule })));
+const LocalHostDatabaseModule = lazy(() => import('./components/LocalHostDatabaseModule').then((m) => ({ default: m.LocalHostDatabaseModule })));
+const SmartPersonnelDashboard = lazy(() => import('./components/SmartPersonnelDashboard').then((m) => ({ default: m.SmartPersonnelDashboard })));
+const CeoDashboardModule = lazy(() => import('./components/CeoDashboardModule').then((m) => ({ default: m.CeoDashboardModule })));
+const UnitOperationsModule = lazy(() => import('./components/UnitOperationsModule').then((m) => ({ default: m.UnitOperationsModule })));
 import { api } from './services/api';
 import {
   User,
@@ -73,6 +74,8 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [firebaseSyncing, setFirebaseSyncing] = useState<boolean>(false);
   const githubAutoPulledRef = useRef<boolean>(false);
+  const lastSyncVersionRef = useRef<string | null>(null);
+  const isReloadingDataRef = useRef<boolean>(false);
 
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -133,40 +136,51 @@ export default function App() {
     return () => window.removeEventListener('hr:unauthorized', onUnauthorized);
   }, []);
 
-  // Fetch all initial data
-  const loadAllData = async () => {
-    try {
-      setLoading(true);
-      const [pData, kData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
-        api.getPersonnel(),
-        api.getKaraneh(),
-        api.getPayroll(),
-        api.getJobGroups(),
-        api.getJobClassifications(),
-        api.getCommitments(),
-        api.getMiningVolumes(),
-        api.getMiningMachinery(),
-        api.getUnitReports(),
-        api.getUsers(),
-        api.getDatabaseStatus(),
-      ]);
+  // Keep lastSyncVersionRef aligned whenever dbStatus refreshes from any local mutation
+  useEffect(() => {
+    const sv = (dbStatus as any)?.syncVersion;
+    if (sv) {
+      lastSyncVersionRef.current = String(sv);
+    }
+  }, [dbStatus]);
 
-      setPersonnelList(pData || []);
-      setKaranehList(kData || []);
-      setPayrollList(payData || []);
-      setJobGroups(jData || []);
-      setJobClassifications(jcData || []);
-      setCommitments(cData || []);
-      setMiningVolumes(volData || []);
-      setMiningMachinery(machData || []);
-      setUnitReports(urData || []);
-      setUsers(uData || []);
-      setDbStatus(sData || null);
+  // Fetch all initial data in a single round-trip bootstrap (with optional silent live-sync mode)
+  const loadAllData = async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (isReloadingDataRef.current && silent) return;
+    isReloadingDataRef.current = true;
+    try {
+      if (!silent) {
+        setLoading(true);
+      }
+      const bundle = await api.getBootstrapData();
+
+      setPersonnelList(bundle.personnel || []);
+      setKaranehList(bundle.karaneh || []);
+      setPayrollList(bundle.payroll || []);
+      setJobGroups(bundle.jobGroups || []);
+      setJobClassifications(bundle.jobClassifications || []);
+      setCommitments(bundle.commitments || []);
+      setMiningVolumes(bundle.miningVolumes || []);
+      setMiningMachinery(bundle.miningMachinery || []);
+      setUnitReports(bundle.unitReports || []);
+      setUsers(bundle.users || []);
+      setDbStatus(bundle.dbStatus || null);
+
+      const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
+      if (nextSync) {
+        lastSyncVersionRef.current = String(nextSync);
+      }
     } catch (err: any) {
       console.error('Error loading data:', err);
-      showNotification('خطا در بارگذاری اطلاعات از پایگاه داده سرور', 'error');
+      if (!silent) {
+        showNotification('خطا در بارگذاری اطلاعات از پایگاه داده سرور', 'error');
+      }
     } finally {
-      setLoading(false);
+      isReloadingDataRef.current = false;
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -244,8 +258,113 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Live Cloudflare D1 Cross-Browser / Cross-Device Sync Watcher
+  useEffect(() => {
+    if (!currentUser) return;
+    let disposed = false;
+    let checking = false;
+
+    const checkCloudChanges = async () => {
+      if (disposed || checking || isReloadingDataRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      checking = true;
+      try {
+        const meta = await api.getSyncVersion();
+        if (disposed || !meta?.syncVersion) return;
+        const incoming = String(meta.syncVersion);
+        if (lastSyncVersionRef.current === null) {
+          lastSyncVersionRef.current = incoming;
+          return;
+        }
+        if (incoming !== lastSyncVersionRef.current) {
+          lastSyncVersionRef.current = incoming;
+          await loadAllData({ silent: true });
+          if (!disposed) {
+            showNotification('تغییرات جدید از پایگاه داده ابری کلودفلر همگام‌سازی شد.');
+          }
+        }
+      } catch {
+        // Ignore transient network polling glitches
+      } finally {
+        checking = false;
+      }
+    };
+
+    const onVisibleOrFocus = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void checkCloudChanges();
+      }
+    };
+
+    window.addEventListener('focus', onVisibleOrFocus);
+    window.addEventListener('online', onVisibleOrFocus);
+    document.addEventListener('visibilitychange', onVisibleOrFocus);
+    const intervalId = setInterval(() => {
+      void checkCloudChanges();
+    }, 12000);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', onVisibleOrFocus);
+      window.removeEventListener('online', onVisibleOrFocus);
+      document.removeEventListener('visibilitychange', onVisibleOrFocus);
+      clearInterval(intervalId);
+    };
+  }, [currentUser]);
+
+  // Automatic Frontend Deploy Version Watcher (auto-refreshes mobile/desktop after GitHub Pages push)
+  useEffect(() => {
+    if (!import.meta.env.PROD || typeof __APP_BUILD_ID__ !== 'string') return;
+    let disposed = false;
+    let triggeredReload = false;
+
+    const checkBuildVersion = async () => {
+      if (disposed || triggeredReload) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      try {
+        const res = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        const remoteVersion = data?.version ? String(data.version) : '';
+        if (remoteVersion && remoteVersion !== String(__APP_BUILD_ID__)) {
+          triggeredReload = true;
+          showNotification('نسخه جدید سامانه منتشر شد؛ در حال بروزرسانی خودکار...');
+          setTimeout(() => {
+            window.location.reload();
+          }, 900);
+        }
+      } catch {
+        // Ignore transient offline errors
+      }
+    };
+
+    const onVisibility = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void checkBuildVersion();
+      }
+    };
+
+    window.addEventListener('focus', onVisibility);
+    document.addEventListener('visibilitychange', onVisibility);
+    const timer = setInterval(() => {
+      void checkBuildVersion();
+    }, 45000);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', onVisibility);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearInterval(timer);
+    };
+  }, []);
+
   // Helper: non-blocking debounced push to GitHub file database when configured & enabled
   const triggerGitHubAutoSync = () => {
+    api.getSyncVersion().then((meta) => {
+      if (meta?.syncVersion) {
+        lastSyncVersionRef.current = String(meta.syncVersion);
+      }
+    }).catch(() => {});
     scheduleBackgroundGitHubPush(
       () => api.exportDatabaseSnapshot(),
       undefined,
@@ -1583,7 +1702,13 @@ export default function App() {
         )}
 
         {!loading && (
-          <>
+          <Suspense
+            fallback={
+              <div className="py-16 text-center text-xs text-slate-500 font-semibold">
+                در حال بارگذاری ماژول...
+              </div>
+            }
+          >
             {activeTab === 'dashboard' && (
               <DashboardOverview
                 personnel={personnelList}
@@ -1828,7 +1953,7 @@ export default function App() {
                     const s = await api.getDatabaseStatus();
                     setDbStatus(s);
                   }}
-                  onDataReload={loadAllData}
+                  onDataReload={() => loadAllData()}
                   onRestoreBackup={handleRestoreBackup}
                   onResetDemo={handleResetDemo}
                 />
@@ -1859,7 +1984,7 @@ export default function App() {
                 </div>
               )
             )}
-          </>
+          </Suspense>
         )}
       </main>
 
