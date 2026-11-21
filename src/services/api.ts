@@ -154,23 +154,16 @@ async function probeJsonEndpoint(
 
 export async function detectStorageEngine(): Promise<StorageEngine> {
   if (detectedEngine) return detectedEngine;
+
+  const cfUrl = getCloudflareApiUrl();
+  if (cfUrl) {
+    // Immediate fast-path: go straight to Cloudflare D1 without wasting a startup /health round-trip
+    detectedEngine = 'cloudflare';
+    return 'cloudflare';
+  }
+
   if (!engineDetectPromise) {
     engineDetectPromise = (async () => {
-      const cfUrl = getCloudflareApiUrl();
-
-      // Always prioritize the shared Cloudflare D1 database across ALL browsers, phones, previews, and GitHub Pages
-      if (cfUrl) {
-        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 6500)) {
-          detectedEngine = 'cloudflare';
-          return 'cloudflare';
-        }
-        await new Promise((r) => setTimeout(r, 300));
-        if (await probeJsonEndpoint(`${cfUrl}/api/health`, 'cloudflare', 8000)) {
-          detectedEngine = 'cloudflare';
-          return 'cloudflare';
-        }
-      }
-
       if (await probeJsonEndpoint('./api/health', 'node', 2500)) {
         detectedEngine = 'node';
         return 'node';
@@ -178,13 +171,6 @@ export async function detectStorageEngine(): Promise<StorageEngine> {
       if (await probeJsonEndpoint('./api.php?r=/health', 'php', 2500)) {
         detectedEngine = 'php';
         return 'php';
-      }
-
-      // Never permanently lock into browser-local IndexedDB when Cloudflare is configured;
-      // allow subsequent calls to re-detect Cloudflare once network recovers.
-      if (cfUrl) {
-        engineDetectPromise = null;
-        return 'cloudflare';
       }
 
       detectedEngine = 'indexeddb';
@@ -300,7 +286,8 @@ function compactPayrollItemForUpload(item: any): any {
 async function sendBatchInChunks(
   items: any[],
   chunkSize: number,
-  sendChunk: (chunk: any[], chunkIndex: number, totalChunks: number) => Promise<any>
+  sendChunk: (chunk: any[], chunkIndex: number, totalChunks: number) => Promise<any>,
+  concurrency = 2
 ): Promise<any> {
   if (!Array.isArray(items) || items.length === 0) {
     return { success: false, message: 'هیچ ردیف معتبری در فایل اکسل برای ثبت وجود ندارد.' };
@@ -318,10 +305,10 @@ async function sendBatchInChunks(
   const sendAdaptiveSlice = async (
     slice: any[],
     chunkIndex: number,
-    totalChunks: number,
+    totalChunksCount: number,
     depth = 0
   ): Promise<any> => {
-    const res = await sendChunk(slice, chunkIndex, totalChunks);
+    const res = await sendChunk(slice, chunkIndex, totalChunksCount);
     if (res && res.success) return res;
 
     const isRetryable =
@@ -329,18 +316,20 @@ async function sendBatchInChunks(
 
     if (isRetryable && slice.length > 5 && depth < 2) {
       const mid = Math.ceil(slice.length / 2);
-      const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunks, depth + 1);
+      const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunksCount, depth + 1);
       if (!left?.success) return left;
-      const right = await sendAdaptiveSlice(slice.slice(mid), chunkIndex, totalChunks, depth + 1);
+      const right = await sendAdaptiveSlice(slice.slice(mid), chunkIndex, totalChunksCount, depth + 1);
       if (!right?.success) return right;
       const ld = left.data || {};
       const rd = right.data || {};
       return {
         success: true,
         message: right.message || left.message,
+        added: Number(left.added || 0) + Number(right.added || 0),
+        updated: Number(left.updated || 0) + Number(right.updated || 0),
         data: {
-          inserted: Number(ld.inserted || 0) + Number(rd.inserted || 0),
-          updated: Number(ld.updated || 0) + Number(rd.updated || 0),
+          inserted: Number(ld.inserted ?? left.added ?? 0) + Number(rd.inserted ?? right.added ?? 0),
+          updated: Number(ld.updated ?? left.updated ?? 0) + Number(rd.updated ?? right.updated ?? 0),
           skipped: Number(ld.skipped || 0) + Number(rd.skipped || 0),
           matched: Number(ld.matched || 0) + Number(rd.matched || 0),
           unmatched: Number(ld.unmatched || 0) + Number(rd.unmatched || 0),
@@ -350,34 +339,47 @@ async function sendBatchInChunks(
     }
 
     if (isRetryable && depth === 0) {
-      await new Promise((r) => setTimeout(r, 350));
-      return sendChunk(slice, chunkIndex, totalChunks);
+      await new Promise((r) => setTimeout(r, 250));
+      return sendChunk(slice, chunkIndex, totalChunksCount);
     }
 
     return res;
   };
 
-  for (let i = 0; i < totalChunks; i++) {
-    const slice = items.slice(i * chunkSize, (i + 1) * chunkSize);
-    const res = await sendAdaptiveSlice(slice, i, totalChunks);
-    if (!res || !res.success) {
-      const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
-      const progressNote =
-        totalChunks > 1 ? ` (توقف در دسته ${i + 1} از ${totalChunks})` : '';
-      return {
-        success: false,
-        message: `${baseMsg}${progressNote}`,
-        data: res?.data,
-      };
+  const parallelWidth = Math.max(1, Math.min(concurrency, 4));
+  for (let start = 0; start < totalChunks; start += parallelWidth) {
+    const waveIndices: number[] = [];
+    for (let offset = 0; offset < parallelWidth && start + offset < totalChunks; offset++) {
+      waveIndices.push(start + offset);
     }
-    const d = res.data || {};
-    totalInserted += Number(d.inserted || 0);
-    totalUpdated += Number(d.updated || 0);
-    totalSkipped += Number(d.skipped || 0);
-    totalMatched += Number(d.matched || 0);
-    totalUnmatched += Number(d.unmatched || 0);
-    totalAddedRelatives += Number(d.addedRelatives || 0);
-    if (res.message) lastMessage = res.message;
+
+    const waveResults = await Promise.all(
+      waveIndices.map((idx) => {
+        const slice = items.slice(idx * chunkSize, (idx + 1) * chunkSize);
+        return sendAdaptiveSlice(slice, idx, totalChunks).then((res) => ({ idx, res }));
+      })
+    );
+
+    for (const { idx, res } of waveResults) {
+      if (!res || !res.success) {
+        const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
+        const progressNote =
+          totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks})` : '';
+        return {
+          success: false,
+          message: `${baseMsg}${progressNote}`,
+          data: res?.data,
+        };
+      }
+      const d = res.data || {};
+      totalInserted += Number(d.inserted ?? res.added ?? 0);
+      totalUpdated += Number(d.updated ?? res.updated ?? 0);
+      totalSkipped += Number(d.skipped || 0);
+      totalMatched += Number(d.matched || 0);
+      totalUnmatched += Number(d.unmatched || 0);
+      totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
+      if (res.message) lastMessage = res.message;
+    }
   }
 
   if (totalChunks === 1 && lastMessage) {
@@ -527,8 +529,11 @@ export const api = {
   async batchImportPersonnel(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportPersonnel(items);
-    return sendBatchInChunks(items, 35, (chunk) =>
-      callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk } })
+    return sendBatchInChunks(
+      items,
+      70,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk } }),
+      3
     );
   },
 
@@ -547,8 +552,11 @@ export const api = {
   async batchImportRelatives(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportRelatives(items);
-    return sendBatchInChunks(items, 35, (chunk) =>
-      callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk } })
+    return sendBatchInChunks(
+      items,
+      50,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk } }),
+      2
     );
   },
 
@@ -599,8 +607,11 @@ export const api = {
   async batchImportKaraneh(period: string, items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportKaraneh(period, items);
-    return sendBatchInChunks(items, 40, (chunk) =>
-      callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk } })
+    return sendBatchInChunks(
+      items,
+      60,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk } }),
+      2
     );
   },
 
@@ -765,8 +776,11 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportPayroll(period, items, useRowYearMonth);
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
-    return sendBatchInChunks(compacted, 15, (chunk) =>
-      callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk } })
+    return sendBatchInChunks(
+      compacted,
+      20,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk } }),
+      2
     );
   },
 

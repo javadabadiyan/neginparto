@@ -74,10 +74,15 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [firebaseSyncing, setFirebaseSyncing] = useState<boolean>(false);
   const githubAutoPulledRef = useRef<boolean>(false);
+  const loadedForUserIdRef = useRef<string | null>(null);
   const lastSyncVersionRef = useRef<string | null>(null);
   const isReloadingDataRef = useRef<boolean>(false);
 
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshDbStatusAsync = () => {
+    api.getDatabaseStatus().then(setDbStatus).catch(() => {});
+  };
 
   // Notification Toast
   const [notification, setNotification] = useState<{
@@ -124,6 +129,7 @@ export default function App() {
       const customMsg = (ev as CustomEvent<{ message?: string }>)?.detail?.message;
       localStorage.removeItem('hr_auth_token');
       localStorage.removeItem('hr_current_user');
+      loadedForUserIdRef.current = null;
       setCurrentUser(null);
       setActiveTab('dashboard');
       showNotification(
@@ -223,44 +229,50 @@ export default function App() {
   }, [currentUser, activeTab]);
 
   useEffect(() => {
-    if (currentUser) {
-      loadAllData().then(async () => {
-        if (githubAutoPulledRef.current) return;
-        const canRestore =
-          currentUser.role === 'super_admin' ||
-          currentUser.username === 'javadabadiyan' ||
-          Boolean(normalizePermissions(currentUser.permissions).system?.restoreDatabase);
-        if (!canRestore) return;
-
-        if (isGitHubVaultLocked()) {
-          githubAutoPulledRef.current = true;
-          showNotification('گاوصندوق دیتابیس گیت‌هاب قفل است؛ برای همگام‌سازی خودکار، در بخش «دیتابیس و گیت‌هاب» رمز رمزنگاری را وارد کنید.');
-          return;
-        }
-
-        if (!isGitHubAutoSyncEnabled()) return;
-        githubAutoPulledRef.current = true;
-        try {
-          const cfg = loadGitHubSyncConfig();
-          const pulled = await pullDatabaseFromGitHub(cfg);
-          const merged = await api.mergeFirestoreSnapshot(pulled);
-          if (merged?.success) {
-            await loadAllData();
-            showNotification(`دیتابیس از فایل گیت‌هاب (${cfg.repo}/${cfg.filePath}) همگام‌سازی شد.`);
-          }
-        } catch (err: any) {
-          if (err instanceof GitHubSecurityError && err.code === 'E2E_LOCKED') {
-            showNotification('دیتابیس گیت‌هاب با رمزنگاری AES-256 قفل است؛ در بخش «دیتابیس و گیت‌هاب» کلید را وارد کنید.');
-          }
-          // Silent if GitHub DB file has not been created yet or offline
-        }
-      });
+    const uid = currentUser?.id;
+    if (!uid) {
+      loadedForUserIdRef.current = null;
+      return;
     }
-  }, [currentUser]);
+    if (loadedForUserIdRef.current === uid) return;
+    loadedForUserIdRef.current = uid;
+
+    loadAllData().then(async () => {
+      if (githubAutoPulledRef.current) return;
+      const canRestore =
+        currentUser.role === 'super_admin' ||
+        currentUser.username === 'javadabadiyan' ||
+        Boolean(normalizePermissions(currentUser.permissions).system?.restoreDatabase);
+      if (!canRestore) return;
+
+      if (isGitHubVaultLocked()) {
+        githubAutoPulledRef.current = true;
+        showNotification('گاوصندوق دیتابیس گیت‌هاب قفل است؛ برای همگام‌سازی خودکار، در بخش «دیتابیس و گیت‌هاب» رمز رمزنگاری را وارد کنید.');
+        return;
+      }
+
+      if (!isGitHubAutoSyncEnabled()) return;
+      githubAutoPulledRef.current = true;
+      try {
+        const cfg = loadGitHubSyncConfig();
+        const pulled = await pullDatabaseFromGitHub(cfg);
+        const merged = await api.mergeFirestoreSnapshot(pulled);
+        if (merged?.success) {
+          await loadAllData({ silent: true });
+          showNotification(`دیتابیس از فایل گیت‌هاب (${cfg.repo}/${cfg.filePath}) همگام‌سازی شد.`);
+        }
+      } catch (err: any) {
+        if (err instanceof GitHubSecurityError && err.code === 'E2E_LOCKED') {
+          showNotification('دیتابیس گیت‌هاب با رمزنگاری AES-256 قفل است؛ در بخش «دیتابیس و گیت‌هاب» کلید را وارد کنید.');
+        }
+        // Silent if GitHub DB file has not been created yet or offline
+      }
+    });
+  }, [currentUser?.id]);
 
   // Live Cloudflare D1 Cross-Browser / Cross-Device Sync Watcher
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser?.id) return;
     let disposed = false;
     let checking = false;
 
@@ -310,7 +322,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibleOrFocus);
       clearInterval(intervalId);
     };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Automatic Frontend Deploy Version Watcher (auto-refreshes mobile/desktop after GitHub Pages push)
   useEffect(() => {
@@ -470,6 +482,7 @@ export default function App() {
     localStorage.removeItem('hr_current_user');
     lockGitHubSession();
     githubAutoPulledRef.current = false;
+    loadedForUserIdRef.current = null;
     signOut(auth).catch(() => {});
     setCurrentUser(null);
     setActiveTab('dashboard');
@@ -492,8 +505,7 @@ export default function App() {
         }
         const updated = await api.getPersonnel();
         setPersonnelList(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -515,8 +527,7 @@ export default function App() {
           deleteSingleFromFirestore('personnel', id).catch(() => {});
         }
         setPersonnelList(prev => prev.filter(p => p.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -536,8 +547,7 @@ export default function App() {
         showNotification(res.message || 'بارگذاری پرونده‌ها از اکسل انجام شد.');
         const updated = await api.getPersonnel();
         setPersonnelList(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -561,8 +571,7 @@ export default function App() {
         }
         const updated = await api.getKaraneh();
         setKaranehList(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -584,8 +593,7 @@ export default function App() {
           deleteSingleFromFirestore('karaneh', id).catch(() => {});
         }
         setKaranehList(prev => prev.filter(k => k.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -605,8 +613,7 @@ export default function App() {
         showNotification(res.message || 'کارانه ماهانه با موفقیت از اکسل بارگذاری گردید.');
         const updated = await api.getKaraneh();
         setKaranehList(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -635,8 +642,7 @@ export default function App() {
         }
         const updated = await api.getJobGroups();
         setJobGroups(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -658,8 +664,7 @@ export default function App() {
           deleteSingleFromFirestore('jobGroups', id).catch(() => {});
         }
         setJobGroups(prev => prev.filter(g => g.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -685,8 +690,7 @@ export default function App() {
         }
         const updated = await api.getJobClassifications();
         setJobClassifications(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -708,8 +712,7 @@ export default function App() {
           deleteSingleFromFirestore('jobClassifications', id).catch(() => {});
         }
         setJobClassifications(prev => prev.filter(item => item.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -729,8 +732,7 @@ export default function App() {
         showNotification(res.message || 'فایل اکسل طبقه‌بندی مشاغل با موفقیت بارگذاری شد.');
         const updated = await api.getJobClassifications();
         setJobClassifications(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -759,8 +761,7 @@ export default function App() {
         }
         const updated = await api.getCommitments();
         setCommitments(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -782,8 +783,7 @@ export default function App() {
           deleteSingleFromFirestore('commitments', id).catch(() => {});
         }
         setCommitments(prev => prev.filter(c => c.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -803,8 +803,7 @@ export default function App() {
         showNotification(res.message || 'اسناد تعهدات از فایل اکسل با موفقیت ثبت شد.');
         const updated = await api.getCommitments();
         setCommitments(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -837,8 +836,7 @@ export default function App() {
         }
         const updated = await api.getUsers();
         setUsers(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -860,8 +858,7 @@ export default function App() {
           deleteSingleFromFirestore('users', id).catch(() => {});
         }
         setUsers(prev => prev.filter(u => u.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -881,8 +878,7 @@ export default function App() {
         showNotification(res.message || 'کاربران با موفقیت از اکسل تعریف/به‌روزرسانی شدند.');
         const updated = await api.getUsers();
         setUsers(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -907,8 +903,7 @@ export default function App() {
         showNotification(res.message || 'فایل اکسل حقوق با موفقیت در پایگاه داده ثبت شد.');
         const updated = await api.getPayroll();
         setPayrollList(updated);
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -930,8 +925,7 @@ export default function App() {
           deleteSingleFromFirestore('payroll', id).catch(() => {});
         }
         setPayrollList(prev => prev.filter(p => p.id !== id));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -954,8 +948,7 @@ export default function App() {
           deleteIdsFromFirestore('payroll', matchingIds).catch(() => {});
         }
         setPayrollList(prev => prev.filter(p => p.period !== period));
-        const st = await api.getDatabaseStatus();
-        setDbStatus(st);
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       } else {
@@ -979,7 +972,7 @@ export default function App() {
           deleteIdsFromFirestore('personnel', ids).catch(() => {});
         }
         showNotification(res.message || 'پرونده‌های انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1001,7 +994,7 @@ export default function App() {
           deleteIdsFromFirestore('karaneh', ids).catch(() => {});
         }
         showNotification(res.message || 'رکوردهای کارانه انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1023,7 +1016,7 @@ export default function App() {
           deleteIdsFromFirestore('payroll', ids).catch(() => {});
         }
         showNotification(res.message || 'رکوردهای حقوق انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1045,7 +1038,7 @@ export default function App() {
           deleteIdsFromFirestore('jobGroups', ids).catch(() => {});
         }
         showNotification(res.message || 'گروه‌های شغلی انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1067,7 +1060,7 @@ export default function App() {
           deleteIdsFromFirestore('jobClassifications', ids).catch(() => {});
         }
         showNotification(res.message || 'ردیف‌های طبقه‌بندی انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1089,7 +1082,7 @@ export default function App() {
           deleteIdsFromFirestore('commitments', ids).catch(() => {});
         }
         showNotification(res.message || 'اسناد تعهد انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1111,7 +1104,7 @@ export default function App() {
           deleteIdsFromFirestore('users', ids).catch(() => {});
         }
         showNotification(res.message || 'کاربران انتخاب‌شده حذف شدند.');
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         return true;
       }
@@ -1131,7 +1124,7 @@ export default function App() {
         showNotification(res.message || 'اطلاعات بستگان با موفقیت در پرونده پرسنل ثبت شد.');
         const updated = await api.getPersonnel();
         setPersonnelList(updated);
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         return true;
       }
@@ -1149,7 +1142,7 @@ export default function App() {
       if (res.success) {
         const updated = await api.getPersonnel();
         setPersonnelList(updated);
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'کلیه اطلاعات بستگان از پرونده‌ها پاک شد.');
         return true;
@@ -1171,7 +1164,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('personnel', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'کلیه اطلاعات جدول پرسنل پاک شد.');
         return true;
@@ -1193,7 +1186,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && matchingIds.length > 0) {
           deleteIdsFromFirestore('karaneh', matchingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'اطلاعات کارانه پاکسازی شد.');
         return true;
@@ -1215,7 +1208,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('payroll', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'کلیه فیش‌های حقوق و دستمزد پاکسازی شد.');
         return true;
@@ -1237,7 +1230,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('jobGroups', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'کلیه گروه‌های شغلی پاکسازی شد.');
         return true;
@@ -1259,7 +1252,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('jobClassifications', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'کلیه ردیف‌های جدول ۱۸ ستونی طبقه‌بندی مشاغل پاکسازی شد.');
         return true;
@@ -1281,7 +1274,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('commitments', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'کلیه اسناد تعهدات پاکسازی شد.');
         return true;
@@ -1307,7 +1300,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && deletedIds.length > 0) {
           deleteIdsFromFirestore('users', deletedIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'سایر کاربران جدول حذف شدند (مدیر ارشد و کاربر فعلی محفوظ ماندند).');
         return true;
@@ -1329,7 +1322,7 @@ export default function App() {
           syncSingleRecordToFirestore('miningVolumes', res.data).catch(() => {});
         }
         setMiningVolumes(await api.getMiningVolumes());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'آمار حجم عملیات ماهانه ذخیره شد.');
         return { success: true, message: res.message };
@@ -1347,7 +1340,7 @@ export default function App() {
       const res = await api.batchImportMiningVolumes(items);
       if (res.success) {
         setMiningVolumes(await api.getMiningVolumes());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'آمار حجم عملیات از اکسل بارگذاری شد.');
         return { success: true, message: res.message };
@@ -1369,7 +1362,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteSingleFromFirestore('miningVolumes', id).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('ردیف آمار حجم حذف شد.');
       }
@@ -1387,7 +1380,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteIdsFromFirestore('miningVolumes', ids).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('ردیف‌های انتخاب‌شده آمار حجم حذف شدند.');
       }
@@ -1405,7 +1398,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('miningVolumes', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('کلیه آمار حجم عملیات پاکسازی شد.');
       }
@@ -1422,7 +1415,7 @@ export default function App() {
           syncSingleRecordToFirestore('miningMachinery', res.data).catch(() => {});
         }
         setMiningMachinery(await api.getMiningMachinery());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'وضعیت دستگاه و تعمیرگاه ثبت شد.');
         return { success: true, message: res.message };
@@ -1440,7 +1433,7 @@ export default function App() {
       const res = await api.batchImportMiningMachinery(items);
       if (res.success) {
         setMiningMachinery(await api.getMiningMachinery());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'لیست ماشین‌آلات از اکسل وارد شد.');
         return { success: true, message: res.message };
@@ -1462,7 +1455,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteSingleFromFirestore('miningMachinery', id).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('دستگاه از لیست ناوگان حذف شد.');
       }
@@ -1480,7 +1473,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteIdsFromFirestore('miningMachinery', ids).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('دستگاه‌های انتخاب‌شده حذف شدند.');
       }
@@ -1498,7 +1491,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('miningMachinery', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('کلیه لیست ماشین‌آلات و تعمیرگاه پاکسازی شد.');
       }
@@ -1516,7 +1509,7 @@ export default function App() {
           syncSingleRecordToFirestore('unitReports', res.data).catch(() => {});
         }
         setUnitReports(await api.getUnitReports());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification(res.message || 'گزارش عملیاتی واحد با موفقیت در دیتابیس ثبت شد.');
         return { success: true, message: res.message };
@@ -1534,7 +1527,7 @@ export default function App() {
       const res = await api.batchImportUnitReports({ items });
       if (res.success) {
         setUnitReports(await api.getUnitReports());
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'گزارش اکسل واحد با موفقیت بارگذاری و به داشبورد مدیرعامل ارسال شد.');
         return { success: true, message: res.message };
@@ -1556,7 +1549,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteSingleFromFirestore('unitReports', id).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('ردیف گزارش عملیاتی واحد حذف شد.');
       }
@@ -1574,7 +1567,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified) {
           deleteIdsFromFirestore('unitReports', ids).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('ردیف‌های انتخاب‌شده گزارش واحد حذف شدند.');
       }
@@ -1592,7 +1585,7 @@ export default function App() {
         if (auth.currentUser?.emailVerified && existingIds.length > 0) {
           deleteIdsFromFirestore('unitReports', existingIds).catch(() => {});
         }
-        setDbStatus(await api.getDatabaseStatus());
+        refreshDbStatusAsync();
         triggerGitHubAutoSync();
         showNotification('کلیه گزارش‌های عملیاتی واحدها پاکسازی شد.');
       }

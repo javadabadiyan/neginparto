@@ -678,6 +678,36 @@ async function getJsonRows(db: D1Database, table: string, whereClause = '', bind
   return out;
 }
 
+async function getRawJsonArrayString(
+  db: D1Database,
+  table: string,
+  whereClause = '',
+  binds: any[] = []
+): Promise<string> {
+  const sql = whereClause ? `SELECT data_json FROM ${table} WHERE ${whereClause}` : `SELECT data_json FROM ${table}`;
+  const stmt = binds.length > 0 ? db.prepare(sql).bind(...binds) : db.prepare(sql);
+  const { results } = await stmt.all<{ data_json: string }>();
+  const parts: string[] = [];
+  for (const r of results || []) {
+    const s = typeof r.data_json === 'string' ? r.data_json.trim() : '';
+    if (s && (s[0] === '{' || s[0] === '[')) {
+      parts.push(s);
+    }
+  }
+  return `[${parts.join(',')}]`;
+}
+
+function rawJsonResponse(request: Request, env: Env, rawJsonBody: string, status = 200): Response {
+  return new Response(rawJsonBody, {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...getCorsHeaders(request, env),
+    },
+  });
+}
+
 async function getPersonnelLookupMap(
   db: D1Database,
   codes?: string[]
@@ -694,8 +724,8 @@ async function getPersonnelLookupMap(
 
   if (Array.isArray(codes) && codes.length > 0) {
     const cleanCodes = Array.from(new Set(codes.map((c) => toAsciiDigits(c).trim()).filter(Boolean)));
-    for (let i = 0; i < cleanCodes.length; i += 40) {
-      const slice = cleanCodes.slice(i, i + 40);
+    for (let i = 0; i < cleanCodes.length; i += 75) {
+      const slice = cleanCodes.slice(i, i + 75);
       const placeholders = slice.map(() => '?').join(',');
       const { results } = await db
         .prepare(`${baseSelect} WHERE TRIM(personnel_code) IN (${placeholders})`)
@@ -1067,6 +1097,18 @@ let bootstrapPromise: Promise<void> | null = null;
 async function ensureBootstrapped(db: D1Database): Promise<void> {
   if (!bootstrapPromise) {
     bootstrapPromise = (async () => {
+      try {
+        const fastCheck = await db
+          .prepare('SELECT value FROM app_meta WHERE key = ?')
+          .bind('seeded_v1')
+          .first<{ value: string }>();
+        if (fastCheck?.value === 'true') {
+          return;
+        }
+      } catch {
+        // Table does not exist yet — proceed to create schema below
+      }
+
       await db.batch([
         db.prepare('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
         db.prepare(
@@ -1216,9 +1258,11 @@ export default {
         return jsonRes(request, env, { success: true, data: meta });
       }
 
-      // 5. Unified Single-Request Bootstrap (loads all permitted data in 1 round-trip)
+      // 5. Unified Single-Request Bootstrap (loads all permitted data in 1 round-trip with zero unnecessary JSON re-serialization)
       if (method === 'GET' && path === '/bootstrap') {
         const canPers = checkPermission(authUser, 'personnel', 'view');
+        const hideSalary = canPers && !checkPermission(authUser, 'personnel', 'viewSalary');
+        const hideDocs = canPers && !checkPermission(authUser, 'personnel', 'documents');
         const canKar = checkPermission(authUser, 'karaneh', 'view');
         const canPay = checkPermission(authUser, 'payroll', 'view');
         const canJg = checkPermission(authUser, 'jobGroups', 'view');
@@ -1228,73 +1272,78 @@ export default {
         const isCeoOrSuper = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
 
         const [
-          rawPersonnel,
-          karaneh,
-          payroll,
-          jobGroups,
-          jobClassifications,
-          commitments,
-          rawVolumes,
-          rawMachinery,
-          rawReports,
+          personnelJson,
+          karanehJson,
+          payrollJson,
+          jobGroupsJson,
+          jobClassificationsJson,
+          commitmentsJson,
+          rawVolumesResult,
+          rawMachineryResult,
+          rawReportsResult,
           rawUsers,
           dbStatus,
-          meta,
         ] = await Promise.all([
-          canPers ? getJsonRows(env.DB, 'personnel') : Promise.resolve([]),
-          canKar ? getJsonRows(env.DB, 'karaneh') : Promise.resolve([]),
-          canPay ? getJsonRows(env.DB, 'payroll') : Promise.resolve([]),
-          canJg ? getJsonRows(env.DB, 'job_groups') : Promise.resolve([]),
-          canJg ? getJsonRows(env.DB, 'job_classifications') : Promise.resolve([]),
-          canCmt ? getJsonRows(env.DB, 'commitments') : Promise.resolve([]),
-          canMining ? getJsonRows(env.DB, 'mining_volumes') : Promise.resolve([]),
-          canMining ? getJsonRows(env.DB, 'mining_machinery') : Promise.resolve([]),
-          canMining ? getJsonRows(env.DB, 'unit_reports') : Promise.resolve([]),
+          !canPers
+            ? Promise.resolve('[]')
+            : hideSalary || hideDocs
+            ? getJsonRows(env.DB, 'personnel').then((rows) =>
+                JSON.stringify(
+                  rows.map((p: any) => ({
+                    ...p,
+                    ...(hideSalary ? { baseSalary: 0 } : {}),
+                    ...(hideDocs ? { documents: undefined } : {}),
+                  }))
+                )
+              )
+            : getRawJsonArrayString(env.DB, 'personnel'),
+          canKar ? getRawJsonArrayString(env.DB, 'karaneh') : Promise.resolve('[]'),
+          canPay ? getRawJsonArrayString(env.DB, 'payroll') : Promise.resolve('[]'),
+          canJg ? getRawJsonArrayString(env.DB, 'job_groups') : Promise.resolve('[]'),
+          canJg ? getRawJsonArrayString(env.DB, 'job_classifications') : Promise.resolve('[]'),
+          canCmt ? getRawJsonArrayString(env.DB, 'commitments') : Promise.resolve('[]'),
+          !canMining
+            ? Promise.resolve('[]')
+            : isCeoOrSuper
+            ? getRawJsonArrayString(env.DB, 'mining_volumes')
+            : getJsonRows(env.DB, 'mining_volumes').then((rows) =>
+                JSON.stringify(rows.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName)))
+              ),
+          !canMining
+            ? Promise.resolve('[]')
+            : isCeoOrSuper
+            ? getRawJsonArrayString(env.DB, 'mining_machinery')
+            : getJsonRows(env.DB, 'mining_machinery').then((rows) =>
+                JSON.stringify(rows.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName)))
+              ),
+          !canMining
+            ? Promise.resolve('[]')
+            : isCeoOrSuper
+            ? getRawJsonArrayString(env.DB, 'unit_reports')
+            : getJsonRows(env.DB, 'unit_reports').then((rows) =>
+                JSON.stringify(rows.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName)))
+              ),
           canUsers ? getAllUsers(env.DB) : Promise.resolve([]),
           computeDatabaseStatus(env.DB, authUser),
-          getSyncMeta(env.DB),
         ]);
 
-        let personnel = rawPersonnel;
-        if (canPers) {
-          const hideSalary = !checkPermission(authUser, 'personnel', 'viewSalary');
-          const hideDocs = !checkPermission(authUser, 'personnel', 'documents');
-          if (hideSalary || hideDocs) {
-            personnel = rawPersonnel.map((p: any) => ({
-              ...p,
-              ...(hideSalary ? { baseSalary: 0 } : {}),
-              ...(hideDocs ? { documents: undefined } : {}),
-            }));
-          }
-        }
+        const payloadStr =
+          `{"success":true,"data":{` +
+          `"personnel":${personnelJson},` +
+          `"karaneh":${karanehJson},` +
+          `"payroll":${payrollJson},` +
+          `"jobGroups":${jobGroupsJson},` +
+          `"jobClassifications":${jobClassificationsJson},` +
+          `"commitments":${commitmentsJson},` +
+          `"miningVolumes":${rawVolumesResult},` +
+          `"miningMachinery":${rawMachineryResult},` +
+          `"unitReports":${rawReportsResult},` +
+          `"users":${JSON.stringify(rawUsers.map(sanitizeUser))},` +
+          `"dbStatus":${JSON.stringify(dbStatus)},` +
+          `"syncVersion":${JSON.stringify(dbStatus.syncVersion)}` +
+          `}}`;
 
-        const miningVolumes = isCeoOrSuper
-          ? rawVolumes
-          : rawVolumes.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName));
-        const miningMachinery = isCeoOrSuper
-          ? rawMachinery
-          : rawMachinery.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName));
-        const unitReports = isCeoOrSuper
-          ? rawReports
-          : rawReports.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
-
-        return jsonRes(request, env, {
-          success: true,
-          data: {
-            personnel,
-            karaneh,
-            payroll,
-            jobGroups,
-            jobClassifications,
-            commitments,
-            miningVolumes,
-            miningMachinery,
-            unitReports,
-            users: rawUsers.map(sanitizeUser),
-            dbStatus,
-            syncVersion: meta.syncVersion,
-          },
-        });
+        return rawJsonResponse(request, env, payloadStr);
       }
 
       // ================= USERS ROUTES =================
@@ -1567,8 +1616,8 @@ export default {
         );
 
         const byCode = new Map<string, any>();
-        for (let i = 0; i < incomingCodes.length; i += 40) {
-          const slice = incomingCodes.slice(i, i + 40);
+        for (let i = 0; i < incomingCodes.length; i += 75) {
+          const slice = incomingCodes.slice(i, i + 75);
           const placeholders = slice.map(() => '?').join(',');
           const { results } = await env.DB.prepare(
             `SELECT personnel_code, data_json FROM personnel WHERE TRIM(personnel_code) IN (${placeholders})`
@@ -2402,8 +2451,8 @@ export default {
         );
         const persByCode = await getPersonnelLookupMap(env.DB, incomingPayCodes);
         const payIdMap = new Map<string, string>();
-        for (let i = 0; i < incomingPayCodes.length; i += 40) {
-          const slice = incomingPayCodes.slice(i, i + 40);
+        for (let i = 0; i < incomingPayCodes.length; i += 75) {
+          const slice = incomingPayCodes.slice(i, i + 75);
           const placeholders = slice.map(() => '?').join(',');
           const { results: existingPayRows } = await env.DB.prepare(
             `SELECT id, period, TRIM(personnel_code) as personnelCode FROM payroll WHERE TRIM(personnel_code) IN (${placeholders})`
