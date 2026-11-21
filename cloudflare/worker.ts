@@ -1258,13 +1258,14 @@ export default {
         return jsonRes(request, env, { success: true, data: meta });
       }
 
-      // 5. Unified Single-Request Bootstrap (loads all permitted data in 1 round-trip with zero unnecessary JSON re-serialization)
+      // 5. Unified Single-Request Bootstrap (loads all permitted data in 1 round-trip; supports ?lite=1 for instant initial UI)
       if (method === 'GET' && path === '/bootstrap') {
+        const isLite = url.searchParams.get('lite') === '1';
         const canPers = checkPermission(authUser, 'personnel', 'view');
         const hideSalary = canPers && !checkPermission(authUser, 'personnel', 'viewSalary');
-        const hideDocs = canPers && !checkPermission(authUser, 'personnel', 'documents');
+        const hideDocs = canPers && (!checkPermission(authUser, 'personnel', 'documents') || isLite);
         const canKar = checkPermission(authUser, 'karaneh', 'view');
-        const canPay = checkPermission(authUser, 'payroll', 'view');
+        const canPay = !isLite && checkPermission(authUser, 'payroll', 'view');
         const canJg = checkPermission(authUser, 'jobGroups', 'view');
         const canCmt = checkPermission(authUser, 'commitments', 'view');
         const canMining = hasMiningOrUnitPerm(authUser, 'view');
@@ -1340,7 +1341,8 @@ export default {
           `"unitReports":${rawReportsResult},` +
           `"users":${JSON.stringify(rawUsers.map(sanitizeUser))},` +
           `"dbStatus":${JSON.stringify(dbStatus)},` +
-          `"syncVersion":${JSON.stringify(dbStatus.syncVersion)}` +
+          `"syncVersion":${JSON.stringify(dbStatus.syncVersion)},` +
+          `"lite":${isLite}` +
           `}}`;
 
         return rawJsonResponse(request, env, payloadStr);

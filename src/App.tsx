@@ -63,7 +63,7 @@ export default function App() {
       return 'dashboard';
     }
   });
-  const [loading, setLoading] = useState<boolean>(true);
+  const [syncingData, setSyncingData] = useState<boolean>(false);
 
   // Core Data Lists
   const [personnelList, setPersonnelList] = useState<Personnel[]>([]);
@@ -171,42 +171,70 @@ export default function App() {
     }
   }, [dbStatus]);
 
-  // Fetch all initial data in a single round-trip bootstrap (with optional silent live-sync mode)
+  // Fetch data via fast Two-Phase Cloudflare D1 Bootstrap (never blocks UI render)
+  const applyBundleToState = (bundle: Awaited<ReturnType<typeof api.getBootstrapData>>, preserveHeavyOnLite = false) => {
+    if (!(preserveHeavyOnLite && bundle.isLite)) {
+      setPersonnelList(bundle.personnel || []);
+      setPayrollList(bundle.payroll || []);
+    } else if ((bundle.personnel || []).length > 0) {
+      setPersonnelList(bundle.personnel || []);
+    }
+    setKaranehList(bundle.karaneh || []);
+    setJobGroups(bundle.jobGroups || []);
+    setJobClassifications(bundle.jobClassifications || []);
+    setCommitments(bundle.commitments || []);
+    setMiningVolumes(bundle.miningVolumes || []);
+    setMiningMachinery(bundle.miningMachinery || []);
+    setUnitReports(bundle.unitReports || []);
+    setUsers(bundle.users || []);
+    setDbStatus(bundle.dbStatus || null);
+
+    const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
+    if (nextSync) {
+      lastSyncVersionRef.current = String(nextSync);
+    }
+  };
+
   const loadAllData = async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     if (isReloadingDataRef.current && silent) return;
     isReloadingDataRef.current = true;
+    const activeUserId = loadedForUserIdRef.current;
     try {
       if (!silent) {
-        setLoading(true);
+        setSyncingData(true);
       }
-      const bundle = await api.getBootstrapData();
 
-      setPersonnelList(bundle.personnel || []);
-      setKaranehList(bundle.karaneh || []);
-      setPayrollList(bundle.payroll || []);
-      setJobGroups(bundle.jobGroups || []);
-      setJobClassifications(bundle.jobClassifications || []);
-      setCommitments(bundle.commitments || []);
-      setMiningVolumes(bundle.miningVolumes || []);
-      setMiningMachinery(bundle.miningMachinery || []);
-      setUnitReports(bundle.unitReports || []);
-      setUsers(bundle.users || []);
-      setDbStatus(bundle.dbStatus || null);
+      const useLiteFirst = !silent && activeTab !== 'payroll' && activeTab !== 'ceo-dashboard';
+      const bundle = await api.getBootstrapData({ lite: useLiteFirst });
+      if (loadedForUserIdRef.current !== activeUserId) return;
 
-      const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
-      if (nextSync) {
-        lastSyncVersionRef.current = String(nextSync);
+      applyBundleToState(bundle, useLiteFirst && payrollList.length > 0);
+      if (!silent) {
+        setSyncingData(false);
+      }
+
+      // Phase 2: Hydrate heavy payroll + personnel documents in background without blocking interaction
+      if (bundle.isLite) {
+        api
+          .getBootstrapData({ lite: false })
+          .then((fullBundle) => {
+            if (loadedForUserIdRef.current !== activeUserId) return;
+            applyBundleToState(fullBundle, false);
+          })
+          .catch(() => {
+            // Non-fatal; payroll/documents will refresh on next sync or tab visit
+          });
       }
     } catch (err: any) {
       console.error('Error loading data:', err);
       if (!silent) {
-        showNotification('خطا در بارگذاری اطلاعات از پایگاه داده سرور', 'error');
+        showNotification(err?.message || 'خطا در بارگذاری اطلاعات از پایگاه داده سرور', 'error');
       }
     } finally {
       isReloadingDataRef.current = false;
       if (!silent) {
-        setLoading(false);
+        setSyncingData(false);
       }
     }
   };
@@ -1689,23 +1717,22 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-2.5 sm:px-5 lg:px-6 py-3.5 sm:py-5 min-w-0">
-        {loading && (
-          <div className="py-20 text-center">
-            <div className="inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-xs text-slate-500 mt-3 font-semibold">
-              در حال فراخوانی اطلاعات پایگاه داده از رایانه سرور...
-            </p>
+        {syncingData && (
+          <div className="mb-3 px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-between gap-2 text-xs text-indigo-700 font-semibold">
+            <div className="flex items-center gap-2">
+              <div className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin shrink-0"></div>
+              <span>در حال دریافت آخرین اطلاعات از پایگاه داده ابری کلودفلر...</span>
+            </div>
           </div>
         )}
 
-        {!loading && (
-          <Suspense
-            fallback={
-              <div className="py-16 text-center text-xs text-slate-500 font-semibold">
-                در حال بارگذاری ماژول...
-              </div>
-            }
-          >
+        <Suspense
+          fallback={
+            <div className="py-12 text-center text-xs text-slate-500 font-semibold">
+              در حال باز کردن صفحه...
+            </div>
+          }
+        >
             {activeTab === 'dashboard' && (
               <DashboardOverview
                 personnel={personnelList}
@@ -1982,7 +2009,6 @@ export default function App() {
               )
             )}
           </Suspense>
-        )}
       </main>
 
       {/* Footer */}

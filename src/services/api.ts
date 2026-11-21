@@ -210,7 +210,7 @@ function buildPhpUrl(route: string, method: string): string {
 
 async function callBackend(
   route: string,
-  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number } = {}
 ): Promise<any> {
   const engine = await detectStorageEngine();
   if (engine === 'indexeddb') {
@@ -227,31 +227,44 @@ async function callBackend(
     : `./api${route}`;
   const fetchMethod = isPhp && method !== 'GET' ? 'POST' : method;
 
+  const timeoutMs = options.timeoutMs ?? 20000;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timerId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
   let res: Response;
+  let text = '';
   try {
     res = await fetch(url, {
       method: fetchMethod,
       headers: getHeaders(isPhp),
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+      ...(controller ? { signal: controller.signal } : {}),
     });
+
+    if (res.status === 401 && !options.skipAuthRedirect) {
+      window.dispatchEvent(new CustomEvent('hr:unauthorized'));
+    }
+
+    text = await res.text();
   } catch (networkErr: any) {
+    if (timerId) clearTimeout(timerId);
+    const isAborted = networkErr?.name === 'AbortError';
     const isCorsOrOffline = networkErr instanceof TypeError;
     return {
       success: false,
       networkError: true,
-      message: isCorsOrOffline
+      timeout: isAborted,
+      message: isAborted
+        ? 'مهلت پاسخ‌گویی سرور به پایان رسید. اتصال اینترنت یا سرور کلودفلر را بررسی کنید.'
+        : isCorsOrOffline
         ? isCloudflare
           ? 'خطای ارتباط با سرور Cloudflare Worker. اتصال اینترنت، آدرس Worker یا حجم درخواست را بررسی کنید.'
           : 'خطای ارتباط شبکه‌ای با سرور پایگاه داده.'
         : networkErr?.message || 'خطا در ارسال درخواست به سرور.',
     };
   }
+  if (timerId) clearTimeout(timerId);
 
-  if (res.status === 401 && !options.skipAuthRedirect) {
-    window.dispatchEvent(new CustomEvent('hr:unauthorized'));
-  }
-
-  const text = await res.text();
   try {
     const parsed = JSON.parse(text);
     if (!res.ok && parsed && typeof parsed === 'object' && parsed.success !== false) {
@@ -973,7 +986,7 @@ export const api = {
     return null;
   },
 
-  async getBootstrapData(): Promise<{
+  async getBootstrapData(options?: { lite?: boolean }): Promise<{
     personnel: Personnel[];
     karaneh: KaranehRecord[];
     payroll: PayrollRecord[];
@@ -986,12 +999,19 @@ export const api = {
     users: User[];
     dbStatus: DatabaseStatus | null;
     syncVersion?: string;
+    isLite?: boolean;
   }> {
     const engine = await detectStorageEngine();
     if (engine === 'cloudflare') {
-      const json = await callBackend('/bootstrap');
+      const wantLite = Boolean(options?.lite);
+      const json = await callBackend(wantLite ? '/bootstrap?lite=1' : '/bootstrap', {
+        timeoutMs: wantLite ? 15000 : 35000,
+      });
       if (json?.success && json?.data) {
-        return json.data;
+        return { ...json.data, isLite: Boolean(json.data.lite) };
+      }
+      if (json?.networkError || json?.timeout) {
+        throw new Error(json.message || 'خطا در اتصال به سرور کلودفلر');
       }
     }
 
@@ -1022,6 +1042,7 @@ export const api = {
       users: uData || [],
       dbStatus: sData || null,
       syncVersion: (sData as any)?.syncVersion,
+      isLite: false,
     };
   },
 
