@@ -537,8 +537,8 @@ export function transformMappedRows(
       }
     }
 
-    // برای حقوق و دستمزد، کارگزینی یا گزارش واحدها، ستون‌های تکمیلی نگاشت‌نشده را نیز حفظ می‌کنیم تا داده‌ای از بین نرود
-    if (moduleType === 'payroll' || moduleType === 'personnel' || moduleType === 'unitReports') {
+    // برای حقوق و دستمزد یا گزارش واحدها، ستون‌های تکمیلی نگاشت‌نشده را نیز حفظ می‌کنیم تا داده‌ای از بین نرود
+    if (moduleType === 'payroll' || moduleType === 'unitReports') {
       for (const [k, v] of Object.entries(rawRow)) {
         if (!reverseMappedSourceHeaders.has(k) && out[k] === undefined && v !== '') {
           out[k] = v;

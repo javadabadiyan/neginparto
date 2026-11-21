@@ -421,8 +421,13 @@ function toAsciiDigits(val: any): string {
     .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 }
 
+const normKeyCache = new Map<string, string>();
+const normRowCache = new WeakMap<object, Map<string, any>>();
+
 function normKey(key: string): string {
-  return toAsciiDigits(key)
+  const cached = normKeyCache.get(key);
+  if (cached !== undefined) return cached;
+  const normalized = toAsciiDigits(key)
     .replace(/\u200c|\u200e|\u200f|\ufeff/g, ' ')
     .replace(/[يیئى]/g, 'ی')
     .replace(/[كک]/g, 'ک')
@@ -431,6 +436,10 @@ function normKey(key: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+  if (normKeyCache.size < 2500) {
+    normKeyCache.set(key, normalized);
+  }
+  return normalized;
 }
 
 function getVal(row: Record<string, any>, ...keys: string[]): any {
@@ -438,12 +447,16 @@ function getVal(row: Record<string, any>, ...keys: string[]): any {
   for (const k of keys) {
     if (row[k] !== undefined && row[k] !== null && row[k] !== '') return row[k];
   }
-  const map = new Map<string, any>();
-  for (const [rk, rv] of Object.entries(row)) {
-    if (rv !== undefined && rv !== null && rv !== '') {
-      const nk = normKey(rk);
-      if (!map.has(nk)) map.set(nk, rv);
+  let map = normRowCache.get(row);
+  if (!map) {
+    map = new Map<string, any>();
+    for (const [rk, rv] of Object.entries(row)) {
+      if (rv !== undefined && rv !== null && rv !== '') {
+        const nk = normKey(rk);
+        if (!map.has(nk)) map.set(nk, rv);
+      }
     }
+    normRowCache.set(row, map);
   }
   for (const k of keys) {
     const found = map.get(normKey(k));
@@ -666,21 +679,37 @@ async function getJsonRows(db: D1Database, table: string, whereClause = '', bind
 }
 
 async function getPersonnelLookupMap(
-  db: D1Database
+  db: D1Database,
+  codes?: string[]
 ): Promise<Map<string, { id: string; personnelCode: string; fullName: string; nationalId: string; department: string; position: string; employeeId: string }>> {
-  const { results } = await db
-    .prepare(
-      `SELECT id,
+  const map = new Map<string, any>();
+  const baseSelect = `SELECT id,
               TRIM(personnel_code) as personnelCode,
               COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
               COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId,
               COALESCE(json_extract(data_json, '$.department'), '') as department,
               COALESCE(json_extract(data_json, '$.position'), '') as position,
               COALESCE(json_extract(data_json, '$.employeeId'), '') as employeeId
-       FROM personnel`
-    )
-    .all<any>();
-  const map = new Map<string, any>();
+       FROM personnel`;
+
+  if (Array.isArray(codes) && codes.length > 0) {
+    const cleanCodes = Array.from(new Set(codes.map((c) => toAsciiDigits(c).trim()).filter(Boolean)));
+    for (let i = 0; i < cleanCodes.length; i += 40) {
+      const slice = cleanCodes.slice(i, i + 40);
+      const placeholders = slice.map(() => '?').join(',');
+      const { results } = await db
+        .prepare(`${baseSelect} WHERE TRIM(personnel_code) IN (${placeholders})`)
+        .bind(...slice)
+        .all<any>();
+      for (const r of results || []) {
+        const code = toAsciiDigits(r.personnelCode).trim();
+        if (code) map.set(code, { ...r, personnelCode: code });
+      }
+    }
+    return map;
+  }
+
+  const { results } = await db.prepare(baseSelect).all<any>();
   for (const r of results || []) {
     const code = toAsciiDigits(r.personnelCode).trim();
     if (code) map.set(code, { ...r, personnelCode: code });
@@ -689,7 +718,7 @@ async function getPersonnelLookupMap(
 }
 
 async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  const CHUNK = 20;
+  const CHUNK = 50;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
   }
@@ -2364,15 +2393,27 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره و لیست ردیف‌های حقوق الزامی است.' }, 400);
 
-        const persByCode = await getPersonnelLookupMap(env.DB);
-        const { results: existingPayRows } = await env.DB.prepare(
-          'SELECT id, period, TRIM(personnel_code) as personnelCode FROM payroll'
-        ).all<{ id: string; period: string; personnelCode: string }>();
-
+        const incomingPayCodes: string[] = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی', 'personnelCode') || '').trim())
+              .filter((c: string) => Boolean(c))
+          )
+        );
+        const persByCode = await getPersonnelLookupMap(env.DB, incomingPayCodes);
         const payIdMap = new Map<string, string>();
-        for (const r of existingPayRows || []) {
-          const k = `${toAsciiDigits(r.period).trim()}__${toAsciiDigits(r.personnelCode).trim()}`;
-          payIdMap.set(k, r.id);
+        for (let i = 0; i < incomingPayCodes.length; i += 40) {
+          const slice = incomingPayCodes.slice(i, i + 40);
+          const placeholders = slice.map(() => '?').join(',');
+          const { results: existingPayRows } = await env.DB.prepare(
+            `SELECT id, period, TRIM(personnel_code) as personnelCode FROM payroll WHERE TRIM(personnel_code) IN (${placeholders})`
+          )
+            .bind(...slice)
+            .all<{ id: string; period: string; personnelCode: string }>();
+          for (const r of existingPayRows || []) {
+            const k = `${toAsciiDigits(r.period).trim()}__${toAsciiDigits(r.personnelCode).trim()}`;
+            payIdMap.set(k, r.id);
+          }
         }
 
         const stmts: D1PreparedStatement[] = [];

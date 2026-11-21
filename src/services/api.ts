@@ -252,6 +252,7 @@ async function callBackend(
     const isCorsOrOffline = networkErr instanceof TypeError;
     return {
       success: false,
+      networkError: true,
       message: isCorsOrOffline
         ? isCloudflare
           ? 'خطای ارتباط با سرور Cloudflare Worker. اتصال اینترنت، آدرس Worker یا حجم درخواست را بررسی کنید.'
@@ -314,9 +315,51 @@ async function sendBatchInChunks(
   let totalAddedRelatives = 0;
   let lastMessage = '';
 
+  const sendAdaptiveSlice = async (
+    slice: any[],
+    chunkIndex: number,
+    totalChunks: number,
+    depth = 0
+  ): Promise<any> => {
+    const res = await sendChunk(slice, chunkIndex, totalChunks);
+    if (res && res.success) return res;
+
+    const isRetryable =
+      Boolean(res?.networkError) || res?.status === 500 || res?.status === 502 || res?.status === 503 || res?.status === 504;
+
+    if (isRetryable && slice.length > 5 && depth < 2) {
+      const mid = Math.ceil(slice.length / 2);
+      const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunks, depth + 1);
+      if (!left?.success) return left;
+      const right = await sendAdaptiveSlice(slice.slice(mid), chunkIndex, totalChunks, depth + 1);
+      if (!right?.success) return right;
+      const ld = left.data || {};
+      const rd = right.data || {};
+      return {
+        success: true,
+        message: right.message || left.message,
+        data: {
+          inserted: Number(ld.inserted || 0) + Number(rd.inserted || 0),
+          updated: Number(ld.updated || 0) + Number(rd.updated || 0),
+          skipped: Number(ld.skipped || 0) + Number(rd.skipped || 0),
+          matched: Number(ld.matched || 0) + Number(rd.matched || 0),
+          unmatched: Number(ld.unmatched || 0) + Number(rd.unmatched || 0),
+          addedRelatives: Number(ld.addedRelatives || 0) + Number(rd.addedRelatives || 0),
+        },
+      };
+    }
+
+    if (isRetryable && depth === 0) {
+      await new Promise((r) => setTimeout(r, 350));
+      return sendChunk(slice, chunkIndex, totalChunks);
+    }
+
+    return res;
+  };
+
   for (let i = 0; i < totalChunks; i++) {
     const slice = items.slice(i * chunkSize, (i + 1) * chunkSize);
-    const res = await sendChunk(slice, i, totalChunks);
+    const res = await sendAdaptiveSlice(slice, i, totalChunks);
     if (!res || !res.success) {
       const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
       const progressNote =
