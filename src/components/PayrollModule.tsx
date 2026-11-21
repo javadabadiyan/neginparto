@@ -482,10 +482,20 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
     const ok = await onBatchImportPayroll(importPeriod, mappedRows, useRowYearMonth);
     if (ok) {
       setIsImportOpen(false);
+      setSearchTerm('');
+      setFilterTrend('all');
+      setFilterRoleTier('all');
+      setFilterDepartment('all');
+      setFilterWorkLocation('all');
       let targetP = importPeriod;
-      if (useRowYearMonth && mappedRows[0]) {
-        const firstYm = getPayrollField(mappedRows[0], 'سال/ماه');
-        targetP = parseYearMonthToPeriod(firstYm, importPeriod);
+      if (useRowYearMonth && mappedRows.length > 0) {
+        const sampleWithYm = mappedRows.find((r) =>
+          Boolean(getPayrollField(r, 'yearMonthLabel', 'سال/ماه', 'سال ماه', 'دوره'))
+        );
+        if (sampleWithYm) {
+          const firstYm = getPayrollField(sampleWithYm, 'yearMonthLabel', 'سال/ماه', 'سال ماه', 'دوره');
+          targetP = parseYearMonthToPeriod(firstYm, importPeriod);
+        }
       }
       const parsed = parsePeriod(targetP);
       setCurrentYear(parsed.year);

@@ -1750,7 +1750,13 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
           onCancel={() => setIsImportOpen(false)}
           onImport={async (mappedRows) => {
             const ok = await onBatchImportPersonnel(mappedRows);
-            if (ok) setIsImportOpen(false);
+            if (ok) {
+              setSearchTerm('');
+              setFilterDepartment('all');
+              setFilterStatus('all');
+              setActiveSubTab('personnel');
+              setIsImportOpen(false);
+            }
           }}
         />
       )}

@@ -56,7 +56,13 @@ import {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem('npn_active_tab') || 'dashboard';
+    } catch {
+      return 'dashboard';
+    }
+  });
   const [loading, setLoading] = useState<boolean>(true);
 
   // Core Data Lists
@@ -83,6 +89,21 @@ export default function App() {
   const refreshDbStatusAsync = () => {
     api.getDatabaseStatus().then(setDbStatus).catch(() => {});
   };
+
+  const afterUploadRefresh = async () => {
+    await loadAllData({ silent: true });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('npn_active_tab', activeTab);
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeTab]);
 
   // Notification Toast
   const [notification, setNotification] = useState<{
@@ -545,9 +566,7 @@ export default function App() {
       const res = await api.batchImportPersonnel(items);
       if (res.success) {
         showNotification(res.message || 'بارگذاری پرونده‌ها از اکسل انجام شد.');
-        const updated = await api.getPersonnel();
-        setPersonnelList(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -611,9 +630,7 @@ export default function App() {
       const res = await api.batchImportKaraneh(period, items);
       if (res.success) {
         showNotification(res.message || 'کارانه ماهانه با موفقیت از اکسل بارگذاری گردید.');
-        const updated = await api.getKaraneh();
-        setKaranehList(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -730,9 +747,7 @@ export default function App() {
       const res = await api.batchImportJobClassifications(items);
       if (res.success) {
         showNotification(res.message || 'فایل اکسل طبقه‌بندی مشاغل با موفقیت بارگذاری شد.');
-        const updated = await api.getJobClassifications();
-        setJobClassifications(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -801,9 +816,7 @@ export default function App() {
       const res = await api.batchImportCommitments(items);
       if (res.success) {
         showNotification(res.message || 'اسناد تعهدات از فایل اکسل با موفقیت ثبت شد.');
-        const updated = await api.getCommitments();
-        setCommitments(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -876,9 +889,7 @@ export default function App() {
       const res = await api.batchImportUsers(items);
       if (res.success) {
         showNotification(res.message || 'کاربران با موفقیت از اکسل تعریف/به‌روزرسانی شدند.');
-        const updated = await api.getUsers();
-        setUsers(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -901,9 +912,7 @@ export default function App() {
       const res = await api.batchImportPayroll(period, items, useRowYearMonth);
       if (res.success) {
         showNotification(res.message || 'فایل اکسل حقوق با موفقیت در پایگاه داده ثبت شد.');
-        const updated = await api.getPayroll();
-        setPayrollList(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -1122,9 +1131,7 @@ export default function App() {
       const res = await api.batchImportRelatives(items);
       if (res.success) {
         showNotification(res.message || 'اطلاعات بستگان با موفقیت در پرونده پرسنل ثبت شد.');
-        const updated = await api.getPersonnel();
-        setPersonnelList(updated);
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         return true;
       }
@@ -1339,8 +1346,7 @@ export default function App() {
     try {
       const res = await api.batchImportMiningVolumes(items);
       if (res.success) {
-        setMiningVolumes(await api.getMiningVolumes());
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'آمار حجم عملیات از اکسل بارگذاری شد.');
         return { success: true, message: res.message };
@@ -1432,8 +1438,7 @@ export default function App() {
     try {
       const res = await api.batchImportMiningMachinery(items);
       if (res.success) {
-        setMiningMachinery(await api.getMiningMachinery());
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'لیست ماشین‌آلات از اکسل وارد شد.');
         return { success: true, message: res.message };
@@ -1526,8 +1531,7 @@ export default function App() {
     try {
       const res = await api.batchImportUnitReports({ items });
       if (res.success) {
-        setUnitReports(await api.getUnitReports());
-        refreshDbStatusAsync();
+        await afterUploadRefresh();
         mirrorSnapshotInBackground();
         showNotification(res.message || 'گزارش اکسل واحد با موفقیت بارگذاری و به داشبورد مدیرعامل ارسال شد.');
         return { success: true, message: res.message };
