@@ -24,13 +24,16 @@ import {
   CheckSquare,
   FileText,
   Layers,
-  Info
+  Info,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import {
   PayrollRecord,
   PayrollComparisonRow,
   PayrollAnalysisMetric,
-  GranularPayrollPermissions
+  GranularPayrollPermissions,
+  Personnel
 } from '../types';
 import {
   formatRial,
@@ -70,6 +73,7 @@ import {
   downloadPayrollComparisonHtml
 } from '../utils/payrollAnalytics';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface PayrollSliceInfo {
   title: string;
@@ -81,6 +85,7 @@ interface PayrollSliceInfo {
 
 interface PayrollModuleProps {
   payrollList: PayrollRecord[];
+  personnelList?: Personnel[];
   onBatchImportPayroll: (period: string, items: any[], useRowYearMonth: boolean) => Promise<boolean>;
   onDeletePayrollRecord: (id: string) => Promise<boolean>;
   onBatchDeletePayroll: (ids: string[]) => Promise<boolean>;
@@ -88,17 +93,22 @@ interface PayrollModuleProps {
   onDeletePayrollPeriod: (period: string) => Promise<boolean>;
   canManage?: boolean;
   granularPermissions?: GranularPayrollPermissions;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 export const PayrollModule: React.FC<PayrollModuleProps> = ({
   payrollList,
+  personnelList = [],
   onBatchImportPayroll,
   onDeletePayrollRecord,
   onBatchDeletePayroll,
   onDeleteAllPayroll,
   onDeletePayrollPeriod,
   canManage = false,
-  granularPermissions
+  granularPermissions,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const canDelete = granularPermissions ? Boolean(granularPermissions.delete) : canManage;
   const allowDeleteAll = granularPermissions ? Boolean(granularPermissions.deleteAll) : false;
@@ -124,6 +134,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
   const [filterRoleTier, setFilterRoleTier] = useState<string>('all');
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
   const [filterWorkLocation, setFilterWorkLocation] = useState<string>('all');
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   // Analytics tab
   const [analyticsTab, setAnalyticsTab] = useState<'roles' | 'operators' | 'departments' | 'locations' | 'movers'>('roles');
@@ -198,6 +209,15 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
     [payrollList, previousPeriod]
   );
 
+  const personnelNationalIdByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    personnelList.forEach((p) => {
+      const code = normalizeDuplicateKey(p.personnelCode);
+      if (code && p.nationalId) map.set(code, p.nationalId);
+    });
+    return map;
+  }, [personnelList]);
+
   const comparisonRows: PayrollComparisonRow[] = useMemo(() => {
     const prevMap = new Map<string, PayrollRecord>();
     previousRecords.forEach((r) => prevMap.set(String(r.personnelCode).trim(), r));
@@ -237,11 +257,16 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
       else if (diffBenefits > 0) benefitsTrend = 'increase';
       else if (diffBenefits < 0) benefitsTrend = 'decrease';
 
+      const resolvedNid =
+        curr.nationalId ||
+        personnelNationalIdByCode.get(normalizeDuplicateKey(curr.personnelCode)) ||
+        '';
+
       return {
         recordId: curr.id,
         personnelCode: curr.personnelCode,
         fullName: curr.fullName,
-        nationalId: curr.nationalId || '',
+        nationalId: resolvedNid,
         workLocation: curr.workLocation || '',
         department: curr.department || '',
         jobTitle: curr.jobTitle || '',
@@ -282,6 +307,11 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
     [comparisonRows]
   );
 
+  const duplicateIndex = useMemo(
+    () => buildDuplicateIndex(comparisonRows, (r) => r.personnelCode, (r) => r.nationalId),
+    [comparisonRows]
+  );
+
   const filteredRows = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return comparisonRows.filter((r) => {
@@ -301,9 +331,10 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
       const matchesRole = filterRoleTier === 'all' || roleTier === filterRoleTier;
       const matchesDept = filterDepartment === 'all' || r.department === filterDepartment;
       const matchesLoc = filterWorkLocation === 'all' || r.workLocation === filterWorkLocation;
-      return matchesSearch && matchesTrend && matchesRole && matchesDept && matchesLoc;
+      const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(r);
+      return matchesSearch && matchesTrend && matchesRole && matchesDept && matchesLoc && matchesDup;
     });
-  }, [comparisonRows, searchTerm, filterTrend, filterRoleTier, filterDepartment, filterWorkLocation, metricBasis]);
+  }, [comparisonRows, searchTerm, filterTrend, filterRoleTier, filterDepartment, filterWorkLocation, metricBasis, onlyDuplicates, duplicateIndex]);
 
   // Multi-Dimensional Comparative Analytics (Role Tier, Operators, Departments, Work Locations)
   const roleTierStats = useMemo(
@@ -487,6 +518,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
       setFilterRoleTier('all');
       setFilterDepartment('all');
       setFilterWorkLocation('all');
+      setOnlyDuplicates(false);
       let targetP = importPeriod;
       if (useRowYearMonth && mappedRows.length > 0) {
         const sampleWithYm = mappedRows.find((r) =>
@@ -705,6 +737,17 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={() => onRefreshData()}
+              disabled={Boolean(isRefreshing)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی اطلاعات</span>
+            </button>
+          )}
           {allowExport && (
             <>
               <button
@@ -1528,70 +1571,121 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
         </div>
       )}
 
+      {/* Duplicate Personnel Warning Banner */}
+      {duplicateIndex.totalDuplicateRows > 0 && (
+        <div className="no-print bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-950">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="persian-num">
+              <span className="font-bold">هشدار اطلاعات تکراری در حقوق {getPeriodLabel(currentPeriod)}:</span>{' '}
+              <span>
+                <b>{toPersianDigits(duplicateIndex.totalDuplicateRows)} ردیف</b> دارای اطلاعات تکراری هستند
+                ({toPersianDigits(duplicateIndex.dupCodeCount)} کد پرسنلی تکراری و {toPersianDigits(duplicateIndex.dupNationalIdCount)} کد ملی تکراری).
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors shrink-0 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {onlyDuplicates
+              ? 'نمایش همه رکوردها'
+              : `مشاهده فقط تکراری‌ها (${toPersianDigits(duplicateIndex.totalDuplicateRows)})`}
+          </button>
+        </div>
+      )}
+
       {/* Search & Filters */}
-      <div className="no-print grid grid-cols-1 md:grid-cols-12 gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className="md:col-span-4 relative">
-          <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="جستجو نام، کد پرسنلی، کد ملی، شغل، پست، واحد..."
-            className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          />
+      <div className="no-print bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div className="md:col-span-4 relative">
+            <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="جستجو نام، کد پرسنلی، کد ملی، شغل، پست، واحد..."
+              className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <select
+              value={filterRoleTier}
+              onChange={(e) => setFilterRoleTier(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-semibold"
+            >
+              <option value="all">همه رده‌ها</option>
+              {ROLE_TIER_ORDER.map((tier) => (
+                <option key={tier} value={tier}>{tier}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <select
+              value={filterTrend}
+              onChange={(e) => setFilterTrend(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">همه روندها ({toPersianDigits(comparisonRows.length)})</option>
+              <option value="increase">افزایشی ({toPersianDigits(countIncreased)})</option>
+              <option value="decrease">کاهشی ({toPersianDigits(countDecreased)})</option>
+              <option value="new">جدید این ماه ({toPersianDigits(countNew)})</option>
+              <option value="unchanged">بدون تغییر ({toPersianDigits(countUnchanged)})</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <select
+              value={filterDepartment}
+              onChange={(e) => setFilterDepartment(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">همه واحدها ({toPersianDigits(departments.length)})</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <select
+              value={filterWorkLocation}
+              onChange={(e) => setFilterWorkLocation(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">همه محل‌های خدمت ({toPersianDigits(workLocations.length)})</option>
+              {workLocations.map((w) => (
+                <option key={w} value={w}>{w}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <div className="md:col-span-2">
-          <select
-            value={filterRoleTier}
-            onChange={(e) => setFilterRoleTier(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-semibold"
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+          <span className="text-slate-600 persian-num">
+            نمایش <b>{toPersianDigits(filteredRows.length)}</b> از <b>{toPersianDigits(comparisonRows.length)}</b> رکورد دوره {getPeriodLabel(currentPeriod)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1.5 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : duplicateIndex.totalDuplicateRows > 0
+                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
+            }`}
           >
-            <option value="all">همه رده‌ها</option>
-            {ROLE_TIER_ORDER.map((tier) => (
-              <option key={tier} value={tier}>{tier}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="md:col-span-2">
-          <select
-            value={filterTrend}
-            onChange={(e) => setFilterTrend(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="all">همه روندها ({toPersianDigits(comparisonRows.length)})</option>
-            <option value="increase">افزایشی ({toPersianDigits(countIncreased)})</option>
-            <option value="decrease">کاهشی ({toPersianDigits(countDecreased)})</option>
-            <option value="new">جدید این ماه ({toPersianDigits(countNew)})</option>
-            <option value="unchanged">بدون تغییر ({toPersianDigits(countUnchanged)})</option>
-          </select>
-        </div>
-
-        <div className="md:col-span-2">
-          <select
-            value={filterDepartment}
-            onChange={(e) => setFilterDepartment(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="all">همه واحدها ({toPersianDigits(departments.length)})</option>
-            {departments.map((d) => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="md:col-span-2">
-          <select
-            value={filterWorkLocation}
-            onChange={(e) => setFilterWorkLocation(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="all">همه محل‌های خدمت ({toPersianDigits(workLocations.length)})</option>
-            {workLocations.map((w) => (
-              <option key={w} value={w}>{w}</option>
-            ))}
-          </select>
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>فقط تکراری‌ها ({toPersianDigits(duplicateIndex.totalDuplicateRows)})</span>
+          </button>
         </div>
       </div>
 
@@ -1676,10 +1770,18 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
                   const isSelected = selectedIds.includes(row.recordId);
                   const roleTier = classifyPayrollRoleTier(row.position, row.jobTitle);
                   const m = getRowMetricValues(row, metricBasis);
+                  const dupReasons = duplicateIndex.getRowDuplicateReasons(row);
+                  const isDup = dupReasons.length > 0;
                   return (
                     <tr
                       key={row.recordId}
-                      className={`transition-colors ${isSelected ? 'bg-rose-50/40' : 'hover:bg-slate-50/70'}`}
+                      className={`transition-colors ${
+                        isSelected
+                          ? 'bg-rose-50/40'
+                          : isDup
+                          ? 'bg-amber-50/60 hover:bg-amber-100/50'
+                          : 'hover:bg-slate-50/70'
+                      }`}
                     >
                       {canDelete && (
                         <td className="py-3 px-2.5 text-center">
@@ -1692,10 +1794,22 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
                         </td>
                       )}
                       <td className="py-3 px-2.5 text-center text-slate-600 persian-num">{toPersianDigits(idx + 1)}</td>
-                      <td className="py-3 px-3 font-bold text-slate-800 persian-num">{toPersianDigits(row.personnelCode)}</td>
+                      <td className="py-3 px-3 font-bold text-slate-800 persian-num">
+                        <div>{toPersianDigits(row.personnelCode)}</div>
+                        {dupReasons.includes('personnelCode') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                            تکراری: کد پرسنلی
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-3">
                         <div className="font-bold text-slate-900">{row.fullName}</div>
                         {row.nationalId && <div className="text-[10px] text-slate-500 persian-num">کد ملی: {toPersianDigits(row.nationalId)}</div>}
+                        {dupReasons.includes('nationalId') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                            تکراری: کد ملی
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3">
                         <div className="font-semibold text-slate-800">{row.department || '—'}</div>

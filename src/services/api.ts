@@ -1310,34 +1310,119 @@ export const api = {
         : engine === 'cloudflare'
         ? `${getCloudflareApiUrl()}/api/database/backup`
         : './api/database/backup';
-    const res = await fetch(url, { headers: getHeaders(engine === 'php') });
-    if (!res.ok) return false;
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = `hr_database_backup_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(blobUrl);
-    return true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90000);
+    try {
+      const res = await fetch(url, { headers: getHeaders(engine === 'php'), signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) return false;
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `hr_database_backup_${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+      return true;
+    } finally {
+      clearTimeout(timer);
+    }
   },
 
   async restoreDatabase(backupData: any) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.restoreDatabase(backupData);
-    return callBackend('/database/restore', { method: 'POST', body: backupData });
+    if (engine === 'cloudflare') {
+      const tableKeys: Array<{ key: string; batchSize: number }> = [
+        { key: 'users', batchSize: 100 },
+        { key: 'jobGroups', batchSize: 200 },
+        { key: 'jobClassifications', batchSize: 120 },
+        { key: 'personnel', batchSize: 80 },
+        { key: 'karaneh', batchSize: 200 },
+        { key: 'commitments', batchSize: 150 },
+        { key: 'payroll', batchSize: 60 },
+        { key: 'miningVolumes', batchSize: 150 },
+        { key: 'miningMachinery', batchSize: 150 },
+        { key: 'unitReports', batchSize: 150 },
+      ];
+      const totalRows = tableKeys.reduce(
+        (sum, t) => sum + (Array.isArray(backupData?.[t.key]) ? backupData[t.key].length : 0),
+        0
+      );
+      if (totalRows > 200) {
+        await callBackend('/database/restore-chunk', {
+          method: 'POST',
+          body: { clearAll: true, mode: 'replace' },
+          timeoutMs: 45000,
+        });
+        for (const { key, batchSize } of tableKeys) {
+          const rows = Array.isArray(backupData?.[key]) ? backupData[key] : [];
+          for (let i = 0; i < rows.length; i += batchSize) {
+            const slice = rows.slice(i, i + batchSize);
+            const res = await callBackend('/database/restore-chunk', {
+              method: 'POST',
+              body: { table: key, items: slice, mode: 'replace' },
+              timeoutMs: 45000,
+            });
+            if (!res?.success) return res;
+          }
+        }
+        return callBackend('/database/restore-chunk', {
+          method: 'POST',
+          body: { finalize: true, mode: 'replace' },
+          timeoutMs: 30000,
+        });
+      }
+    }
+    return callBackend('/database/restore', { method: 'POST', body: backupData, timeoutMs: 90000 });
   },
 
   async exportDatabaseSnapshot() {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.exportDatabaseSnapshot();
-    return callBackend('/database/export-snapshot');
+    return callBackend('/database/export-snapshot', { timeoutMs: 90000 });
   },
 
   async mergeFirestoreSnapshot(snapshot: any) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.mergeFirestoreSnapshot(snapshot);
-    return callBackend('/database/merge-firestore', { method: 'POST', body: snapshot });
+    if (engine === 'cloudflare') {
+      const tableKeys: Array<{ key: string; batchSize: number }> = [
+        { key: 'users', batchSize: 100 },
+        { key: 'jobGroups', batchSize: 200 },
+        { key: 'jobClassifications', batchSize: 120 },
+        { key: 'personnel', batchSize: 80 },
+        { key: 'karaneh', batchSize: 200 },
+        { key: 'commitments', batchSize: 150 },
+        { key: 'payroll', batchSize: 60 },
+        { key: 'miningVolumes', batchSize: 150 },
+        { key: 'miningMachinery', batchSize: 150 },
+        { key: 'unitReports', batchSize: 150 },
+      ];
+      const totalRows = tableKeys.reduce(
+        (sum, t) => sum + (Array.isArray(snapshot?.[t.key]) ? snapshot[t.key].length : 0),
+        0
+      );
+      if (totalRows > 200) {
+        for (const { key, batchSize } of tableKeys) {
+          const rows = Array.isArray(snapshot?.[key]) ? snapshot[key] : [];
+          for (let i = 0; i < rows.length; i += batchSize) {
+            const slice = rows.slice(i, i + batchSize);
+            const res = await callBackend('/database/restore-chunk', {
+              method: 'POST',
+              body: { table: key, items: slice, mode: 'merge' },
+              timeoutMs: 45000,
+            });
+            if (!res?.success) return res;
+          }
+        }
+        return callBackend('/database/restore-chunk', {
+          method: 'POST',
+          body: { finalize: true, mode: 'merge' },
+          timeoutMs: 30000,
+        });
+      }
+    }
+    return callBackend('/database/merge-firestore', { method: 'POST', body: snapshot, timeoutMs: 90000 });
   },
 
   async resetDemo() {

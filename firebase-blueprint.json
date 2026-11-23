@@ -500,6 +500,22 @@
           "type": "string",
           "maxLength": 1000
         },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "submitted"]
+        },
+        "submittedAt": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "submittedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "submittedByName": {
+          "type": "string",
+          "maxLength": 160
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

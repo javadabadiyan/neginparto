@@ -11,7 +11,9 @@ import {
   AlertCircle,
   X,
   Users,
-  ShieldCheck
+  ShieldCheck,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { Personnel, PersonnelRelative } from '../types';
 import { toPersianDigits, toEnglishDigits } from '../utils/persian';
@@ -20,6 +22,7 @@ import {
   downloadPersonnelRelativesTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface PersonnelRelativesTabProps {
   personnelList: Personnel[];
@@ -32,6 +35,8 @@ interface PersonnelRelativesTabProps {
   allowDeleteAll: boolean;
   allowExport: boolean;
   allowImport: boolean;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 const RELATION_OPTIONS = ['همسر', 'فرزند (پسر)', 'فرزند (دختر)', 'پدر', 'مادر', 'سایر'];
@@ -46,11 +51,14 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
   canDelete,
   allowDeleteAll,
   allowExport,
-  allowImport
+  allowImport,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [relationFilter, setRelationFilter] = useState('all');
   const [onlyDependent, setOnlyDependent] = useState(false);
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   const [selectedCompositeIds, setSelectedCompositeIds] = useState<string[]>([]);
   const [confirmBatchDeleteOpen, setConfirmBatchDeleteOpen] = useState(false);
@@ -111,6 +119,31 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
     return rows;
   }, [personnelList]);
 
+  const personnelNationalIds = useMemo(() => {
+    const set = new Set<string>();
+    personnelList.forEach((p) => {
+      const nid = normalizeDuplicateKey(p.nationalId);
+      if (nid) set.add(nid);
+    });
+    return set;
+  }, [personnelList]);
+
+  const relativeDupIndex = useMemo(
+    () => buildDuplicateIndex(allRelatives, () => '', (r) => r.nationalId),
+    [allRelatives]
+  );
+
+  const isDuplicateRelative = (r: PersonnelRelative & { parentPersonnel: Personnel }) => {
+    if (relativeDupIndex.isDuplicateRow(r)) return true;
+    const nid = normalizeDuplicateKey(r.nationalId);
+    return Boolean(nid && personnelNationalIds.has(nid));
+  };
+
+  const totalDuplicateRelatives = useMemo(
+    () => allRelatives.filter((r) => isDuplicateRelative(r)).length,
+    [allRelatives, relativeDupIndex, personnelNationalIds]
+  );
+
   const filteredRelatives = useMemo(() => {
     const term = toEnglishDigits(searchTerm).trim().toLowerCase();
     return allRelatives.filter(r => {
@@ -125,10 +158,11 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
         relationFilter === 'all' || (r.relation || '').includes(relationFilter);
 
       const matchesDependent = !onlyDependent || Boolean(r.isDependent);
+      const matchesDup = !onlyDuplicates || isDuplicateRelative(r);
 
-      return matchesSearch && matchesRelation && matchesDependent;
+      return matchesSearch && matchesRelation && matchesDependent && matchesDup;
     });
-  }, [allRelatives, searchTerm, relationFilter, onlyDependent]);
+  }, [allRelatives, searchTerm, relationFilter, onlyDependent, onlyDuplicates, relativeDupIndex, personnelNationalIds]);
 
   const getCompositeKey = (r: { personnelId: string; id: string }) => `${r.personnelId}::${r.id}`;
   const filteredKeys = filteredRelatives.map(getCompositeKey);
@@ -326,6 +360,17 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onRefreshData && (
+              <button
+                type="button"
+                onClick={() => onRefreshData()}
+                disabled={Boolean(isRefreshing)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold border border-indigo-200 transition-colors cursor-pointer disabled:opacity-60"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>بروزرسانی اطلاعات</span>
+              </button>
+            )}
             {allowExport && (
               <>
                 <button
@@ -380,7 +425,7 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
 
         {/* Filters */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2 border-t border-slate-100">
-          <div className="md:col-span-6 relative">
+          <div className="md:col-span-5 relative">
             <input
               type="text"
               value={searchTerm}
@@ -404,7 +449,7 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
             </select>
           </div>
 
-          <div className="md:col-span-3 flex items-center">
+          <div className="md:col-span-2 flex items-center">
             <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg w-full">
               <input
                 type="checkbox"
@@ -412,11 +457,46 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
                 onChange={(e) => setOnlyDependent(e.target.checked)}
                 className="w-4 h-4 rounded text-indigo-600"
               />
-              <span>فقط افراد تحت تکفل</span>
+              <span>فقط تحت تکفل</span>
             </label>
+          </div>
+
+          <div className="md:col-span-2 flex items-center">
+            <button
+              type="button"
+              onClick={() => setOnlyDuplicates((prev) => !prev)}
+              className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center justify-center gap-1.5 cursor-pointer persian-num ${
+                onlyDuplicates
+                  ? 'bg-amber-600 text-white border-amber-700'
+                  : totalDuplicateRelatives > 0
+                  ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                  : 'bg-slate-50 text-slate-500 border-slate-200'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>فقط تکراری‌ها ({toPersianDigits(totalDuplicateRelatives)})</span>
+            </button>
           </div>
         </div>
       </div>
+
+      {totalDuplicateRelatives > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
+          <div className="flex items-center gap-2 persian-num">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <b>{toPersianDigits(totalDuplicateRelatives)} ردیف بستگان</b> دارای کد ملی تکراری (یا هم‌سان با کد ملی پرسنل) شناسایی شد.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className="px-3 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 font-bold hover:bg-amber-100 shrink-0"
+          >
+            {onlyDuplicates ? 'نمایش همه' : 'فیلتر تکراری‌ها'}
+          </button>
+        </div>
+      )}
 
       {/* Bulk Bar */}
       {canDelete && selectedCompositeIds.length > 0 && (
@@ -484,8 +564,21 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
                 filteredRelatives.map((r, idx) => {
                   const compositeKey = getCompositeKey(r);
                   const isSelected = selectedCompositeIds.includes(compositeKey);
+                  const isDupRel = relativeDupIndex.isDuplicateRow(r);
+                  const nid = normalizeDuplicateKey(r.nationalId);
+                  const matchesEmpNid = Boolean(nid && personnelNationalIds.has(nid));
+                  const isDup = isDupRel || matchesEmpNid;
                   return (
-                    <tr key={compositeKey} className={isSelected ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'}>
+                    <tr
+                      key={compositeKey}
+                      className={
+                        isSelected
+                          ? 'bg-indigo-50/40'
+                          : isDup
+                          ? 'bg-amber-50/60 hover:bg-amber-100/50'
+                          : 'hover:bg-slate-50/70'
+                      }
+                    >
                       {canDelete && (
                         <td className="py-3 px-2.5 text-center">
                           <input
@@ -510,7 +603,12 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-3 text-slate-700 persian-num">
-                        {toPersianDigits(r.nationalId || '—')}
+                        <div>{toPersianDigits(r.nationalId || '—')}</div>
+                        {isDup && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                            {matchesEmpNid ? 'تکراری با کد ملی کارمند' : 'تکراری: کد ملی'}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-slate-600 persian-num">
                         {toPersianDigits(r.birthDate || '—')}
@@ -783,7 +881,13 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
           onCancel={() => setIsSmartImportOpen(false)}
           onImport={async (mappedRows) => {
             const ok = await onBatchImportRelatives(mappedRows);
-            if (ok) setIsSmartImportOpen(false);
+            if (ok) {
+              setSearchTerm('');
+              setRelationFilter('all');
+              setOnlyDependent(false);
+              setOnlyDuplicates(false);
+              setIsSmartImportOpen(false);
+            }
           }}
         />
       )}

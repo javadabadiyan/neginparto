@@ -54,6 +54,7 @@ import {
   Truck,
   Clock,
   Crown,
+  RefreshCw
 } from 'lucide-react';
 
 interface UnitOperationsModuleProps {
@@ -80,6 +81,8 @@ interface UnitOperationsModuleProps {
   onDeleteAllUnitReports: () => Promise<void>;
   onNavigateToCeoDashboard?: () => void;
   canViewCeoDashboard?: boolean;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 const formatNum = (val: number) => toPersianDigits(Math.round((val || 0) * 100) / 100);
@@ -108,6 +111,8 @@ export const UnitOperationsModule: React.FC<UnitOperationsModuleProps> = ({
   onDeleteAllUnitReports,
   onNavigateToCeoDashboard,
   canViewCeoDashboard = false,
+  onRefreshData,
+  isRefreshing = false,
 }) => {
   const normalizedUserPerms: UserPermissions = useMemo(
     () => normalizePermissions(currentUser?.permissions),
@@ -409,6 +414,17 @@ export const UnitOperationsModule: React.FC<UnitOperationsModuleProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onRefreshData && (
+              <button
+                type="button"
+                onClick={() => onRefreshData()}
+                disabled={Boolean(isRefreshing)}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-60"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>بروزرسانی اطلاعات</span>
+              </button>
+            )}
             {canViewCeoDashboard && onNavigateToCeoDashboard && (
               <button
                 type="button"

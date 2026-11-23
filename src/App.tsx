@@ -90,11 +90,118 @@ export default function App() {
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshDbStatusAsync = () => {
-    api.getDatabaseStatus().then(setDbStatus).catch(() => {});
+    api.getDatabaseStatus().then((status) => {
+      setDbStatus(status);
+      const sv = (status as any)?.syncVersion;
+      if (sv) {
+        lastSyncVersionRef.current = String(sv);
+      }
+    }).catch(() => {});
   };
 
-  const afterUploadRefresh = async () => {
-    await loadAllData({ silent: true, force: true });
+  type RefreshDomain =
+    | 'all'
+    | 'personnel'
+    | 'karaneh'
+    | 'payroll'
+    | 'jobGroups'
+    | 'jobClassifications'
+    | 'commitments'
+    | 'users'
+    | 'miningVolumes'
+    | 'miningMachinery'
+    | 'unitReports'
+    | 'unitOperations';
+
+  const refreshDomainData = async (domain: RefreshDomain = 'all', options?: { showSuccessToast?: boolean }): Promise<boolean> => {
+    setSyncingData(true);
+    setSyncError(null);
+    try {
+      if (domain === 'all') {
+        await loadAllData({ silent: false, force: true });
+      } else if (domain === 'personnel') {
+        const liteList = await api.getPersonnel({ lite: true });
+        setPersonnelList(Array.isArray(liteList) ? liteList : []);
+        refreshDbStatusAsync();
+        const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
+        const perms = currentUser
+          ? (isAdmin ? getFullAdminPermissions() : normalizePermissions(currentUser.permissions))
+          : null;
+        if (isAdmin || perms?.personnel?.documents) {
+          api.getPersonnel({ lite: false }).then((fullList) => {
+            if (Array.isArray(fullList) && fullList.length > 0) {
+              setPersonnelList(fullList);
+            }
+          }).catch(() => {});
+        }
+      } else if (domain === 'karaneh') {
+        const list = await api.getKaraneh();
+        setKaranehList(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'payroll') {
+        const list = await api.getPayroll();
+        setPayrollList(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'jobGroups' || domain === 'jobClassifications') {
+        const [groups, classes] = await Promise.all([
+          api.getJobGroups(),
+          api.getJobClassifications(),
+        ]);
+        setJobGroups(Array.isArray(groups) ? groups : []);
+        setJobClassifications(Array.isArray(classes) ? classes : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'commitments') {
+        const list = await api.getCommitments();
+        setCommitments(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'users') {
+        const list = await api.getUsers();
+        setUsers(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'miningVolumes') {
+        const list = await api.getMiningVolumes();
+        setMiningVolumes(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'miningMachinery') {
+        const list = await api.getMiningMachinery();
+        setMiningMachinery(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'unitReports') {
+        const list = await api.getUnitReports();
+        setUnitReports(Array.isArray(list) ? list : []);
+        refreshDbStatusAsync();
+      } else if (domain === 'unitOperations') {
+        const [vols, machs, reps] = await Promise.all([
+          api.getMiningVolumes(),
+          api.getMiningMachinery(),
+          api.getUnitReports(),
+        ]);
+        setMiningVolumes(Array.isArray(vols) ? vols : []);
+        setMiningMachinery(Array.isArray(machs) ? machs : []);
+        setUnitReports(Array.isArray(reps) ? reps : []);
+        refreshDbStatusAsync();
+      }
+
+      if (options?.showSuccessToast) {
+        showNotification('اطلاعات جدول با موفقیت از سرور بروزرسانی شد.');
+      }
+      return true;
+    } catch (err: any) {
+      const msg = err?.message || 'خطا در بروزرسانی اطلاعات از سرور';
+      setSyncError(msg);
+      showNotification(msg, 'error');
+      return false;
+    } finally {
+      setSyncingData(false);
+    }
+  };
+
+  const handleManualRefreshData = async (domain: RefreshDomain = 'all'): Promise<void> => {
+    await refreshDomainData(domain, { showSuccessToast: true });
+  };
+
+  const afterUploadRefresh = async (domain: RefreshDomain = 'all') => {
+    await refreshDomainData(domain);
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -310,7 +417,7 @@ export default function App() {
         setSyncError(null);
       }
 
-      const useLiteFirst = activeTab !== 'payroll' && activeTab !== 'ceo-dashboard';
+      const useLiteFirst = true;
       const bundle = await api.getBootstrapData({ lite: useLiteFirst });
       if (loadedForUserIdRef.current !== activeUserId) return;
 
@@ -329,7 +436,7 @@ export default function App() {
             : normalizePermissions(currentUser.permissions)
           : null;
         const needPayroll =
-          Number(bundle.dbStatus?.totalPayrollRecords || 0) > 0 && Boolean(isAdmin || perms?.payroll?.view);
+          Number(bundle.dbStatus?.totalPayrollRecords || 0) > 0 && Boolean(isAdmin || perms?.payroll?.view || perms?.ceoDashboard?.view);
         const needDocs =
           Number(bundle.dbStatus?.totalPersonnelWithDocs || 0) > 0 && Boolean(isAdmin || perms?.personnel?.documents);
 
@@ -343,8 +450,12 @@ export default function App() {
               if (Array.isArray(payData)) setPayrollList(payData);
               if (Array.isArray(fullPersData) && fullPersData.length > 0) setPersonnelList(fullPersData);
             })
-            .catch(() => {
-              // Non-fatal; payroll/documents will refresh on next sync or tab visit
+            .catch((err: any) => {
+              if (activeTab === 'payroll' || activeTab === 'ceo-dashboard') {
+                const msg = err?.message || 'خطا در دریافت اطلاعات حقوق از پایگاه داده';
+                setSyncError(msg);
+                showNotification(msg, 'error');
+              }
             });
         }
       }
@@ -409,6 +520,26 @@ export default function App() {
       }
     }
   }, [currentUser, activeTab]);
+
+  // Lazy-load full payroll slice if user navigates to payroll or ceo-dashboard and payrollList is still empty
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (activeTab !== 'payroll' && activeTab !== 'ceo-dashboard') return;
+    if (payrollList.length > 0) return;
+    if (Number(dbStatus?.totalPayrollRecords || 0) <= 0) return;
+    const isAdmin = currentUser.role === 'super_admin' || currentUser.username === 'javadabadiyan';
+    const perms = isAdmin ? getFullAdminPermissions() : normalizePermissions(currentUser.permissions);
+    if (!isAdmin && !perms.payroll?.view && !perms.ceoDashboard?.view) return;
+    api.getPayroll()
+      .then((payData) => {
+        if (Array.isArray(payData)) setPayrollList(payData);
+      })
+      .catch((err: any) => {
+        const msg = err?.message || 'خطا در دریافت جدول حقوق از سرور';
+        setSyncError(msg);
+        showNotification(msg, 'error');
+      });
+  }, [activeTab, currentUser?.id, dbStatus?.totalPayrollRecords, payrollList.length]);
 
   useEffect(() => {
     const uid = currentUser?.id;
@@ -748,7 +879,7 @@ export default function App() {
       const res = await api.batchImportPersonnel(items);
       if (res.success) {
         showNotification(res.message || 'بارگذاری پرونده‌ها از اکسل انجام شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('personnel');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -812,7 +943,7 @@ export default function App() {
       const res = await api.batchImportKaraneh(period, items);
       if (res.success) {
         showNotification(res.message || 'کارانه ماهانه با موفقیت از اکسل بارگذاری گردید.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('karaneh');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -830,7 +961,7 @@ export default function App() {
       const res = await api.submitKaraneh(period, department);
       if (res.success) {
         showNotification(res.message || 'کارانه این دوره با موفقیت تأیید و به کارانه نهایی ارسالی ارسال شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('karaneh');
         triggerGitHubAutoSync();
         return true;
       }
@@ -847,7 +978,7 @@ export default function App() {
       const res = await api.reopenKaraneh(period, department);
       if (res.success) {
         showNotification(res.message || 'کارانه واحد با موفقیت به وضعیت پیش‌نویس بازگردانده شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('karaneh');
         triggerGitHubAutoSync();
         return true;
       }
@@ -963,7 +1094,7 @@ export default function App() {
       const res = await api.batchImportJobClassifications(items);
       if (res.success) {
         showNotification(res.message || 'فایل اکسل طبقه‌بندی مشاغل با موفقیت بارگذاری شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('jobClassifications');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -1032,7 +1163,7 @@ export default function App() {
       const res = await api.batchImportCommitments(items);
       if (res.success) {
         showNotification(res.message || 'اسناد تعهدات از فایل اکسل با موفقیت ثبت شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('commitments');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -1105,7 +1236,7 @@ export default function App() {
       const res = await api.batchImportUsers(items);
       if (res.success) {
         showNotification(res.message || 'کاربران با موفقیت از اکسل تعریف/به‌روزرسانی شدند.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('users');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -1128,7 +1259,7 @@ export default function App() {
       const res = await api.batchImportPayroll(period, items, useRowYearMonth);
       if (res.success) {
         showNotification(res.message || 'فایل اکسل حقوق با موفقیت در پایگاه داده ثبت شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('payroll');
         mirrorSnapshotInBackground();
         return true;
       } else {
@@ -1347,7 +1478,7 @@ export default function App() {
       const res = await api.batchImportRelatives(items);
       if (res.success) {
         showNotification(res.message || 'اطلاعات بستگان با موفقیت در پرونده پرسنل ثبت شد.');
-        await afterUploadRefresh();
+        await afterUploadRefresh('personnel');
         mirrorSnapshotInBackground();
         return true;
       }
@@ -1567,7 +1698,7 @@ export default function App() {
     try {
       const res = await api.batchImportMiningVolumes(items);
       if (res.success) {
-        await afterUploadRefresh();
+        await afterUploadRefresh('miningVolumes');
         mirrorSnapshotInBackground();
         showNotification(res.message || 'آمار حجم عملیات از اکسل بارگذاری شد.');
         return { success: true, message: res.message };
@@ -1659,7 +1790,7 @@ export default function App() {
     try {
       const res = await api.batchImportMiningMachinery(items);
       if (res.success) {
-        await afterUploadRefresh();
+        await afterUploadRefresh('miningMachinery');
         mirrorSnapshotInBackground();
         showNotification(res.message || 'لیست ماشین‌آلات از اکسل وارد شد.');
         return { success: true, message: res.message };
@@ -1752,7 +1883,7 @@ export default function App() {
     try {
       const res = await api.batchImportUnitReports({ items });
       if (res.success) {
-        await afterUploadRefresh();
+        await afterUploadRefresh('unitReports');
         mirrorSnapshotInBackground();
         showNotification(res.message || 'گزارش اکسل واحد با موفقیت بارگذاری و به داشبورد مدیرعامل ارسال شد.');
         return { success: true, message: res.message };
@@ -2045,6 +2176,8 @@ export default function App() {
                   onDeleteAllUnitReports={handleDeleteAllUnitReports}
                   onNavigateToCeoDashboard={() => setActiveTab('ceo-dashboard')}
                   canViewCeoDashboard={isSuperAdmin || Boolean(userPerms.ceoDashboard?.view)}
+                  onRefreshData={() => handleManualRefreshData('unitOperations')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2070,6 +2203,8 @@ export default function App() {
                   canExport={isSuperAdmin || Boolean(userPerms.personnel.exportExcel)}
                   canImport={isSuperAdmin || Boolean(userPerms.personnel.importExcel)}
                   granularPermissions={userPerms.personnel}
+                  onRefreshData={() => handleManualRefreshData('personnel')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2096,6 +2231,8 @@ export default function App() {
                   granularPermissions={userPerms.karaneh}
                   userPermissions={userPerms}
                   isAdmin={isSuperAdmin}
+                  onRefreshData={() => handleManualRefreshData('karaneh')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2109,6 +2246,7 @@ export default function App() {
               (isSuperAdmin || userPerms.finalKaraneh?.view) ? (
                 <FinalKaranehModule
                   karanehList={karanehList}
+                  personnelList={personnelList.length > 0 ? personnelList : karanehUnitPersonnel}
                   onSaveKaraneh={handleSaveKaraneh}
                   onDeleteKaraneh={handleDeleteKaraneh}
                   onBatchDeleteKaraneh={handleBatchDeleteKaraneh}
@@ -2118,6 +2256,8 @@ export default function App() {
                   canDelete={isSuperAdmin || Boolean(userPerms.finalKaraneh?.delete)}
                   canDeleteAll={isSuperAdmin || Boolean(userPerms.finalKaraneh?.deleteAll)}
                   canExportExcel={isSuperAdmin || Boolean(userPerms.finalKaraneh?.exportExcel)}
+                  onRefreshData={() => handleManualRefreshData('karaneh')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2128,9 +2268,10 @@ export default function App() {
             )}
 
             {activeTab === 'payroll' && (
-              userPerms.payroll.view ? (
+              (isSuperAdmin || userPerms.payroll.view) ? (
                 <PayrollModule
                   payrollList={payrollList}
+                  personnelList={personnelList}
                   onBatchImportPayroll={handleBatchImportPayroll}
                   onDeletePayrollRecord={handleDeletePayrollRecord}
                   onBatchDeletePayroll={handleBatchDeletePayroll}
@@ -2138,6 +2279,8 @@ export default function App() {
                   onDeletePayrollPeriod={handleDeletePayrollPeriod}
                   canManage={canManagePayroll}
                   granularPermissions={userPerms.payroll}
+                  onRefreshData={() => handleManualRefreshData('payroll')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2148,7 +2291,7 @@ export default function App() {
             )}
 
             {activeTab === 'job-groups' && (
-              userPerms.jobGroups.view ? (
+              (isSuperAdmin || userPerms.jobGroups.view) ? (
                 <JobGroupsModule
                   jobGroups={jobGroups}
                   classifications={jobClassifications}
@@ -2164,6 +2307,8 @@ export default function App() {
                   onBatchImportClassifications={handleBatchImportClassifications}
                   canManage={canManageJobGroups}
                   granularPermissions={userPerms.jobGroups}
+                  onRefreshData={() => handleManualRefreshData('jobClassifications')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2174,7 +2319,7 @@ export default function App() {
             )}
 
             {activeTab === 'commitments' && (
-              userPerms.commitments.view ? (
+              (isSuperAdmin || userPerms.commitments.view) ? (
                 <CommitmentsModule
                   commitments={commitments}
                   personnelList={personnelList}
@@ -2185,6 +2330,8 @@ export default function App() {
                   onBatchImportCommitments={handleBatchImportCommitments}
                   canManage={canManageCommitments}
                   granularPermissions={userPerms.commitments}
+                  onRefreshData={() => handleManualRefreshData('commitments')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
@@ -2232,6 +2379,8 @@ export default function App() {
                   onDeleteAllUsers={handleDeleteAllUsers}
                   onBatchImportUsers={handleBatchImportUsers}
                   granularPermissions={userPerms.users}
+                  onRefreshData={() => handleManualRefreshData('users')}
+                  isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">

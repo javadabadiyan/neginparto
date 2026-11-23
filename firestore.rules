@@ -213,6 +213,7 @@ service cloud.firestore {
           'id', 'ownerUid', 'accessUids', 'personnelId', 'personnelCode', 'fullName',
           'department', 'position', 'period', 'score', 'performanceCoeff',
           'baseKaraneh', 'overtimeBonus', 'deductions', 'finalKaraneh', 'notes',
+          'status', 'submittedAt', 'submittedBy', 'submittedByName',
           'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
@@ -231,6 +232,10 @@ service cloud.firestore {
         isNonNegNum(data.deductions) &&
         isNum(data.finalKaraneh) &&
         (!('notes' in data) || isStr(data.notes, 1000)) &&
+        (!('status' in data) || data.status in ['draft', 'submitted']) &&
+        (!('submittedAt' in data) || isStr(data.submittedAt, 80)) &&
+        (!('submittedBy' in data) || isStr(data.submittedBy, 128)) &&
+        (!('submittedByName' in data) || isStr(data.submittedByName, 160)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -661,7 +666,8 @@ service cloud.firestore {
           ((existing().ownerUid == request.auth.uid || request.auth.uid in existing().accessUids) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'score', 'performanceCoeff', 'baseKaraneh', 'overtimeBonus',
-              'deductions', 'finalKaraneh', 'notes', 'updatedAt'
+              'deductions', 'finalKaraneh', 'notes', 'status', 'submittedAt',
+              'submittedBy', 'submittedByName', 'updatedAt'
             ]))
         );
       allow delete: if isValidId(recordId) && isEmailVerified() && (isAdmin() || existing().ownerUid == request.auth.uid);

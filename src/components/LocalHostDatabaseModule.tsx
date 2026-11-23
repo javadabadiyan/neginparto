@@ -645,17 +645,61 @@ npm start
       }
 
       const cfToken = loginJson.data.token;
-      const restoreRes = await fetch(`${check.url}/api/database/restore`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfToken}`,
-        },
-        body: JSON.stringify(snapRes.data),
-      });
-      const restoreJson: any = await restoreRes.json().catch(() => ({}));
-      if (!restoreRes.ok || !restoreJson?.success) {
-        throw new Error(restoreJson?.message || 'انتقال داده‌ها به Cloudflare D1 با خطا مواجه شد.');
+      const cfTableChunks: Array<{ key: string; batchSize: number }> = [
+        { key: 'users', batchSize: 100 },
+        { key: 'jobGroups', batchSize: 200 },
+        { key: 'jobClassifications', batchSize: 120 },
+        { key: 'personnel', batchSize: 80 },
+        { key: 'karaneh', batchSize: 200 },
+        { key: 'commitments', batchSize: 150 },
+        { key: 'payroll', batchSize: 60 },
+        { key: 'miningVolumes', batchSize: 150 },
+        { key: 'miningMachinery', batchSize: 150 },
+        { key: 'unitReports', batchSize: 150 },
+      ];
+      const totalSnapRows = cfTableChunks.reduce(
+        (sum, t) => sum + (Array.isArray((snapRes.data as any)?.[t.key]) ? (snapRes.data as any)[t.key].length : 0),
+        0
+      );
+
+      if (totalSnapRows > 200) {
+        const postChunk = async (body: Record<string, any>) => {
+          const chunkRes = await fetch(`${check.url}/api/database/restore-chunk`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${cfToken}`,
+            },
+            body: JSON.stringify(body),
+          });
+          const chunkJson: any = await chunkRes.json().catch(() => ({}));
+          if (!chunkRes.ok || !chunkJson?.success) {
+            throw new Error(chunkJson?.message || 'انتقال تکه‌ای داده‌ها به Cloudflare D1 با خطا مواجه شد.');
+          }
+          return chunkJson;
+        };
+
+        await postChunk({ clearAll: true, mode: 'replace' });
+        for (const { key, batchSize } of cfTableChunks) {
+          const rows = Array.isArray((snapRes.data as any)?.[key]) ? (snapRes.data as any)[key] : [];
+          for (let i = 0; i < rows.length; i += batchSize) {
+            await postChunk({ table: key, items: rows.slice(i, i + batchSize), mode: 'replace' });
+          }
+        }
+        await postChunk({ finalize: true, mode: 'replace' });
+      } else {
+        const restoreRes = await fetch(`${check.url}/api/database/restore`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cfToken}`,
+          },
+          body: JSON.stringify(snapRes.data),
+        });
+        const restoreJson: any = await restoreRes.json().catch(() => ({}));
+        if (!restoreRes.ok || !restoreJson?.success) {
+          throw new Error(restoreJson?.message || 'انتقال داده‌ها به Cloudflare D1 با خطا مواجه شد.');
+        }
       }
 
       const saved = setCloudflareApiUrl(check.url);

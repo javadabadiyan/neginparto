@@ -13,7 +13,9 @@ import {
   Table,
   Layers,
   AlertCircle,
-  CheckSquare
+  CheckSquare,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import {
   JobGroup,
@@ -27,6 +29,7 @@ import {
   downloadJobClassificationsTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { buildDuplicateIndex } from '../utils/duplicates';
 
 interface JobGroupsModuleProps {
   jobGroups: JobGroup[];
@@ -43,6 +46,8 @@ interface JobGroupsModuleProps {
   onBatchImportClassifications: (items: any[]) => Promise<boolean>;
   canManage?: boolean;
   granularPermissions?: GranularJobGroupsPermissions;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 const EMPTY_CLASSIFICATION: Partial<JobClassificationRecord> = {
@@ -80,7 +85,9 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
   onDeleteAllClassifications,
   onBatchImportClassifications,
   canManage = false,
-  granularPermissions
+  granularPermissions,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
   const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
@@ -92,6 +99,7 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
   const [subTab, setSubTab] = useState<'classifications' | 'groups'>('classifications');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterGroup, setFilterGroup] = useState('all');
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   // Job Group modal
   const [isGroupFormOpen, setIsGroupFormOpen] = useState(false);
@@ -147,6 +155,11 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
 
   const uniqueJobGroupLabels = Array.from(new Set(classifications.map(c => c.jobGroup).filter(Boolean)));
 
+  const duplicateIndex = React.useMemo(
+    () => buildDuplicateIndex(classifications, (c) => c.personnelCode, (c) => c.nationalId),
+    [classifications]
+  );
+
   const filteredClassifications = classifications.filter(c => {
     const term = toEnglishDigits(searchTerm).toLowerCase();
     const matchesSearch =
@@ -159,7 +172,8 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
       c.position.toLowerCase().includes(term) ||
       c.jobGroup.toLowerCase().includes(term);
     const matchesGroup = filterGroup === 'all' || c.jobGroup === filterGroup;
-    return matchesSearch && matchesGroup;
+    const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(c);
+    return matchesSearch && matchesGroup && matchesDup;
   });
 
   // Group CRUD handlers
@@ -268,6 +282,10 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
     if (mappedRows.length === 0) return;
     const success = await onBatchImportClassifications(mappedRows);
     if (success) {
+      setSubTab('classifications');
+      setSearchTerm('');
+      setFilterGroup('all');
+      setOnlyDuplicates(false);
       setIsImportOpen(false);
     }
   };
@@ -363,6 +381,17 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={() => onRefreshData()}
+              disabled={Boolean(isRefreshing)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold border border-indigo-200 transition-colors cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی اطلاعات</span>
+            </button>
+          )}
           {subTab === 'classifications' ? (
             <>
               {allowExport && (
@@ -460,9 +489,38 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
         </button>
       </div>
 
+      {/* Duplicate Warning Banner */}
+      {subTab === 'classifications' && duplicateIndex.totalDuplicateRows > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-950">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="persian-num">
+              <span className="font-bold">هشدار اطلاعات تکراری در جدول طبقه‌بندی مشاغل:</span>{' '}
+              <span>
+                <b>{toPersianDigits(duplicateIndex.totalDuplicateRows)} ردیف</b> دارای اطلاعات تکراری هستند
+                ({toPersianDigits(duplicateIndex.dupCodeCount)} کد پرسنلی تکراری و {toPersianDigits(duplicateIndex.dupNationalIdCount)} کد ملی تکراری).
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors shrink-0 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {onlyDuplicates
+              ? 'نمایش همه رکوردها'
+              : `مشاهده فقط تکراری‌ها (${toPersianDigits(duplicateIndex.totalDuplicateRows)})`}
+          </button>
+        </div>
+      )}
+
       {/* Search & Filter */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className={subTab === 'classifications' ? 'md:col-span-8 relative' : 'md:col-span-12 relative'}>
+        <div className={subTab === 'classifications' ? 'md:col-span-6 relative' : 'md:col-span-12 relative'}>
           <input
             type="text"
             value={searchTerm}
@@ -478,18 +536,36 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
         </div>
 
         {subTab === 'classifications' && (
-          <div className="md:col-span-4">
-            <select
-              value={filterGroup}
-              onChange={(e) => setFilterGroup(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 persian-num"
-            >
-              <option value="all">همه گروه‌های شغلی</option>
-              {uniqueJobGroupLabels.map(g => (
-                <option key={g} value={g}>{toPersianDigits(g)}</option>
-              ))}
-            </select>
-          </div>
+          <>
+            <div className="md:col-span-4">
+              <select
+                value={filterGroup}
+                onChange={(e) => setFilterGroup(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 persian-num"
+              >
+                <option value="all">همه گروه‌های شغلی</option>
+                {uniqueJobGroupLabels.map(g => (
+                  <option key={g} value={g}>{toPersianDigits(g)}</option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2 flex items-center">
+              <button
+                type="button"
+                onClick={() => setOnlyDuplicates((prev) => !prev)}
+                className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center justify-center gap-1.5 cursor-pointer persian-num ${
+                  onlyDuplicates
+                    ? 'bg-amber-600 text-white border-amber-700'
+                    : duplicateIndex.totalDuplicateRows > 0
+                    ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                    : 'bg-slate-50 text-slate-500 border-slate-200'
+                }`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>فقط تکراری‌ها ({toPersianDigits(duplicateIndex.totalDuplicateRows)})</span>
+              </button>
+            </div>
+          </>
         )}
       </div>
 
@@ -568,8 +644,19 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
                 ) : (
                   filteredClassifications.map((c, idx) => {
                     const isSelected = selectedClassIds.includes(c.id);
+                    const dupReasons = duplicateIndex.getRowDuplicateReasons(c);
+                    const isDup = dupReasons.length > 0;
                     return (
-                    <tr key={c.id} className={`${isSelected ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'} transition-colors persian-num`}>
+                    <tr
+                      key={c.id}
+                      className={`${
+                        isSelected
+                          ? 'bg-indigo-50/40'
+                          : isDup
+                          ? 'bg-amber-50/60 hover:bg-amber-100/50'
+                          : 'hover:bg-slate-50/70'
+                      } transition-colors persian-num`}
+                    >
                       {canDelete && (
                         <td className="py-3 px-2.5 text-center">
                           <input
@@ -581,12 +668,26 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
                         </td>
                       )}
                       <td className="py-3 px-2.5 text-center text-slate-500">{toPersianDigits(idx + 1)}</td>
-                      <td className="py-3 px-2.5 font-bold text-indigo-700">{toPersianDigits(c.personnelCode)}</td>
+                      <td className="py-3 px-2.5 font-bold text-indigo-700">
+                        <div>{toPersianDigits(c.personnelCode)}</div>
+                        {dupReasons.includes('personnelCode') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                            تکراری: کد پرسنلی
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-2.5 font-bold text-slate-900">{c.firstName}</td>
                       <td className="py-3 px-2.5 font-bold text-slate-900">{c.lastName}</td>
                       <td className="py-3 px-2.5 text-slate-700">{toPersianDigits(c.workLocation)}</td>
                       <td className="py-3 px-2.5 text-slate-700">{c.department}</td>
-                      <td className="py-3 px-2.5 text-slate-700">{toPersianDigits(c.nationalId)}</td>
+                      <td className="py-3 px-2.5 text-slate-700">
+                        <div>{toPersianDigits(c.nationalId)}</div>
+                        {dupReasons.includes('nationalId') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                            تکراری: کد ملی
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-2.5 text-slate-700">{c.education}</td>
                       <td className="py-3 px-2.5 text-slate-700">{toPersianDigits(c.hireDate)}</td>
                       <td className="py-3 px-2.5 text-slate-700">{c.hireMonth}</td>

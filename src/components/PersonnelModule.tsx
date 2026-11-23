@@ -18,7 +18,9 @@ import {
   ZoomIn,
   CheckSquare,
   Columns,
-  HeartHandshake
+  HeartHandshake,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import {
   Personnel,
@@ -38,6 +40,7 @@ import {
 import { readAndCompressDocument } from '../utils/image';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
 import { PersonnelRelativesTab } from './PersonnelRelativesTab';
+import { buildDuplicateIndex } from '../utils/duplicates';
 
 interface PersonnelModuleProps {
   personnelList: Personnel[];
@@ -53,6 +56,8 @@ interface PersonnelModuleProps {
   canExport?: boolean;
   canImport?: boolean;
   granularPermissions?: GranularPersonnelPermissions;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 const EMPTY_DOCS: PersonnelDocuments = {
@@ -77,7 +82,9 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
   canManage = false,
   canExport = false,
   canImport = false,
-  granularPermissions
+  granularPermissions,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
   const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
@@ -94,6 +101,7 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingPersonnel, setEditingPersonnel] = useState<Personnel | null>(null);
@@ -160,6 +168,11 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
 
   const departments = Array.from(new Set(personnelList.map(p => p.department))).filter(Boolean);
 
+  const duplicateIndex = useMemo(
+    () => buildDuplicateIndex(personnelList, (p) => p.personnelCode, (p) => p.nationalId),
+    [personnelList]
+  );
+
   const filteredList = personnelList.filter(p => {
     const term = toEnglishDigits(searchTerm).toLowerCase();
     const matchesSearch =
@@ -177,8 +190,9 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
 
     const matchesDept = filterDepartment === 'all' || p.department === filterDepartment;
     const matchesStatus = filterStatus === 'all' || p.status === filterStatus;
+    const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(p);
 
-    return matchesSearch && matchesDept && matchesStatus;
+    return matchesSearch && matchesDept && matchesStatus && matchesDup;
   });
 
   const handleOpenAdd = () => {
@@ -549,6 +563,17 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {onRefreshData && (
+                <button
+                  type="button"
+                  onClick={() => onRefreshData()}
+                  disabled={Boolean(isRefreshing)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span>بروزرسانی اطلاعات</span>
+                </button>
+              )}
               {allowExport && (
                 <>
                   <button
@@ -614,13 +639,44 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
           allowDeleteAll={allowDeleteAll}
           allowExport={allowExport}
           allowImport={allowImport}
+          onRefreshData={onRefreshData}
+          isRefreshing={isRefreshing}
         />
       ) : (
         <>
 
+      {/* Duplicate Personnel Warning Banner */}
+      {duplicateIndex.totalDuplicateRows > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-950">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="persian-num">
+              <span className="font-bold">هشدار اطلاعات تکراری پرسنل شناسایی شد:</span>{' '}
+              <span>
+                در مجموع <b>{toPersianDigits(duplicateIndex.totalDuplicateRows)} ردیف</b> دارای اطلاعات تکراری هستند
+                ({toPersianDigits(duplicateIndex.dupCodeCount)} کد پرسنلی تکراری و {toPersianDigits(duplicateIndex.dupNationalIdCount)} کد ملی تکراری).
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors shrink-0 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {onlyDuplicates
+              ? 'نمایش همه پرسنل'
+              : `مشاهده فقط تکراری‌ها (${toPersianDigits(duplicateIndex.totalDuplicateRows)})`}
+          </button>
+        </div>
+      )}
+
       {/* Filters & Search Toolbar */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className="md:col-span-6 relative">
+        <div className="md:col-span-4 relative">
           <input
             type="text"
             value={searchTerm}
@@ -656,6 +712,23 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
             <option value="ماموریت">در ماموریت</option>
             <option value="قطع همکاری">قطع همکاری</option>
           </select>
+        </div>
+
+        <div className="md:col-span-2 flex items-center">
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center justify-center gap-1.5 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : duplicateIndex.totalDuplicateRows > 0
+                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>فقط تکراری‌ها ({toPersianDigits(duplicateIndex.totalDuplicateRows)})</span>
+          </button>
         </div>
       </div>
 
@@ -762,8 +835,21 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                   const docCount = countDocs(p);
                   const relCount = Array.isArray(p.relatives) ? p.relatives.length : 0;
                   const isSelected = selectedIds.includes(p.id);
+                  const dupReasons = duplicateIndex.getRowDuplicateReasons(p);
+                  const isDup = dupReasons.length > 0;
+                  const isDupCode = dupReasons.includes('personnelCode');
+                  const isDupNid = dupReasons.includes('nationalId');
                   return (
-                    <tr key={p.id} className={isSelected ? 'bg-indigo-50/40 transition-colors' : 'hover:bg-slate-50/70 transition-colors'}>
+                    <tr
+                      key={p.id}
+                      className={
+                        isSelected
+                          ? 'bg-indigo-50/40 transition-colors'
+                          : isDup
+                          ? 'bg-amber-50/60 hover:bg-amber-100/50 transition-colors'
+                          : 'hover:bg-slate-50/70 transition-colors'
+                      }
+                    >
                       {canDelete && (
                         <td className="py-3.5 px-2.5 text-center">
                           <input
@@ -780,7 +866,14 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                       {tableViewMode === 'full28' ? (
                         <>
                           <td className="py-3.5 px-3 text-slate-700 persian-num whitespace-nowrap">{toPersianDigits(p.employeeId || '—')}</td>
-                          <td className="py-3.5 px-3 font-bold text-indigo-700 persian-num whitespace-nowrap">{toPersianDigits(p.personnelCode)}</td>
+                          <td className="py-3.5 px-3 font-bold text-indigo-700 persian-num whitespace-nowrap">
+                            <div>{toPersianDigits(p.personnelCode)}</div>
+                            {isDupCode && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                                تکراری: کد پرسنلی
+                              </span>
+                            )}
+                          </td>
                           <td className="py-3.5 px-3 text-slate-800 whitespace-nowrap">{p.firstName || '—'}</td>
                           <td className="py-3.5 px-3 text-slate-800 whitespace-nowrap">{p.lastName || '—'}</td>
                           <td className="py-3.5 px-4 font-bold text-slate-900 whitespace-nowrap">
@@ -793,7 +886,14 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                           </td>
                           <td className="py-3.5 px-3 text-slate-700 whitespace-nowrap">{p.fatherName || '—'}</td>
                           <td className="py-3.5 px-3 text-slate-700 persian-num whitespace-nowrap">{toPersianDigits(p.shenasnamehNumber || '—')}</td>
-                          <td className="py-3.5 px-3 text-slate-700 persian-num whitespace-nowrap">{toPersianDigits(p.nationalId || '—')}</td>
+                          <td className="py-3.5 px-3 text-slate-700 persian-num whitespace-nowrap">
+                            <div>{toPersianDigits(p.nationalId || '—')}</div>
+                            {isDupNid && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                                تکراری: کد ملی
+                              </span>
+                            )}
+                          </td>
                           <td className="py-3.5 px-3 text-slate-600 whitespace-nowrap">{p.nationality || '—'}</td>
                           <td className="py-3.5 px-3 text-slate-600 whitespace-nowrap">{p.citizenship || '—'}</td>
                           <td className="py-3.5 px-3 text-slate-600 whitespace-nowrap">{p.gender || '—'}</td>
@@ -818,7 +918,12 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                       ) : (
                         <>
                           <td className="py-3.5 px-3 font-bold text-indigo-700 persian-num">
-                            {toPersianDigits(p.personnelCode)}
+                            <div>{toPersianDigits(p.personnelCode)}</div>
+                            {isDupCode && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                                تکراری: کد پرسنلی
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 font-bold text-slate-900">
                             <button
@@ -829,7 +934,12 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                             </button>
                           </td>
                           <td className="py-3.5 px-3 text-slate-700 persian-num">
-                            {toPersianDigits(p.nationalId)}
+                            <div>{toPersianDigits(p.nationalId)}</div>
+                            {isDupNid && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                                تکراری: کد ملی
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-3 text-slate-800 font-medium">
                             {p.position}
@@ -1754,6 +1864,7 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
               setSearchTerm('');
               setFilterDepartment('all');
               setFilterStatus('all');
+              setOnlyDuplicates(false);
               setActiveSubTab('personnel');
               setIsImportOpen(false);
             }

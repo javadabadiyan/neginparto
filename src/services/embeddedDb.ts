@@ -278,7 +278,7 @@ function buildPresetPermissions(presetName: string): any {
     };
   }
   if (p.includes('کارگزینی')) {
-    return {
+    return normalizePermissions({
       personnel: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
       karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
       finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
@@ -289,13 +289,13 @@ function buildPresetPermissions(presetName: string): any {
       system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
       smartDashboard: { view: true, exportExcel: true, print: true },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
-      unitOperations: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, allowedUnits: [] },
+      unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
       canManagePersonnel: true, canManageKaraneh: false, canManageJobGroups: true, canManageCommitments: true,
       canManageUsers: false, canExportExcel: true, canImportExcel: true, canBackupRestore: false,
-    };
+    });
   }
   if (p.includes('کارانه') || p.includes('حقوق')) {
-    return {
+    return normalizePermissions({
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: true, documents: false },
       karaneh: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
       finalKaraneh: { view: true, edit: true, delete: false, deleteAll: false, exportExcel: true },
@@ -309,23 +309,26 @@ function buildPresetPermissions(presetName: string): any {
       unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
       canManagePersonnel: false, canManageKaraneh: true, canManageJobGroups: false, canManageCommitments: false,
       canManageUsers: false, canExportExcel: true, canImportExcel: true, canBackupRestore: false,
-    };
+    });
   }
-  return {
-    personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: false, documents: false },
-    karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
-    finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
-    jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
-    commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
-    payroll: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
-    users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-    system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
-    smartDashboard: { view: true, exportExcel: true, print: true },
-    ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
-    unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
-    canManagePersonnel: false, canManageKaraneh: false, canManageJobGroups: false, canManageCommitments: false,
-    canManageUsers: false, canExportExcel: true, canImportExcel: false, canBackupRestore: false,
-  };
+  if (p.includes('مشاهده') || p.includes('بیننده') || p.toLowerCase().includes('viewer')) {
+    return normalizePermissions({
+      personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: false, documents: false },
+      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
+      jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
+      commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
+      payroll: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
+      users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
+      smartDashboard: { view: true, exportExcel: true, print: true },
+      ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+      unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
+      canManagePersonnel: false, canManageKaraneh: false, canManageJobGroups: false, canManageCommitments: false,
+      canManageUsers: false, canExportExcel: true, canImportExcel: false, canBackupRestore: false,
+    });
+  }
+  return getEmptyPermissions();
 }
 
 function getInitialEmbeddedDatabase(): EmbeddedDatabase {
@@ -880,7 +883,9 @@ export const embeddedDb = {
         if (isSuperAdmin(existing) && !isSuperAdmin(auth)) continue;
         db.users[idx] = {
           ...existing, fullName, role, department, isActive,
-          permissions: row['الگوی دسترسی'] ? normalizePermissions(buildPresetPermissions(presetLabel)) : normalizePermissions(existing.permissions),
+          permissions: (row['الگوی دسترسی'] || row.preset)
+            ? normalizePermissions(buildPresetPermissions(presetLabel))
+            : normalizePermissions(existing.permissions),
           password: rawPass ? hashPasswordClient(rawPass) : existing.password,
         };
         updated++;
@@ -1339,7 +1344,7 @@ export const embeddedDb = {
   async submitKaraneh(period: string, department?: string) {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    const canSubmit = isSuperAdmin(auth) || hasPerm(auth, 'karaneh', 'submit') || hasPerm(auth, 'karaneh', 'create') || hasPerm(auth, 'karaneh', 'edit');
+    const canSubmit = isSuperAdmin(auth) || hasPerm(auth, 'karaneh', 'submit') || hasPerm(auth, 'finalKaraneh', 'edit');
     if (!canSubmit || !auth) return { success: false, message: 'عدم دسترسی تأیید و ارسال کارانه نهایی.' };
     if (!period) return { success: false, message: 'دوره کارانه مشخص نشده است.' };
     const fullScope = hasFullKaranehScopeEmb(auth);
@@ -2330,10 +2335,11 @@ export const embeddedDb = {
     }
     const nextUsers = backupData.users.map((u: any) => {
       const pass = String(u.password || '');
+      const normalizedPerms = isSuperAdmin(u) ? getFullAdminPermissions() : normalizePermissions(u.permissions);
       if (pass && !pass.startsWith('sha256$') && !pass.startsWith('scrypt$') && !pass.startsWith('$2y$')) {
-        return { ...u, password: hashPasswordClient(pass) };
+        return { ...u, permissions: normalizedPerms, password: hashPasswordClient(pass) };
       }
-      return u;
+      return { ...u, permissions: normalizedPerms };
     });
     await saveEmbeddedDb({
       users: nextUsers,
@@ -2400,7 +2406,13 @@ export const embeddedDb = {
       for (const u of incoming.users) {
         if (!u?.id || u.username === 'javadabadiyan') continue;
         const prev = uMap.get(String(u.id));
-        uMap.set(String(u.id), prev ? { ...prev, ...u, password: prev.password } : { ...u, password: hashPasswordClient('12345678') });
+        const normalizedPerms = isSuperAdmin(u) ? getFullAdminPermissions() : normalizePermissions(u.permissions);
+        uMap.set(
+          String(u.id),
+          prev
+            ? { ...prev, ...u, permissions: normalizedPerms, password: prev.password }
+            : { ...u, permissions: normalizedPerms, password: hashPasswordClient('12345678') }
+        );
       }
       db.users = Array.from(uMap.values());
     }

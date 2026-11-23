@@ -19,7 +19,9 @@ import {
   CheckSquare,
   Send,
   Lock,
-  CheckCircle2
+  CheckCircle2,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { KaranehRecord, Personnel, KaranehComparisonRow, GranularKaranehPermissions, UserPermissions } from '../types';
 import { normalizePermissions, canUserAccessKaranehUnit } from '../utils/permissions';
@@ -41,6 +43,7 @@ import {
   downloadKaranehTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface KaranehModuleProps {
   personnelList: Personnel[];
@@ -57,6 +60,8 @@ interface KaranehModuleProps {
   granularPermissions?: GranularKaranehPermissions;
   userPermissions?: UserPermissions;
   isAdmin?: boolean;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 export const KaranehModule: React.FC<KaranehModuleProps> = ({
@@ -73,7 +78,9 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   canImport = false,
   granularPermissions,
   userPermissions,
-  isAdmin = false
+  isAdmin = false,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
   const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
@@ -81,7 +88,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const allowDeleteAll = Boolean(granularPermissions?.deleteAll);
   const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : canExport;
   const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canImport;
-  const canSubmit = isAdmin || Boolean(granularPermissions?.submit) || canCreate || canEdit;
+  const canSubmit = isAdmin || Boolean(granularPermissions?.submit) || Boolean(userPermissions?.finalKaraneh?.edit);
 
   const effectivePerms = useMemo(() => normalizePermissions(userPermissions), [userPermissions]);
   const allowedUnits = useMemo(() => {
@@ -132,6 +139,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTrend, setFilterTrend] = useState<string>('all');
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -251,19 +259,43 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
   const departments = Array.from(new Set(comparisonRows.map(r => r.department))).filter(Boolean);
 
+  const personnelNationalIdByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    personnelList.forEach((p) => {
+      const code = normalizeDuplicateKey(p.personnelCode);
+      if (code && p.nationalId) {
+        map.set(code, p.nationalId);
+      }
+    });
+    return map;
+  }, [personnelList]);
+
+  const duplicateIndex = useMemo(
+    () =>
+      buildDuplicateIndex(
+        comparisonRows,
+        (r) => r.personnelCode,
+        (r) => personnelNationalIdByCode.get(normalizeDuplicateKey(r.personnelCode)) || ''
+      ),
+    [comparisonRows, personnelNationalIdByCode]
+  );
+
   // Filtered comparison rows
   const filteredRows = comparisonRows.filter(r => {
     const term = searchTerm.toLowerCase();
+    const nid = personnelNationalIdByCode.get(normalizeDuplicateKey(r.personnelCode)) || '';
     const matchesSearch =
       r.fullName.toLowerCase().includes(term) ||
       r.personnelCode.toLowerCase().includes(term) ||
+      nid.toLowerCase().includes(term) ||
       r.department.toLowerCase().includes(term) ||
       r.position.toLowerCase().includes(term);
 
     const matchesTrend = filterTrend === 'all' || r.trend === filterTrend;
     const matchesDept = filterDepartment === 'all' || r.department === filterDepartment;
+    const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(r);
 
-    return matchesSearch && matchesTrend && matchesDept;
+    return matchesSearch && matchesTrend && matchesDept && matchesDup;
   });
 
   // Handle open Add Modal (ثبت دستی کارانه)
@@ -289,7 +321,9 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
   // Handle open Edit Modal
   const handleOpenEdit = (row: KaranehComparisonRow) => {
-    const originalRecord = currentRecords.find(k => k.personnelCode === row.personnelCode);
+    const originalRecord =
+      currentRecords.find(k => (row.id ? k.id === row.id : k.personnelCode === row.personnelCode)) ||
+      currentRecords.find(k => k.personnelCode === row.personnelCode);
     if (!originalRecord) return;
 
     setEditingRecord(originalRecord);
@@ -369,8 +403,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   };
 
   // Delete record
-  const handleDeleteRecord = (personnelCode: string) => {
-    const original = currentRecords.find(k => k.personnelCode === personnelCode);
+  const handleDeleteRecord = (row: KaranehComparisonRow) => {
+    const original =
+      currentRecords.find(k => (row.id ? k.id === row.id : k.personnelCode === row.personnelCode)) ||
+      currentRecords.find(k => k.personnelCode === row.personnelCode);
     if (!original) return;
     setDeleteTarget(original);
   };
@@ -382,7 +418,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   };
 
   const filteredRecordIds = filteredRows
-    .map(r => currentRecords.find(k => k.personnelCode === r.personnelCode)?.id)
+    .map(r => r.id || currentRecords.find(k => k.personnelCode === r.personnelCode)?.id)
     .filter((id): id is string => !!id);
   const allFilteredSelected = filteredRecordIds.length > 0 && filteredRecordIds.every(id => selectedIds.includes(id));
 
@@ -458,6 +494,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     const success = await onBatchImportKaraneh(importPeriod, normalizedRows);
     if (success) {
       setIsImportOpen(false);
+      setSearchTerm('');
+      setFilterTrend('all');
+      setFilterDepartment('all');
+      setOnlyDuplicates(false);
       setCurrentYear(importYear);
       setCurrentMonthIndex(importMonthIndex);
       setPrevYear(importPrevYear);
@@ -506,6 +546,17 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={() => onRefreshData()}
+              disabled={Boolean(isRefreshing)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی اطلاعات</span>
+            </button>
+          )}
           {allowExport && (
             <button
               onClick={() => exportKaranehComparisonToExcel(
@@ -735,16 +786,45 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
       </div>
 
+      {/* Duplicate Personnel Warning Banner */}
+      {duplicateIndex.totalDuplicateRows > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-950">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="persian-num">
+              <span className="font-bold">هشدار اطلاعات تکراری در کارانه ماه {getPeriodLabel(currentPeriod)}:</span>{' '}
+              <span>
+                <b>{toPersianDigits(duplicateIndex.totalDuplicateRows)} ردیف</b> تکراری شناسایی شد
+                ({toPersianDigits(duplicateIndex.dupCodeCount)} کد پرسنلی تکراری و {toPersianDigits(duplicateIndex.dupNationalIdCount)} کد ملی تکراری).
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors shrink-0 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {onlyDuplicates
+              ? 'نمایش همه رکوردها'
+              : `مشاهده فقط تکراری‌ها (${toPersianDigits(duplicateIndex.totalDuplicateRows)})`}
+          </button>
+        </div>
+      )}
+
       {/* Filters & Search Toolbar */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
         
         {/* Search */}
-        <div className="md:col-span-6 relative">
+        <div className="md:col-span-4 relative">
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="جستجو بر اساس نام پرسنل، کد پرسنلی، پست سازمانی یا واحد اداری..."
+            placeholder="جستجو بر اساس نام، کد پرسنلی، کد ملی، پست یا واحد..."
             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
           />
         </div>
@@ -776,6 +856,24 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               <option key={d} value={d}>{d}</option>
             ))}
           </select>
+        </div>
+
+        {/* Duplicate filter toggle */}
+        <div className="md:col-span-2 flex items-center">
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center justify-center gap-1.5 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : duplicateIndex.totalDuplicateRows > 0
+                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>فقط تکراری‌ها ({toPersianDigits(duplicateIndex.totalDuplicateRows)})</span>
+          </button>
         </div>
 
       </div>
@@ -856,10 +954,22 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 </tr>
               ) : (
                 filteredRows.map((row, idx) => {
-                  const rowRecordId = currentRecords.find(k => k.personnelCode === row.personnelCode)?.id;
+                  const rowRecordId = row.id || currentRecords.find(k => k.personnelCode === row.personnelCode)?.id;
                   const isSelected = !!rowRecordId && selectedIds.includes(rowRecordId);
+                  const dupReasons = duplicateIndex.getRowDuplicateReasons(row);
+                  const isDup = dupReasons.length > 0;
+                  const nid = personnelNationalIdByCode.get(normalizeDuplicateKey(row.personnelCode)) || '';
                   return (
-                  <tr key={row.personnelCode} className={isSelected ? 'bg-indigo-50/40 transition-colors' : 'hover:bg-slate-50/70 transition-colors'}>
+                  <tr
+                    key={rowRecordId || `${row.personnelCode}-${idx}`}
+                    className={
+                      isSelected
+                        ? 'bg-indigo-50/40 transition-colors'
+                        : isDup
+                        ? 'bg-amber-50/60 hover:bg-amber-100/50 transition-colors'
+                        : 'hover:bg-slate-50/70 transition-colors'
+                    }
+                  >
                     {canDelete && (
                       <td className="py-3.5 px-2.5 text-center">
                         {rowRecordId && (
@@ -876,10 +986,25 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                       {toPersianDigits(idx + 1)}
                     </td>
                     <td className="py-3.5 px-3 font-bold text-slate-800 persian-num">
-                      {toPersianDigits(row.personnelCode)}
+                      <div>{toPersianDigits(row.personnelCode)}</div>
+                      {dupReasons.includes('personnelCode') && (
+                        <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                          تکراری: کد پرسنلی
+                        </span>
+                      )}
+                      {dupReasons.includes('nationalId') && (
+                        <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                          تکراری: کد ملی
+                        </span>
+                      )}
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-900">
-                      {row.fullName}
+                      <div>{row.fullName}</div>
+                      {nid && (
+                        <div className="text-[10px] text-slate-500 font-normal persian-num">
+                          کد ملی: {toPersianDigits(nid)}
+                        </div>
+                      )}
                     </td>
                     
                     {/* ستون اختصاصی و شکیل پست سازمانی */}
@@ -984,7 +1109,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                           )}
                           {canDelete && (
                             <button
-                              onClick={() => handleDeleteRecord(row.personnelCode)}
+                              onClick={() => handleDeleteRecord(row)}
                               title="حذف رکورد کارانه این ماه"
                               className="p-1.5 text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                             >

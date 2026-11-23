@@ -301,6 +301,10 @@ function buildKaranehPayload(k: KaranehRecord, ownerUid: string) {
       deductions: toNonNegNum(k.deductions),
       finalKaraneh: toNum(k.finalKaraneh),
       notes: clampStr(k.notes || '', BLUEPRINT_LIMITS.NOTES_MAX),
+      status: k.status === 'submitted' ? 'submitted' : 'draft',
+      submittedAt: clampStr(k.submittedAt || '', 80),
+      submittedBy: clampStr(k.submittedBy || '', 128),
+      submittedByName: clampStr(k.submittedByName || '', 160),
     },
   };
 }

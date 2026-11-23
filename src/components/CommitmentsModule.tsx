@@ -13,7 +13,9 @@ import {
   Upload,
   AlertCircle,
   Wallet,
-  CheckSquare
+  CheckSquare,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import {
   PersonnelCommitment,
@@ -33,6 +35,7 @@ import {
   downloadCommitmentsTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface CommitmentsModuleProps {
   commitments: PersonnelCommitment[];
@@ -44,6 +47,8 @@ interface CommitmentsModuleProps {
   onBatchImportCommitments: (items: any[]) => Promise<boolean>;
   canManage?: boolean;
   granularPermissions?: GranularCommitmentsPermissions;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
@@ -55,7 +60,9 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
   onDeleteAllCommitments,
   onBatchImportCommitments,
   canManage = false,
-  granularPermissions
+  granularPermissions,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
   const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
@@ -70,6 +77,7 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
   const [filterType, setFilterType] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [archiveTab, setArchiveTab] = useState<'active' | 'archived' | 'all'>('active');
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingCommitment, setEditingCommitment] = useState<PersonnelCommitment | null>(null);
@@ -119,11 +127,39 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
       .reduce((sum, c) => sum + Number(c.amount || 0), 0);
   };
 
+  const personnelNationalIdMap = React.useMemo(() => {
+    const byCode = new Map<string, string>();
+    const byId = new Map<string, string>();
+    personnelList.forEach((p) => {
+      if (p.id && p.nationalId) byId.set(p.id, p.nationalId);
+      const code = normalizeDuplicateKey(p.personnelCode);
+      if (code && p.nationalId) byCode.set(code, p.nationalId);
+    });
+    return { byCode, byId };
+  }, [personnelList]);
+
+  const getCommitmentNationalId = (c: PersonnelCommitment) =>
+    (c.personnelId && personnelNationalIdMap.byId.get(c.personnelId)) ||
+    personnelNationalIdMap.byCode.get(normalizeDuplicateKey(c.personnelCode)) ||
+    '';
+
+  const duplicateIndex = React.useMemo(
+    () =>
+      buildDuplicateIndex(
+        commitments,
+        (c) => c.personnelCode,
+        (c) => getCommitmentNationalId(c)
+      ),
+    [commitments, personnelNationalIdMap]
+  );
+
   const filtered = commitments.filter(c => {
     const term = toEnglishDigits(searchTerm).toLowerCase();
+    const nid = toEnglishDigits(getCommitmentNationalId(c)).toLowerCase();
     const matchesSearch =
       c.personnelName.toLowerCase().includes(term) ||
       toEnglishDigits(c.personnelCode).toLowerCase().includes(term) ||
+      nid.includes(term) ||
       c.commitmentType.toLowerCase().includes(term) ||
       (c.guarantorName && c.guarantorName.toLowerCase().includes(term)) ||
       (c.archiveCode && toEnglishDigits(c.archiveCode).toLowerCase().includes(term));
@@ -134,8 +170,9 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
       archiveTab === 'all' ||
       (archiveTab === 'archived' && !!c.isArchived) ||
       (archiveTab === 'active' && !c.isArchived);
+    const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(c);
 
-    return matchesSearch && matchesType && matchesStatus && matchesArchive;
+    return matchesSearch && matchesType && matchesStatus && matchesArchive && matchesDup;
   });
 
   const handleOpenAdd = () => {
@@ -256,6 +293,11 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
     if (mappedRows.length === 0) return;
     const success = await onBatchImportCommitments(mappedRows);
     if (success) {
+      setArchiveTab('all');
+      setSearchTerm('');
+      setFilterType('all');
+      setFilterStatus('all');
+      setOnlyDuplicates(false);
       setIsImportOpen(false);
     }
   };
@@ -294,6 +336,17 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={() => onRefreshData()}
+              disabled={Boolean(isRefreshing)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی اطلاعات</span>
+            </button>
+          )}
           {allowExport && (
             <button
               onClick={() => exportCommitmentsToExcel(filtered)}
@@ -376,6 +429,35 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
         </div>
       </div>
 
+      {/* Duplicate Personnel Warning Banner */}
+      {duplicateIndex.totalDuplicateRows > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
+          <div className="flex items-center gap-2.5 text-xs text-amber-950">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="persian-num">
+              <span className="font-bold">هشدار رکوردهای تعهد برای پرسنل تکراری:</span>{' '}
+              <span>
+                <b>{toPersianDigits(duplicateIndex.totalDuplicateRows)} سند تعهد</b> متعلق به پرسنل با کد پرسنلی یا کد ملی تکراری است
+                ({toPersianDigits(duplicateIndex.dupCodeCount)} کد پرسنلی و {toPersianDigits(duplicateIndex.dupNationalIdCount)} کد ملی تکراری).
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOnlyDuplicates((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors shrink-0 cursor-pointer persian-num ${
+              onlyDuplicates
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {onlyDuplicates
+              ? 'نمایش همه تعهدات'
+              : `مشاهده فقط تکراری‌ها (${toPersianDigits(duplicateIndex.totalDuplicateRows)})`}
+          </button>
+        </div>
+      )}
+
       {/* Archive Tabs & Filters */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3 no-print">
         <div className="flex flex-wrap items-center gap-2 pb-3 border-b border-slate-100">
@@ -413,12 +495,12 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-          <div className="md:col-span-6">
+          <div className="md:col-span-4">
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="جستجو بر اساس نام پرسنل، کد پرسنلی، نام ضامن یا کد بایگانی..."
+              placeholder="جستجو بر اساس نام، کد پرسنلی، کد ملی، ضامن یا بایگانی..."
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 persian-num"
             />
           </div>
@@ -451,6 +533,23 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
               <option value="عودت داده شده">عودت داده شده</option>
               <option value="به اجرا گذاشته شده">به اجرا گذاشته شده</option>
             </select>
+          </div>
+
+          <div className="md:col-span-2 flex items-center">
+            <button
+              type="button"
+              onClick={() => setOnlyDuplicates((prev) => !prev)}
+              className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center justify-center gap-1.5 cursor-pointer persian-num ${
+                onlyDuplicates
+                  ? 'bg-amber-600 text-white border-amber-700'
+                  : duplicateIndex.totalDuplicateRows > 0
+                  ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                  : 'bg-slate-50 text-slate-500 border-slate-200'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>فقط تکراری‌ها ({toPersianDigits(duplicateIndex.totalDuplicateRows)})</span>
+            </button>
           </div>
         </div>
       </div>
@@ -522,8 +621,20 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
                 filtered.map((c, idx) => {
                   const remaining = computeRemaining(c);
                   const isSelected = selectedIds.includes(c.id);
+                  const dupReasons = duplicateIndex.getRowDuplicateReasons(c);
+                  const isDup = dupReasons.length > 0;
+                  const nid = getCommitmentNationalId(c);
                   return (
-                    <tr key={c.id} className={isSelected ? 'bg-indigo-50/40 transition-colors' : 'hover:bg-slate-50/70 transition-colors'}>
+                    <tr
+                      key={c.id}
+                      className={
+                        isSelected
+                          ? 'bg-indigo-50/40 transition-colors'
+                          : isDup
+                          ? 'bg-amber-50/60 hover:bg-amber-100/50 transition-colors'
+                          : 'hover:bg-slate-50/70 transition-colors'
+                      }
+                    >
                       {canDelete && (
                         <td className="py-3.5 px-2.5 text-center">
                           <input
@@ -538,10 +649,25 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
                         {toPersianDigits(idx + 1)}
                       </td>
                       <td className="py-3.5 px-3 font-bold text-indigo-700 persian-num">
-                        {toPersianDigits(c.personnelCode)}
+                        <div>{toPersianDigits(c.personnelCode)}</div>
+                        {dupReasons.includes('personnelCode') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold">
+                            تکراری: کد پرسنلی
+                          </span>
+                        )}
+                        {dupReasons.includes('nationalId') && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold">
+                            تکراری: کد ملی
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5 px-3 font-bold text-slate-900">
-                        {c.personnelName}
+                        <div>{c.personnelName}</div>
+                        {nid && (
+                          <div className="text-[10px] text-slate-500 font-normal persian-num">
+                            کد ملی: {toPersianDigits(nid)}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3.5 px-3 text-slate-800 font-medium">
                         <span className={`px-2 py-0.5 rounded-lg text-[11px] font-bold ${

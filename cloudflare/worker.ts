@@ -623,8 +623,8 @@ function buildPresetPermissions(presetName: string) {
       payroll: { view: true, exportExcel: true },
       system: { dashboardStats: true },
       smartDashboard: { view: true, exportExcel: true, print: true },
-      ceoDashboard: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, print: true },
-      unitOperations: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, allowedUnits: [] },
+      ceoDashboard: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, print: true },
+      unitOperations: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, allowedUnits: [] },
     });
   }
   if (p.includes('واحد') && p.includes('کارانه')) {
@@ -632,11 +632,39 @@ function buildPresetPermissions(presetName: string) {
       karaneh: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
     });
   }
+  if (p.includes('دیسپچینگ')) {
+    return normalizePermissions({
+      personnel: { view: true },
+      system: { dashboardStats: true },
+      unitOperations: {
+        view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true,
+        allowedUnits: ['واحد دیسپچینگ و کنترل تولید', 'استخراج و معدن‌کاری', 'حمل‌ونقل و ترابری معدنی'],
+      },
+    });
+  }
+  if (p.includes('تعمیرگاه')) {
+    return normalizePermissions({
+      personnel: { view: true },
+      system: { dashboardStats: true },
+      unitOperations: {
+        view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true,
+        allowedUnits: ['تعمیرگاه و ماشین‌آلات سنگین', 'نگهداری و تعمیرات (نت) و تاسیسات'],
+      },
+    });
+  }
+  if (p.includes('سرپرست واحد')) {
+    return normalizePermissions({
+      personnel: { view: true, exportExcel: true },
+      system: { dashboardStats: true },
+      unitOperations: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, allowedUnits: [] },
+    });
+  }
   if (p.includes('مدیر')) return getFullAdminPermissions();
   if (p.includes('کارگزینی')) {
     return normalizePermissions({
       personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
       karaneh: { view: true, exportExcel: true },
+      finalKaraneh: { view: true, exportExcel: true },
       jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
       commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
@@ -653,6 +681,18 @@ function buildPresetPermissions(presetName: string) {
       payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
       system: { dashboardStats: true },
       smartDashboard: { view: true, exportExcel: true },
+    });
+  }
+  if (p.includes('مشاهده') || p.includes('بیننده') || p.includes('viewer')) {
+    return normalizePermissions({
+      personnel: { view: true, exportExcel: true },
+      karaneh: { view: true, exportExcel: true },
+      finalKaraneh: { view: true, exportExcel: true },
+      jobGroups: { view: true, exportExcel: true },
+      commitments: { view: true, print: true, exportExcel: true },
+      payroll: { view: true, exportExcel: true },
+      system: { dashboardStats: true },
+      smartDashboard: { view: true, exportExcel: true, print: true },
     });
   }
   return getEmptyPermissions();
@@ -1029,7 +1069,8 @@ async function buildInitialSeedData() {
         department: 'اداره جبران خدمت و کارانه',
         permissions: normalizePermissions({
           personnel: { view: true, exportExcel: true, viewSalary: true },
-          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+          finalKaraneh: { view: true, edit: true, exportExcel: true },
           jobGroups: { view: true, exportExcel: true },
           payroll: { view: true, exportExcel: true },
           smartDashboard: { view: true, exportExcel: true },
@@ -1121,7 +1162,88 @@ async function buildInitialSeedData() {
   };
 }
 
-async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> {
+async function upsertChunkIntoD1(db: D1Database, table: string, items: any[]): Promise<number> {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  let stmts: D1PreparedStatement[] = [];
+  if (table === 'users') {
+    const existingUsers = await getAllUsers(db);
+    const existingById = new Map(existingUsers.map((u: any) => [String(u.id), u]));
+    const rows: any[][] = [];
+    for (const u of items) {
+      if (!u || !u.id || !u.username) continue;
+      const prev = existingById.get(String(u.id));
+      let pass = u.password || prev?.password || '';
+      if (pass && !String(pass).startsWith('pbkdf2$') && !String(pass).startsWith('sha256$')) {
+        if (String(pass).startsWith('scrypt$')) {
+          pass = u.username === 'javadabadiyan' ? await hashPassword('javad_5221157') : await hashPassword('12345678');
+        } else {
+          pass = await hashPassword(String(pass));
+        }
+      } else if (!pass) {
+        pass = u.username === 'javadabadiyan' ? await hashPassword('javad_5221157') : await hashPassword('12345678');
+      }
+      const normalizedPerms =
+        u.username === 'javadabadiyan' || u.role === 'super_admin'
+          ? getFullAdminPermissions()
+          : normalizePermissions(u.permissions || prev?.permissions);
+      rows.push([
+        String(u.id),
+        String(u.username),
+        pass,
+        u.fullName || prev?.fullName || '',
+        u.role || prev?.role || 'کاربر سفارشی',
+        u.department || prev?.department || '',
+        u.email || prev?.email || '',
+        u.uid || prev?.uid || '',
+        JSON.stringify(normalizedPerms),
+        u.isActive === false ? 0 : 1,
+        u.createdAt || prev?.createdAt || '',
+        u.lastLogin || prev?.lastLogin || '',
+      ]);
+    }
+    stmts = buildMultiRowUpsertStmts(
+      db,
+      'users',
+      ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+      'id',
+      ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+      rows
+    );
+  } else if (table === 'personnel') {
+    const rows = items.filter((p) => p?.id).map((p) => [String(p.id), toAsciiDigits(p.personnelCode || '').trim(), JSON.stringify(p), p.updatedAt || '']);
+    stmts = buildMultiRowUpsertStmts(db, 'personnel', ['id', 'personnel_code', 'data_json', 'updated_at'], 'id', ['personnel_code', 'data_json', 'updated_at'], rows);
+  } else if (table === 'jobGroups') {
+    const rows = items.filter((jg) => jg?.id).map((jg) => [String(jg.id), JSON.stringify(jg)]);
+    stmts = buildMultiRowUpsertStmts(db, 'job_groups', ['id', 'data_json'], 'id', ['data_json'], rows);
+  } else if (table === 'jobClassifications') {
+    const rows = items.filter((jc) => jc?.id).map((jc) => [String(jc.id), toAsciiDigits(jc.personnelCode || '').trim(), JSON.stringify(jc)]);
+    stmts = buildMultiRowUpsertStmts(db, 'job_classifications', ['id', 'personnel_code', 'data_json'], 'id', ['personnel_code', 'data_json'], rows);
+  } else if (table === 'karaneh') {
+    const rows = items.filter((k) => k?.id).map((k) => [String(k.id), String(k.period || ''), toAsciiDigits(k.personnelCode || '').trim(), JSON.stringify(k)]);
+    stmts = buildMultiRowUpsertStmts(db, 'karaneh', ['id', 'period', 'personnel_code', 'data_json'], 'id', ['period', 'personnel_code', 'data_json'], rows);
+  } else if (table === 'commitments') {
+    const rows = items.filter((c) => c?.id).map((c) => [String(c.id), toAsciiDigits(c.personnelCode || '').trim(), JSON.stringify(c)]);
+    stmts = buildMultiRowUpsertStmts(db, 'commitments', ['id', 'personnel_code', 'data_json'], 'id', ['personnel_code', 'data_json'], rows);
+  } else if (table === 'payroll') {
+    const rows = items.filter((pr) => pr?.id).map((pr) => [String(pr.id), String(pr.period || ''), toAsciiDigits(pr.personnelCode || '').trim(), JSON.stringify(pr)]);
+    stmts = buildMultiRowUpsertStmts(db, 'payroll', ['id', 'period', 'personnel_code', 'data_json'], 'id', ['period', 'personnel_code', 'data_json'], rows);
+  } else if (table === 'miningVolumes') {
+    const rows = items.filter((mv) => mv?.id).map((mv) => [String(mv.id), String(mv.period || ''), String(mv.unitName || ''), JSON.stringify(mv)]);
+    stmts = buildMultiRowUpsertStmts(db, 'mining_volumes', ['id', 'period', 'unit_name', 'data_json'], 'id', ['period', 'unit_name', 'data_json'], rows);
+  } else if (table === 'miningMachinery') {
+    const rows = items.filter((mm) => mm?.id).map((mm) => [String(mm.id), toAsciiDigits(mm.machineCode || '').trim(), JSON.stringify(mm)]);
+    stmts = buildMultiRowUpsertStmts(db, 'mining_machinery', ['id', 'machine_code', 'data_json'], 'id', ['machine_code', 'data_json'], rows);
+  } else if (table === 'unitReports') {
+    const rows = items.filter((ur) => ur?.id).map((ur) => [String(ur.id), String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur)]);
+    stmts = buildMultiRowUpsertStmts(db, 'unit_reports', ['id', 'period', 'unit_name', 'data_json'], 'id', ['period', 'unit_name', 'data_json'], rows);
+  }
+  if (stmts.length > 0) {
+    await batchExecuteChunked(db, stmts);
+  }
+  return items.length;
+}
+
+async function clearAllSnapshotTablesInD1(db: D1Database): Promise<void> {
   const clearTables = [
     'users',
     'personnel',
@@ -1135,104 +1257,20 @@ async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> 
     'unit_reports',
   ];
   await db.batch(clearTables.map((t) => db.prepare(`DELETE FROM ${t}`)));
+}
 
-  const stmts: D1PreparedStatement[] = [];
-
-  for (const u of data.users || []) {
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          u.id,
-          u.username,
-          u.password || '',
-          u.fullName || '',
-          u.role || 'کاربر سفارشی',
-          u.department || '',
-          u.email || '',
-          u.uid || '',
-          JSON.stringify(u.permissions || {}),
-          u.isActive === false ? 0 : 1,
-          u.createdAt || '',
-          u.lastLogin || ''
-        )
-    );
-  }
-
-  for (const p of data.personnel || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)')
-        .bind(p.id, String(p.personnelCode || ''), JSON.stringify(p), p.updatedAt || '')
-    );
-  }
-
-  for (const jg of data.jobGroups || []) {
-    stmts.push(
-      db.prepare('INSERT INTO job_groups (id, data_json) VALUES (?, ?)').bind(jg.id, JSON.stringify(jg))
-    );
-  }
-
-  for (const jc of data.jobClassifications || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
-        .bind(jc.id, String(jc.personnelCode || ''), JSON.stringify(jc))
-    );
-  }
-
-  for (const k of data.karaneh || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
-        .bind(k.id, String(k.period || ''), String(k.personnelCode || ''), JSON.stringify(k))
-    );
-  }
-
-  for (const c of data.commitments || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)')
-        .bind(c.id, String(c.personnelCode || ''), JSON.stringify(c))
-    );
-  }
-
-  for (const pr of data.payroll || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
-        .bind(pr.id, String(pr.period || ''), String(pr.personnelCode || ''), JSON.stringify(pr))
-    );
-  }
-
-  for (const mv of data.miningVolumes || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
-        .bind(mv.id, String(mv.period || ''), String(mv.unitName || ''), JSON.stringify(mv))
-    );
-  }
-
-  for (const mm of data.miningMachinery || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)')
-        .bind(mm.id, String(mm.machineCode || ''), JSON.stringify(mm))
-    );
-  }
-
-  for (const ur of data.unitReports || []) {
-    stmts.push(
-      db
-        .prepare('INSERT INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
-        .bind(ur.id, String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur))
-    );
-  }
-
-  await batchExecuteChunked(db, stmts);
+async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> {
+  await clearAllSnapshotTablesInD1(db);
+  await upsertChunkIntoD1(db, 'users', data.users || []);
+  await upsertChunkIntoD1(db, 'personnel', data.personnel || []);
+  await upsertChunkIntoD1(db, 'jobGroups', data.jobGroups || []);
+  await upsertChunkIntoD1(db, 'jobClassifications', data.jobClassifications || []);
+  await upsertChunkIntoD1(db, 'karaneh', data.karaneh || []);
+  await upsertChunkIntoD1(db, 'commitments', data.commitments || []);
+  await upsertChunkIntoD1(db, 'payroll', data.payroll || []);
+  await upsertChunkIntoD1(db, 'miningVolumes', data.miningVolumes || []);
+  await upsertChunkIntoD1(db, 'miningMachinery', data.miningMachinery || []);
+  await upsertChunkIntoD1(db, 'unitReports', data.unitReports || []);
   await touchLastSaved(db);
 }
 
@@ -1673,11 +1711,12 @@ export default {
           if (!username) continue;
           const existing = await getUserByUsername(env.DB, username);
           const fullName = String(getVal(row, 'fullName', 'نام و نام خانوادگی', 'نام کامل', 'نام') || username).trim();
-          const role = String(getVal(row, 'role', 'نقش', 'الگوی دسترسی', 'سمت') || existing?.role || 'viewer').trim();
-          const department = String(getVal(row, 'department', 'واحد سازمانی', 'واحد', 'بخش') || existing?.department || '').trim();
+          const role = String(getVal(row, 'role', 'نقش سازمانی', 'نقش', 'سمت') || existing?.role || 'viewer').trim();
+          const presetLabel = String(getVal(row, 'preset', 'الگوی دسترسی') || '').trim();
+          const department = String(getVal(row, 'department', 'واحد اداری', 'واحد سازمانی', 'واحد', 'بخش') || existing?.department || '').trim();
           const rawPass = String(getVal(row, 'password', 'رمز عبور', 'کلمه عبور') || '').trim();
-          const rawActive = String(getVal(row, 'isActive', 'وضعیت', 'فعال') || '').trim();
-          const isActive = rawActive ? !['غیرفعال', 'false', '0', 'خیر'].includes(rawActive) : existing ? existing.isActive : true;
+          const rawActive = String(getVal(row, 'isActive', 'وضعیت حساب', 'وضعیت', 'فعال') || '').trim();
+          const isActive = rawActive ? !['غیرفعال', 'مسدود', 'false', '0', 'خیر'].includes(rawActive) : existing ? existing.isActive : true;
           const isTargetSuper = role === 'super_admin' || existing?.username === 'javadabadiyan';
           if (isTargetSuper && !isSuperAdminUser(authUser)) continue;
 
@@ -1689,7 +1728,12 @@ export default {
               department,
               isActive: existing.username === 'javadabadiyan' ? true : isActive,
               password: rawPass ? await hashPassword(rawPass) : existing.password,
-              permissions: existing.username === 'javadabadiyan' ? getFullAdminPermissions() : existing.permissions,
+              permissions:
+                existing.username === 'javadabadiyan'
+                  ? getFullAdminPermissions()
+                  : presetLabel
+                  ? buildPresetPermissions(presetLabel)
+                  : normalizePermissions(existing.permissions),
             };
             await upsertUser(env.DB, nextUser);
             updated++;
@@ -1703,7 +1747,12 @@ export default {
               department,
               email: '',
               uid: '',
-              permissions: role === 'super_admin' ? getFullAdminPermissions() : buildPresetPermissions(role),
+              permissions:
+                role === 'super_admin'
+                  ? getFullAdminPermissions()
+                  : presetLabel
+                  ? buildPresetPermissions(presetLabel)
+                  : buildPresetPermissions(role),
               isActive,
               createdAt: faDate(),
               lastLogin: '',
@@ -2461,9 +2510,6 @@ export default {
         const canSubmit =
           isSuperAdminUser(authUser) ||
           checkPermission(authUser, 'karaneh', 'submit') ||
-          checkPermission(authUser, 'karaneh', 'create') ||
-          checkPermission(authUser, 'karaneh', 'edit') ||
-          checkPermission(authUser, 'karaneh', 'importExcel') ||
           checkPermission(authUser, 'finalKaraneh', 'edit');
         if (!canSubmit) return forbidden(request, env, 'شما مجوز ارسال کارانه به کارانه نهایی را ندارید.');
         const body: any = await request.json().catch(() => ({}));
@@ -3725,70 +3771,101 @@ export default {
         if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'system', 'backupDatabase')) {
           return forbidden(request, env, 'شما مجوز دریافت اسنپ‌شات همگام‌سازی را ندارید.');
         }
-        const users = (await getAllUsers(env.DB)).map(sanitizeUser);
-        return jsonRes(request, env, {
-          success: true,
-          data: {
-            users,
-            personnel: await getJsonRows(env.DB, 'personnel'),
-            karaneh: await getJsonRows(env.DB, 'karaneh'),
-            jobGroups: await getJsonRows(env.DB, 'job_groups'),
-            jobClassifications: await getJsonRows(env.DB, 'job_classifications'),
-            commitments: await getJsonRows(env.DB, 'commitments'),
-            payroll: await getJsonRows(env.DB, 'payroll'),
-            miningVolumes: await getJsonRows(env.DB, 'mining_volumes'),
-            miningMachinery: await getJsonRows(env.DB, 'mining_machinery'),
-            unitReports: await getJsonRows(env.DB, 'unit_reports'),
-          },
-        });
+        const [
+          users,
+          personnelRaw,
+          karanehRaw,
+          jobGroupsRaw,
+          jobClassificationsRaw,
+          commitmentsRaw,
+          payrollRaw,
+          miningVolumesRaw,
+          miningMachineryRaw,
+          unitReportsRaw,
+        ] = await Promise.all([
+          getAllUsers(env.DB).then((rows) => rows.map(sanitizeUser)),
+          getRawJsonArrayString(env.DB, 'personnel'),
+          getRawJsonArrayString(env.DB, 'karaneh'),
+          getRawJsonArrayString(env.DB, 'job_groups'),
+          getRawJsonArrayString(env.DB, 'job_classifications'),
+          getRawJsonArrayString(env.DB, 'commitments'),
+          getRawJsonArrayString(env.DB, 'payroll'),
+          getRawJsonArrayString(env.DB, 'mining_volumes'),
+          getRawJsonArrayString(env.DB, 'mining_machinery'),
+          getRawJsonArrayString(env.DB, 'unit_reports'),
+        ]);
+        const rawBody = `{"success":true,"data":{"users":${JSON.stringify(users)},"personnel":${personnelRaw},"karaneh":${karanehRaw},"jobGroups":${jobGroupsRaw},"jobClassifications":${jobClassificationsRaw},"commitments":${commitmentsRaw},"payroll":${payrollRaw},"miningVolumes":${miningVolumesRaw},"miningMachinery":${miningMachineryRaw},"unitReports":${unitReportsRaw}}}`;
+        return rawJsonResponse(request, env, rawBody);
       }
 
       if (path === '/database/backup' && method === 'GET') {
         if (!checkPermission(authUser, 'system', 'backupDatabase')) return forbidden(request, env);
-        const users = await getAllUsers(env.DB);
-        const personnel = await getJsonRows(env.DB, 'personnel');
-        const karaneh = await getJsonRows(env.DB, 'karaneh');
-        const jobGroups = await getJsonRows(env.DB, 'job_groups');
-        const jobClassifications = await getJsonRows(env.DB, 'job_classifications');
-        const commitments = await getJsonRows(env.DB, 'commitments');
-        const payroll = await getJsonRows(env.DB, 'payroll');
-        const miningVolumes = await getJsonRows(env.DB, 'mining_volumes');
-        const miningMachinery = await getJsonRows(env.DB, 'mining_machinery');
-        const unitReports = await getJsonRows(env.DB, 'unit_reports');
-        const totalRelatives = personnel.reduce((s: number, p: any) => s + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
-
-        const payload = {
+        const [
           users,
-          personnel,
-          karaneh,
-          jobGroups,
-          jobClassifications,
-          commitments,
-          payroll,
-          miningVolumes,
-          miningMachinery,
-          unitReports,
-          _backupMetadata: {
-            version: '5.0-negin-parto-nasr-units-hub',
-            exportedAt: new Date().toISOString(),
-            engine: 'cloudflare-d1',
-            counts: {
-              users: users.length,
-              personnel: personnel.length,
-              relatives: totalRelatives,
-              karaneh: karaneh.length,
-              payroll: payroll.length,
-              jobGroups: jobGroups.length,
-              jobClassifications: jobClassifications.length,
-              commitments: commitments.length,
-              miningVolumes: miningVolumes.length,
-              miningMachinery: miningMachinery.length,
-              unitReports: unitReports.length,
-            },
+          personnelRaw,
+          karanehRaw,
+          jobGroupsRaw,
+          jobClassificationsRaw,
+          commitmentsRaw,
+          payrollRaw,
+          miningVolumesRaw,
+          miningMachineryRaw,
+          unitReportsRaw,
+          countsAgg,
+        ] = await Promise.all([
+          getAllUsers(env.DB),
+          getRawJsonArrayString(env.DB, 'personnel'),
+          getRawJsonArrayString(env.DB, 'karaneh'),
+          getRawJsonArrayString(env.DB, 'job_groups'),
+          getRawJsonArrayString(env.DB, 'job_classifications'),
+          getRawJsonArrayString(env.DB, 'commitments'),
+          getRawJsonArrayString(env.DB, 'payroll'),
+          getRawJsonArrayString(env.DB, 'mining_volumes'),
+          getRawJsonArrayString(env.DB, 'mining_machinery'),
+          getRawJsonArrayString(env.DB, 'unit_reports'),
+          env.DB.prepare(
+            `SELECT
+               (SELECT COUNT(*) FROM personnel) as personnelCount,
+               (SELECT COALESCE(SUM(COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0)), 0) FROM personnel) as relativesCount,
+               (SELECT COUNT(*) FROM karaneh) as karanehCount,
+               (SELECT COUNT(*) FROM payroll) as payrollCount,
+               (SELECT COUNT(*) FROM job_groups) as jobGroupsCount,
+               (SELECT COUNT(*) FROM job_classifications) as jobClassificationsCount,
+               (SELECT COUNT(*) FROM commitments) as commitmentsCount,
+               (SELECT COUNT(*) FROM mining_volumes) as miningVolumesCount,
+               (SELECT COUNT(*) FROM mining_machinery) as miningMachineryCount,
+               (SELECT COUNT(*) FROM unit_reports) as unitReportsCount`
+          ).first<any>(),
+        ]);
+
+        const meta = {
+          version: '5.0-negin-parto-nasr-units-hub',
+          exportedAt: new Date().toISOString(),
+          engine: 'cloudflare-d1',
+          counts: {
+            users: users.length,
+            personnel: Number(countsAgg?.personnelCount || 0),
+            relatives: Number(countsAgg?.relativesCount || 0),
+            karaneh: Number(countsAgg?.karanehCount || 0),
+            payroll: Number(countsAgg?.payrollCount || 0),
+            jobGroups: Number(countsAgg?.jobGroupsCount || 0),
+            jobClassifications: Number(countsAgg?.jobClassificationsCount || 0),
+            commitments: Number(countsAgg?.commitmentsCount || 0),
+            miningVolumes: Number(countsAgg?.miningVolumesCount || 0),
+            miningMachinery: Number(countsAgg?.miningMachineryCount || 0),
+            unitReports: Number(countsAgg?.unitReportsCount || 0),
           },
         };
-        return jsonRes(request, env, payload, 200, {
-          'Content-Disposition': `attachment; filename=hr_database_backup_${Date.now()}.json`,
+
+        const rawPayload = `{"users":${JSON.stringify(users)},"personnel":${personnelRaw},"karaneh":${karanehRaw},"jobGroups":${jobGroupsRaw},"jobClassifications":${jobClassificationsRaw},"commitments":${commitmentsRaw},"payroll":${payrollRaw},"miningVolumes":${miningVolumesRaw},"miningMachinery":${miningMachineryRaw},"unitReports":${unitReportsRaw},"_backupMetadata":${JSON.stringify(meta)}}`;
+        return new Response(rawPayload, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename=hr_database_backup_${Date.now()}.json`,
+            ...getCorsHeaders(request, env),
+          },
         });
       }
 
@@ -3798,21 +3875,31 @@ export default {
         if (!incoming || !Array.isArray(incoming.users) || !Array.isArray(incoming.personnel)) {
           return jsonRes(request, env, { success: false, message: 'ساختار فایل پشتیبان معتبر نیست.' }, 400);
         }
-        const restoredUsers = [];
-        for (const u of incoming.users) {
-          const copy = { ...u };
-          if (copy.password && !String(copy.password).startsWith('pbkdf2$') && !String(copy.password).startsWith('sha256$')) {
-            if (String(copy.password).startsWith('scrypt$')) {
-              // Preserve default password fallback if migrating from Node scrypt$
-              copy.password = copy.username === 'javadabadiyan' ? await hashPassword('javad_5221157') : await hashPassword('12345678');
-            } else {
-              copy.password = await hashPassword(String(copy.password));
-            }
-          }
-          restoredUsers.push(copy);
-        }
-        await replaceAllSnapshotInD1(env.DB, { ...incoming, users: restoredUsers });
+        await replaceAllSnapshotInD1(env.DB, incoming);
         return jsonRes(request, env, { success: true, message: 'پایگاه داده Cloudflare D1 با موفقیت بازیابی گردید.' });
+      }
+
+      if (path === '/database/restore-chunk' && method === 'POST') {
+        if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
+        const body: any = await request.json().catch(() => ({}));
+        if (body.clearAll === true) {
+          await clearAllSnapshotTablesInD1(env.DB);
+        }
+        const table = String(body.table || '').trim();
+        const items = Array.isArray(body.items) ? body.items : [];
+        let processed = 0;
+        if (table && items.length > 0) {
+          if (table === 'users' && body.mode === 'merge') {
+            const safeUsers = items.filter((u: any) => u && u.id && u.username !== 'javadabadiyan');
+            processed = await upsertChunkIntoD1(env.DB, 'users', safeUsers);
+          } else {
+            processed = await upsertChunkIntoD1(env.DB, table, items);
+          }
+        }
+        if (body.finalize === true) {
+          await touchLastSaved(env.DB);
+        }
+        return jsonRes(request, env, { success: true, processed, message: 'بخش پشتیبان با موفقیت ثبت شد.' });
       }
 
       if (path === '/database/reset-demo' && method === 'POST') {
@@ -3828,73 +3915,19 @@ export default {
         if (!incoming || typeof incoming !== 'object') {
           return jsonRes(request, env, { success: false, message: 'ساختار داده‌های ارسالی نامعتبر است.' }, 400);
         }
-        const stmts: D1PreparedStatement[] = [];
-        for (const p of incoming.personnel || []) {
-          if (p?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)').bind(p.id, String(p.personnelCode || ''), JSON.stringify(p), p.updatedAt || ''));
-        }
-        for (const k of incoming.karaneh || []) {
-          if (k?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)').bind(k.id, String(k.period || ''), String(k.personnelCode || ''), JSON.stringify(k)));
-        }
-        for (const jg of incoming.jobGroups || []) {
-          if (jg?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO job_groups (id, data_json) VALUES (?, ?)').bind(jg.id, JSON.stringify(jg)));
-        }
-        for (const jc of incoming.jobClassifications || []) {
-          if (jc?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(jc.id, String(jc.personnelCode || ''), JSON.stringify(jc)));
-        }
-        for (const c of incoming.commitments || []) {
-          if (c?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(c.id, String(c.personnelCode || ''), JSON.stringify(c)));
-        }
-        for (const pr of incoming.payroll || []) {
-          if (pr?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)').bind(pr.id, String(pr.period || ''), String(pr.personnelCode || ''), JSON.stringify(pr)));
-        }
-        for (const mv of incoming.miningVolumes || []) {
-          if (mv?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(mv.id, String(mv.period || ''), String(mv.unitName || ''), JSON.stringify(mv)));
-        }
-        for (const mm of incoming.miningMachinery || []) {
-          if (mm?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)').bind(mm.id, String(mm.machineCode || ''), JSON.stringify(mm)));
-        }
-        for (const ur of incoming.unitReports || []) {
-          if (ur?.id) stmts.push(env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(ur.id, String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur)));
-        }
+        if (Array.isArray(incoming.personnel)) await upsertChunkIntoD1(env.DB, 'personnel', incoming.personnel);
+        if (Array.isArray(incoming.karaneh)) await upsertChunkIntoD1(env.DB, 'karaneh', incoming.karaneh);
+        if (Array.isArray(incoming.jobGroups)) await upsertChunkIntoD1(env.DB, 'jobGroups', incoming.jobGroups);
+        if (Array.isArray(incoming.jobClassifications)) await upsertChunkIntoD1(env.DB, 'jobClassifications', incoming.jobClassifications);
+        if (Array.isArray(incoming.commitments)) await upsertChunkIntoD1(env.DB, 'commitments', incoming.commitments);
+        if (Array.isArray(incoming.payroll)) await upsertChunkIntoD1(env.DB, 'payroll', incoming.payroll);
+        if (Array.isArray(incoming.miningVolumes)) await upsertChunkIntoD1(env.DB, 'miningVolumes', incoming.miningVolumes);
+        if (Array.isArray(incoming.miningMachinery)) await upsertChunkIntoD1(env.DB, 'miningMachinery', incoming.miningMachinery);
+        if (Array.isArray(incoming.unitReports)) await upsertChunkIntoD1(env.DB, 'unitReports', incoming.unitReports);
         if (Array.isArray(incoming.users)) {
-          const existingUsers = await getAllUsers(env.DB);
-          const existingMap = new Map(existingUsers.map((u: any) => [String(u.id), u]));
-          for (const u of incoming.users) {
-            if (!u || !u.id || u.username === 'javadabadiyan') continue;
-            const prev = existingMap.get(String(u.id));
-            const mergedUser = prev
-              ? { ...prev, ...u, password: prev.password }
-              : {
-                  ...u,
-                  password:
-                    u.password && (String(u.password).startsWith('pbkdf2$') || String(u.password).startsWith('sha256$'))
-                      ? u.password
-                      : await hashPassword('12345678'),
-                };
-            stmts.push(
-              env.DB
-                .prepare(
-                  `INSERT OR REPLACE INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-                )
-                .bind(
-                  mergedUser.id,
-                  mergedUser.username,
-                  mergedUser.password || '',
-                  mergedUser.fullName || '',
-                  mergedUser.role || 'کاربر سفارشی',
-                  mergedUser.department || '',
-                  mergedUser.email || '',
-                  mergedUser.uid || '',
-                  JSON.stringify(mergedUser.permissions || {}),
-                  mergedUser.isActive === false ? 0 : 1,
-                  mergedUser.createdAt || '',
-                  mergedUser.lastLogin || ''
-                )
-            );
-          }
+          const safeUsers = incoming.users.filter((u: any) => u && u.id && u.username !== 'javadabadiyan');
+          await upsertChunkIntoD1(env.DB, 'users', safeUsers);
         }
-        await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'اطلاعات با موفقیت در پایگاه داده Cloudflare D1 ادغام شد.' });
       }

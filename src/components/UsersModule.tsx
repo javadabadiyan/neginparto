@@ -27,7 +27,8 @@ import {
   Layers,
   Send,
   FileSpreadsheet,
-  Building2
+  Building2,
+  RefreshCw
 } from 'lucide-react';
 import {
   User,
@@ -65,6 +66,8 @@ interface UsersModuleProps {
   onDeleteAllUsers?: () => Promise<boolean>;
   onBatchImportUsers: (items: any[]) => Promise<boolean>;
   granularPermissions?: GranularUsersPermissions;
+  onRefreshData?: () => Promise<void> | void;
+  isRefreshing?: boolean;
 }
 
 const ROLE_SUGGESTIONS = [
@@ -101,7 +104,9 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   onBatchDeleteUsers,
   onDeleteAllUsers,
   onBatchImportUsers,
-  granularPermissions
+  granularPermissions,
+  onRefreshData,
+  isRefreshing = false
 }) => {
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
   const canCreateUser = isSuperAdmin || Boolean(granularPermissions?.create);
@@ -532,6 +537,17 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={() => onRefreshData()}
+              disabled={Boolean(isRefreshing)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>بروزرسانی اطلاعات</span>
+            </button>
+          )}
           {canExportUsers && (
             <button
               onClick={() => exportUsersToExcel(users)}
