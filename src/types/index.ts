@@ -20,6 +20,16 @@ export interface GranularKaranehPermissions {
   deleteAll?: boolean;
   importExcel: boolean;
   exportExcel: boolean;
+  submit?: boolean;
+  allowedUnits?: string[];
+}
+
+export interface GranularFinalKaranehPermissions {
+  view: boolean;
+  edit: boolean;
+  delete: boolean;
+  deleteAll?: boolean;
+  exportExcel: boolean;
 }
 
 export interface GranularJobGroupsPermissions {
@@ -103,6 +113,7 @@ export interface UserPermissions {
   smartDashboard?: GranularDashboardReportPermissions;
   ceoDashboard?: GranularDashboardReportPermissions;
   unitOperations?: GranularUnitOperationsPermissions;
+  finalKaraneh?: GranularFinalKaranehPermissions;
 
   // Legacy fallback flags
   canManagePersonnel?: boolean;
@@ -235,10 +246,15 @@ export interface KaranehRecord {
   deductions: number;
   finalKaraneh: number;
   notes?: string;
+  status?: 'draft' | 'submitted';
+  submittedAt?: string;
+  submittedBy?: string;
+  submittedByName?: string;
   updatedAt: string;
 }
 
 export interface KaranehComparisonRow {
+  id?: string;
   personnelCode: string;
   fullName: string;
   department: string;
@@ -249,6 +265,9 @@ export interface KaranehComparisonRow {
   diffPercent: number;
   trend: 'increase' | 'decrease' | 'unchanged' | 'new';
   notes?: string;
+  status?: 'draft' | 'submitted';
+  submittedAt?: string;
+  submittedByName?: string;
 }
 
 export interface JobGroup {

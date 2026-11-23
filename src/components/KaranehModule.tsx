@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   TrendingUp,
   Download,
@@ -16,9 +16,13 @@ import {
   Building,
   RotateCcw,
   ArrowLeftRight,
-  CheckSquare
+  CheckSquare,
+  Send,
+  Lock,
+  CheckCircle2
 } from 'lucide-react';
-import { KaranehRecord, Personnel, KaranehComparisonRow, GranularKaranehPermissions } from '../types';
+import { KaranehRecord, Personnel, KaranehComparisonRow, GranularKaranehPermissions, UserPermissions } from '../types';
+import { normalizePermissions, canUserAccessKaranehUnit } from '../utils/permissions';
 import {
   formatRial,
   formatPercent,
@@ -44,12 +48,15 @@ interface KaranehModuleProps {
   onSaveKaraneh: (record: Partial<KaranehRecord>) => Promise<boolean>;
   onDeleteKaraneh: (id: string) => Promise<boolean>;
   onBatchDeleteKaraneh: (ids: string[]) => Promise<boolean>;
-  onDeleteAllKaraneh?: (period?: string) => Promise<boolean>;
+  onDeleteAllKaraneh?: (period?: string, scope?: 'all' | 'submitted') => Promise<boolean>;
   onBatchImportKaraneh: (period: string, items: any[]) => Promise<boolean>;
+  onSubmitKaraneh?: (period: string, department?: string) => Promise<boolean>;
   canManage?: boolean;
   canExport?: boolean;
   canImport?: boolean;
   granularPermissions?: GranularKaranehPermissions;
+  userPermissions?: UserPermissions;
+  isAdmin?: boolean;
 }
 
 export const KaranehModule: React.FC<KaranehModuleProps> = ({
@@ -60,10 +67,13 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   onBatchDeleteKaraneh,
   onDeleteAllKaraneh,
   onBatchImportKaraneh,
+  onSubmitKaraneh,
   canManage = false,
   canExport = false,
   canImport = false,
-  granularPermissions
+  granularPermissions,
+  userPermissions,
+  isAdmin = false
 }) => {
   const canCreate = granularPermissions ? Boolean(granularPermissions.create) : canManage;
   const canEdit = granularPermissions ? Boolean(granularPermissions.edit) : canManage;
@@ -71,6 +81,41 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const allowDeleteAll = Boolean(granularPermissions?.deleteAll);
   const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : canExport;
   const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canImport;
+  const canSubmit = isAdmin || Boolean(granularPermissions?.submit) || canCreate || canEdit;
+
+  const effectivePerms = useMemo(() => normalizePermissions(userPermissions), [userPermissions]);
+  const allowedUnits = useMemo(() => {
+    const fromGranular = granularPermissions?.allowedUnits;
+    const raw = Array.isArray(fromGranular) ? fromGranular : effectivePerms.karaneh.allowedUnits;
+    return (raw || []).map((u) => String(u || '').trim()).filter(Boolean);
+  }, [granularPermissions?.allowedUnits, effectivePerms]);
+  const hasFullAccess = isAdmin || Boolean(effectivePerms.finalKaraneh?.view) || allowedUnits.length === 0;
+
+  const unitPermsCheck = useMemo<UserPermissions>(
+    () => ({
+      ...effectivePerms,
+      karaneh: {
+        ...effectivePerms.karaneh,
+        view: true,
+        allowedUnits,
+      },
+    }),
+    [effectivePerms, allowedUnits]
+  );
+
+  const scopedKaranehList = useMemo(() => {
+    if (hasFullAccess) return karanehList;
+    return karanehList.filter((k) =>
+      canUserAccessKaranehUnit(unitPermsCheck, false, k.department || '')
+    );
+  }, [karanehList, hasFullAccess, unitPermsCheck]);
+
+  const scopedPersonnelList = useMemo(() => {
+    if (hasFullAccess) return personnelList;
+    return personnelList.filter((p) =>
+      canUserAccessKaranehUnit(unitPermsCheck, false, p.department || '')
+    );
+  }, [personnelList, hasFullAccess, unitPermsCheck]);
 
   // Dedicated Year & Month selection for Current Period (ماه جدید)
   const [currentYear, setCurrentYear] = useState<string>('1403');
@@ -91,12 +136,15 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importError, setImportError] = useState('');
   const [editingRecord, setEditingRecord] = useState<KaranehRecord | null>(null);
   const [formError, setFormError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<KaranehRecord | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [confirmBatchDeleteOpen, setConfirmBatchDeleteOpen] = useState(false);
   const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [deleteAllScope, setDeleteAllScope] = useState<'period' | 'all'>('period');
   const [batchDeleting, setBatchDeleting] = useState(false);
 
@@ -135,14 +183,14 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     setPrevMonthIndex(parsed.monthIndex);
   };
 
-  // Calculate comparison rows between currentPeriod and previousPeriod
-  const currentRecords = karanehList.filter(k => k.period === currentPeriod);
+  // Calculate comparison rows between currentPeriod and previousPeriod (unit-isolated)
+  const currentRecords = scopedKaranehList.filter(k => k.period === currentPeriod);
 
   useEffect(() => {
-    const validIds = new Set(karanehList.filter(k => k.period === currentPeriod).map(k => k.id));
+    const validIds = new Set(scopedKaranehList.filter(k => k.period === currentPeriod).map(k => k.id));
     setSelectedIds(prev => prev.filter(id => validIds.has(id)));
-  }, [karanehList, currentPeriod]);
-  const previousRecords = karanehList.filter(k => k.period === previousPeriod);
+  }, [scopedKaranehList, currentPeriod]);
+  const previousRecords = scopedKaranehList.filter(k => k.period === previousPeriod);
 
   const prevMap = new Map<string, KaranehRecord>();
   previousRecords.forEach(p => {
@@ -174,6 +222,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     }
 
     return {
+      id: curr.id,
       personnelCode: curr.personnelCode,
       fullName: curr.fullName,
       position: curr.position || '',
@@ -183,7 +232,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       diffAmount,
       diffPercent,
       trend,
-      notes: curr.notes || ''
+      notes: curr.notes || '',
+      status: curr.status || 'draft',
+      submittedAt: curr.submittedAt,
+      submittedByName: curr.submittedByName
     };
   });
 
@@ -221,14 +273,14 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     setFormYear(currentYear);
     setFormMonthIndex(currentMonthIndex);
 
-    const firstP = personnelList[0];
+    const firstP = scopedPersonnelList[0];
     const prevBonus = firstP ? previousRecords.find(p => p.personnelCode === firstP.personnelCode) : null;
 
     setFormData({
       personnelCode: firstP ? firstP.personnelCode : '',
       fullName: firstP ? firstP.fullName : '',
       position: firstP ? firstP.position : '',
-      department: firstP ? firstP.department : '',
+      department: firstP ? firstP.department : (allowedUnits[0] || ''),
       finalKaraneh: prevBonus ? prevBonus.finalKaraneh : 45000000,
       notes: ''
     });
@@ -250,7 +302,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       personnelCode: originalRecord.personnelCode,
       fullName: originalRecord.fullName,
       position: originalRecord.position || '',
-      department: originalRecord.department || '',
+      department: originalRecord.department || allowedUnits[0] || '',
       finalKaraneh: originalRecord.finalKaraneh || 0,
       notes: originalRecord.notes || ''
     });
@@ -259,7 +311,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
   // When personnel selected in manual form
   const handleSelectPersonnel = (code: string) => {
-    const found = personnelList.find(p => p.personnelCode === code);
+    const found = scopedPersonnelList.find(p => p.personnelCode === code);
     if (!found) return;
 
     const prevBonus = previousRecords.find(p => p.personnelCode === code);
@@ -269,7 +321,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       personnelCode: found.personnelCode,
       fullName: found.fullName,
       position: found.position,
-      department: found.department,
+      department: found.department || allowedUnits[0] || '',
       finalKaraneh: prevBonus ? prevBonus.finalKaraneh : (found.baseSalary ? Math.round(found.baseSalary * 0.25) : 45000000)
     }));
   };
@@ -283,6 +335,12 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       return;
     }
 
+    const resolvedDept = (formData.department || allowedUnits[0] || '').trim();
+    if (!hasFullAccess && !canUserAccessKaranehUnit(unitPermsCheck, false, resolvedDept)) {
+      setFormError(`شما تنها مجاز به ثبت و ویرایش کارانه برای واحد(های) ${allowedUnits.join('، ')} هستید.`);
+      return;
+    }
+
     const targetPeriod = buildPeriod(formYear, formMonthIndex);
 
     const payload: Partial<KaranehRecord> = {
@@ -290,7 +348,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       personnelCode: toEnglishDigits(formData.personnelCode).trim(),
       fullName: formData.fullName.trim(),
       position: formData.position.trim(),
-      department: formData.department.trim(),
+      department: resolvedDept,
       period: targetPeriod,
       finalKaraneh: Number(toEnglishDigits(formData.finalKaraneh)) || 0,
       baseKaraneh: Number(toEnglishDigits(formData.finalKaraneh)) || 0,
@@ -362,16 +420,64 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     }
   };
 
-  // Smart Excel import handler
+  // Smart Excel import handler (with strict unit validation)
   const handleSmartKaranehImport = async (mappedRows: Record<string, any>[]) => {
     if (mappedRows.length === 0) return;
-    const success = await onBatchImportKaraneh(importPeriod, mappedRows);
+    setImportError('');
+
+    let normalizedRows = mappedRows;
+    if (!hasFullAccess) {
+      const firstAllowed = allowedUnits[0] || '';
+      const badDepts = new Set<string>();
+      let emptyCount = 0;
+
+      normalizedRows = mappedRows.map((r) => {
+        const rawDept = String(
+          r.department || r['واحد'] || r['واحد اداری'] || r['واحد سازمانی'] || ''
+        ).trim();
+        const dept = rawDept || (allowedUnits.length === 1 ? firstAllowed : '');
+        if (!dept) {
+          emptyCount++;
+        } else if (!canUserAccessKaranehUnit(unitPermsCheck, false, dept)) {
+          badDepts.add(dept);
+        }
+        return { ...r, department: dept };
+      });
+
+      if (emptyCount > 0 || badDepts.size > 0) {
+        const badList = Array.from(badDepts).slice(0, 3).join('، ');
+        setImportError(
+          badDepts.size > 0
+            ? `امکان بارگذاری اکسل برای واحد(های) «${badList}» وجود ندارد. شما تنها مجاز به ثبت کارانه برای «${allowedUnits.join('، ')}» هستید.`
+            : `لطفاً ستون «واحد» را در فایل اکسل مطابق واحد مجاز (${allowedUnits.join('، ')}) مشخص کنید.`
+        );
+        return;
+      }
+    }
+
+    const success = await onBatchImportKaraneh(importPeriod, normalizedRows);
     if (success) {
       setIsImportOpen(false);
       setCurrentYear(importYear);
       setCurrentMonthIndex(importMonthIndex);
       setPrevYear(importPrevYear);
       setPrevMonthIndex(importPrevMonthIndex);
+    }
+  };
+
+  const handleConfirmSubmit = async () => {
+    if (!onSubmitKaraneh) return;
+    setSubmitting(true);
+    const targetDept =
+      !hasFullAccess && allowedUnits.length === 1
+        ? allowedUnits[0]
+        : filterDepartment !== 'all'
+        ? filterDepartment
+        : undefined;
+    const ok = await onSubmitKaraneh(currentPeriod, targetDept);
+    setSubmitting(false);
+    if (ok) {
+      setConfirmSubmitOpen(false);
     }
   };
 
@@ -417,6 +523,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
           {allowImport && (
             <button
               onClick={() => {
+                setImportError('');
                 setImportYear(currentYear);
                 setImportMonthIndex(currentMonthIndex);
                 setImportPrevYear(prevYear);
@@ -432,14 +539,14 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
           {/* Direct template download button */}
           <button
-            onClick={downloadKaranehTemplate}
+            onClick={() => downloadKaranehTemplate(allowedUnits[0] || '')}
             className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
           >
             <Download className="w-3.5 h-3.5" />
             <span>دانلود نمونه اکسل کارانه</span>
           </button>
 
-          {allowDeleteAll && onDeleteAllKaraneh && karanehList.length > 0 && (
+          {allowDeleteAll && onDeleteAllKaraneh && scopedKaranehList.length > 0 && (
             <button
               onClick={() => {
                 setDeleteAllScope(currentRecords.length > 0 ? 'period' : 'all');
@@ -461,8 +568,37 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               <span>ثبت دستی کارانه</span>
             </button>
           )}
+
+          {canSubmit && onSubmitKaraneh && currentRecords.length > 0 && (
+            <button
+              onClick={() => setConfirmSubmitOpen(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs"
+            >
+              <Send className="w-4 h-4" />
+              <span>تأیید و ارسال به کارانه نهایی</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Unit Isolation Banner */}
+      {!hasFullAccess && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950">
+          <div className="flex items-center gap-2 font-bold">
+            <Lock className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span>
+              ایزوله‌سازی واحد سازمانی فعال است — شما تنها کارانه و پرسنل واحد(های) مجاز خود را مشاهده و مدیریت می‌کنید:
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {allowedUnits.map((u) => (
+              <span key={u} className="px-2.5 py-0.5 bg-white border border-emerald-300 text-emerald-900 rounded-lg font-bold text-[11px]">
+                {u}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Period Selection Bar (انتخاب دقیق ماه و سال برای ماه جدید و ماه قبل) */}
       <div className="bg-slate-900 text-white p-4.5 rounded-2xl shadow-sm space-y-3">
@@ -706,6 +842,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 <th className="py-3 px-3 font-bold">تغییرات مبلغ (ریال)</th>
                 <th className="py-3 px-3 text-center font-bold">درصد تغییر</th>
                 <th className="py-3 px-3 text-center font-bold">وضعیت روند</th>
+                <th className="py-3 px-3 text-center font-bold">وضعیت ارسال</th>
                 <th className="py-3 px-4">توضیحات و علت تغییر</th>
                 <th className="py-3 px-3 text-center w-24">عملیات</th>
               </tr>
@@ -713,7 +850,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={canDelete ? 13 : 12} className="py-12 text-center text-slate-600">
+                  <td colSpan={canDelete ? 14 : 13} className="py-12 text-center text-slate-600">
                     رکوردی برای دوره {getPeriodLabel(currentPeriod)} با فیلترهای انتخابی یافت نشد.
                   </td>
                 </tr>
@@ -810,6 +947,23 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                          row.trend === 'decrease' ? 'کاهشی' :
                          row.trend === 'new' ? 'پرسنل جدید' : 'بدون تغییر'}
                       </span>
+                    </td>
+
+                    {/* Submission status badge */}
+                    <td className="py-3.5 px-3 text-center">
+                      {row.status === 'submitted' ? (
+                        <span
+                          title={row.submittedAt ? `ارسال‌شده در ${row.submittedAt}` : 'ارسال‌شده به کارانه نهایی'}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap"
+                        >
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                          <span>ارسال‌شده</span>
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">
+                          پیش‌نویس واحد
+                        </span>
+                      )}
                     </td>
 
                     <td className="py-3.5 px-4 text-slate-600 max-w-xs truncate" title={row.notes}>
@@ -933,8 +1087,8 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                   onChange={(e) => handleSelectPersonnel(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900"
                 >
-                  <option value="">-- انتخاب از پرونده‌های پرسنلی موجود --</option>
-                  {personnelList.map(p => (
+                  <option value="">-- انتخاب از پرونده‌های پرسنلی مجاز --</option>
+                  {scopedPersonnelList.map(p => (
                     <option key={p.id} value={p.personnelCode}>
                       {toPersianDigits(p.personnelCode)} - {p.fullName} ({p.position} - {p.department})
                     </option>
@@ -996,14 +1150,30 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                     واحد اداری *
                   </label>
                   <div className="relative">
-                    <input
-                      type="text"
-                      required
-                      value={formData.department}
-                      onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                      placeholder="مثلاً: فناوری اطلاعات"
-                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900"
-                    />
+                    {!hasFullAccess && allowedUnits.length > 1 ? (
+                      <select
+                        required
+                        value={formData.department}
+                        onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                        className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-bold"
+                      >
+                        {allowedUnits.map((u) => (
+                          <option key={u} value={u}>{u}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        required
+                        readOnly={!hasFullAccess && allowedUnits.length === 1}
+                        value={formData.department}
+                        onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                        placeholder="مثلاً: فناوری اطلاعات"
+                        className={`w-full pl-3 pr-8 py-2 border border-slate-200 rounded-lg text-xs text-slate-900 ${
+                          !hasFullAccess && allowedUnits.length === 1 ? 'bg-slate-100 font-bold cursor-not-allowed' : 'bg-slate-50'
+                        }`}
+                      />
+                    )}
                     <Building className="w-4 h-4 text-slate-400 absolute right-2.5 top-2.5" />
                   </div>
                 </div>
@@ -1099,15 +1269,33 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       {/* Smart Excel Upload Modal */}
       {isImportOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-6 p-5 max-h-[92vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl overflow-hidden my-6 p-5 max-h-[92vh] overflow-y-auto space-y-3">
+            {importError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-bold flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{importError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setImportError('')}
+                  className="text-rose-600 hover:text-rose-900"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             <SmartExcelImportMapper
               moduleType="karaneh"
               title="ورود هوشمند فایل اکسل کارانه ماهانه"
               subtitle="تشخیص خودکار ستون‌های کد پرسنلی، نام، پست، واحد و مبلغ کارانه با انتخاب دوره هدف و مبنای مقایسه"
-              onDownloadTemplate={downloadKaranehTemplate}
+              onDownloadTemplate={() => downloadKaranehTemplate(allowedUnits[0] || '')}
               templateLabel="دانلود نمونه اکسل کارانه"
               onImport={handleSmartKaranehImport}
-              onCancel={() => setIsImportOpen(false)}
+              onCancel={() => {
+                setImportError('');
+                setIsImportOpen(false);
+              }}
               accentColor="emerald"
               confirmLabel={`تأیید و ثبت کارانه دوره ${getPeriodLabel(importPeriod)}`}
               extraOptions={
@@ -1258,7 +1446,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                   onChange={() => setDeleteAllScope('all')}
                 />
                 <span className="font-bold text-rose-800 persian-num">
-                  پاکسازی کل جدول کارانه در تمام ماه‌ها ({toPersianDigits(karanehList.length)} رکورد)
+                  پاکسازی کل جدول کارانه در تمام ماه‌ها ({toPersianDigits(scopedKaranehList.length)} رکورد)
                 </span>
               </label>
             </div>
@@ -1278,6 +1466,57 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold disabled:opacity-50"
               >
                 {batchDeleting ? 'در حال پاکسازی...' : 'تأیید و پاکسازی قطعی'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submit Unit Karaneh Confirmation Modal */}
+      {confirmSubmitOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-violet-200 w-full max-w-md p-6 space-y-4 text-xs">
+            <div className="flex items-center gap-2 text-violet-800">
+              <Send className="w-5 h-5 shrink-0" />
+              <h3 className="font-bold text-sm">تأیید و ارسال کارانه به کارانه نهایی ارسالی</h3>
+            </div>
+            <p className="text-slate-600 leading-relaxed persian-num">
+              پس از تأیید، اطلاعات کارانه دوره <b>{getPeriodLabel(currentPeriod)}</b> برای{' '}
+              <b>
+                {!hasFullAccess
+                  ? allowedUnits.join('، ')
+                  : filterDepartment !== 'all'
+                  ? `واحد ${filterDepartment}`
+                  : 'تمامی واحدهای نمایش‌داده‌شده'}
+              </b>{' '}
+              به صفحه تجمیعی <b>«کارانه نهایی ارسالی»</b> منتقل خواهد شد.
+            </p>
+            <div className="p-3 bg-violet-50/70 rounded-xl border border-violet-200 space-y-1.5 persian-num">
+              <div className="flex justify-between">
+                <span className="text-slate-600">تعداد پرسنل مشمول ارسال:</span>
+                <b className="text-slate-900">{toPersianDigits(currentRecords.length)} نفر</b>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">جمع کل کارانه دوره:</span>
+                <b className="text-violet-900">{formatRial(totalCurrent)}</b>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmSubmitOpen(false)}
+                disabled={submitting}
+                className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSubmit}
+                disabled={submitting}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-bold disabled:opacity-50"
+              >
+                {submitting ? 'در حال ارسال نهایی...' : 'بله، تأیید و ارسال نهایی'}
               </button>
             </div>
           </div>

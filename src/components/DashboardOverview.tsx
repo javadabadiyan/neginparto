@@ -15,7 +15,8 @@ import {
   ShieldCheck,
   BarChart3,
   Crown,
-  Layers
+  Layers,
+  Send
 } from 'lucide-react';
 import { Personnel, KaranehRecord, PersonnelCommitment, DatabaseStatus } from '../types';
 import { formatRial, formatPercent, toPersianDigits } from '../utils/persian';
@@ -35,6 +36,7 @@ interface DashboardOverviewProps {
   canCreatePersonnel?: boolean;
   canViewKaraneh?: boolean;
   canImportKaraneh?: boolean;
+  canViewFinalKaraneh?: boolean;
   canViewCommitments?: boolean;
   canViewJobGroups?: boolean;
   canViewPayroll?: boolean;
@@ -60,6 +62,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   canCreatePersonnel = false,
   canViewKaraneh = false,
   canImportKaraneh = false,
+  canViewFinalKaraneh = false,
   canViewCommitments = false,
   canViewJobGroups = false,
   canViewPayroll = false,
@@ -73,6 +76,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   const showStats = isAdmin || canViewDashboardStats;
   const allowPersonnel = isAdmin || canViewPersonnel;
   const allowKaraneh = isAdmin || canViewKaraneh;
+  const allowFinalKaraneh = isAdmin || canViewFinalKaraneh;
   const allowCommitments = isAdmin || canViewCommitments;
   const allowJobGroups = isAdmin || canViewJobGroups;
   const allowPayroll = isAdmin || canViewPayroll;
@@ -113,6 +117,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     { key: 'job-groups', allowed: allowJobGroups, title: 'گروه‌های شغلی و طبقه‌بندی', desc: 'جدول ۱۸ ستونی طبقه‌بندی مشاغل و رتبه‌ها', icon: Award, color: 'bg-purple-50 text-purple-700 border-purple-200' },
     { key: 'payroll', allowed: allowPayroll, title: 'حقوق و دستمزد (۲۲۶ ستونی)', desc: 'مقایسه ماهانه فیش‌ها و مزایای پرسنل', icon: TrendingUp, color: 'bg-teal-50 text-teal-700 border-teal-200' },
     { key: 'karaneh', allowed: allowKaraneh, title: 'سیستم جامع کارانه', desc: 'آنالیز مقایسه‌ای کارانه ماهانه پرسنل', icon: FileSpreadsheet, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    { key: 'final-karaneh', allowed: allowFinalKaraneh, title: 'کارانه نهایی ارسالی', desc: 'تجمیع، آنالیز درصد رشد و خروجی اکسل کارانه‌های ارسالی همه واحدها', icon: Send, color: 'bg-violet-50 text-violet-700 border-violet-200' },
     { key: 'users', allowed: allowUsers, title: 'مدیریت کاربران و مجوزها', desc: 'تعریف نقش‌ها و تنظیم سطوح دسترسی', icon: ShieldCheck, color: 'bg-rose-50 text-rose-700 border-rose-200' },
     { key: 'database', allowed: allowBackup || allowRestore, title: 'پشتیبان‌گیری و دیتابیس', desc: 'مدیریت نسخه‌های پشتیبان و بازیابی', icon: HardDrive, color: 'bg-slate-100 text-slate-800 border-slate-200' },
   ].filter(m => m.allowed);

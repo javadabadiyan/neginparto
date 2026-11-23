@@ -13,6 +13,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [noticeMessage, setNoticeMessage] = useState<string>(() => {
+    try {
+      const reason = sessionStorage.getItem('hr_logout_reason') || '';
+      if (reason) sessionStorage.removeItem('hr_logout_reason');
+      return reason;
+    } catch {
+      return '';
+    }
+  });
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,11 +33,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     try {
       setLoading(true);
       setErrorMessage('');
+      setNoticeMessage('');
       const res = await api.login(username, password);
 
       if (res.success && res.data?.user) {
+        const expiresAt = Number(res.data.expiresAt || Date.now() + 2 * 60 * 60 * 1000);
         localStorage.setItem('hr_auth_token', res.data.token);
         localStorage.setItem('hr_current_user', JSON.stringify(res.data.user));
+        localStorage.setItem('hr_auth_expires_at', String(expiresAt));
+        try {
+          sessionStorage.removeItem('hr_logout_reason');
+        } catch {
+          // ignore
+        }
         onLoginSuccess(res.data.user);
       } else {
         setErrorMessage(res.message || 'نام کاربری یا رمز عبور اشتباه است.');
@@ -56,6 +73,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
         {/* Form */}
         <div className="p-5 sm:p-8">
+          {noticeMessage && !errorMessage && (
+            <div className="mb-5 p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2.5 font-medium">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>{noticeMessage}</span>
+            </div>
+          )}
+
           {errorMessage && (
             <div className="mb-5 p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />

@@ -41,6 +41,8 @@ import {
   getDetectedEngine,
   getCloudflareApiUrl,
   setCloudflareApiUrl,
+  resetCloudflareApiUrl,
+  DEFAULT_CLOUDFLARE_API_URL,
   testCloudflareConnection
 } from '../services/api';
 import { FIREBASE_META } from '../firebase';
@@ -586,6 +588,17 @@ npm start
     }
   };
 
+  const handleResetCloudflareDefault = () => {
+    const unified = resetCloudflareApiUrl();
+    setCfUrl(unified);
+    setCfFeedback({
+      type: 'success',
+      text: `آدرس Cloudflare Worker در این مرورگر روی آدرس پیش‌فرض یکپارچه (${unified}) تنظیم و همسان‌سازی شد.`,
+    });
+    onRefreshStatus();
+    if (onDataReload) onDataReload();
+  };
+
   const handleClearCloudflare = () => {
     setCloudflareApiUrl('');
     const fallbackUrl = getCloudflareApiUrl();
@@ -648,6 +661,8 @@ npm start
       const saved = setCloudflareApiUrl(check.url);
       setCfUrl(saved);
       localStorage.setItem('hr_auth_token', cfToken);
+      const expiresAt = Number(loginJson.data.expiresAt) || Date.now() + 2 * 60 * 60 * 1000;
+      localStorage.setItem('hr_auth_expires_at', String(expiresAt));
       if (loginJson.data.user) {
         localStorage.setItem('hr_current_user', JSON.stringify(loginJson.data.user));
       }
@@ -829,9 +844,13 @@ npm start
               dir="ltr"
               value={cfUrl}
               onChange={(e) => setCfUrl(e.target.value)}
-              placeholder="https://neginparto-api.your-subdomain.workers.dev"
+              placeholder={DEFAULT_CLOUDFLARE_API_URL}
               className="w-full px-3.5 py-2.5 bg-slate-950/70 border border-slate-700 text-white rounded-xl outline-none focus:ring-2 focus:ring-amber-400"
             />
+            <p className="text-[10px] text-slate-300 mt-1">
+              آدرس پیش‌فرض یکپارچه سامانه در تمام مرورگرها:{' '}
+              <span dir="ltr" className="text-amber-300 font-bold select-all">{DEFAULT_CLOUDFLARE_API_URL}</span>
+            </p>
           </div>
 
           <div className="lg:col-span-6 flex flex-wrap items-center gap-2">
@@ -854,6 +873,18 @@ npm start
               <CheckCircle2 className="w-4 h-4" />
               <span>ذخیره و فعال‌سازی کلودفلر</span>
             </button>
+
+            {cfUrl.trim() !== DEFAULT_CLOUDFLARE_API_URL && (
+              <button
+                type="button"
+                disabled={cfTesting || cfMigrating}
+                onClick={handleResetCloudflareDefault}
+                className="flex items-center gap-1.5 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>بازگشت به آدرس پیش‌فرض</span>
+              </button>
+            )}
 
             {canRestore && (
               <button

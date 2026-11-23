@@ -21,6 +21,8 @@ export function getFullAdminPermissions(): UserPermissions {
       deleteAll: true,
       importExcel: true,
       exportExcel: true,
+      submit: true,
+      allowedUnits: [],
     },
     jobGroups: {
       view: true,
@@ -90,6 +92,13 @@ export function getFullAdminPermissions(): UserPermissions {
       exportExcel: true,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: true,
+      edit: true,
+      delete: true,
+      deleteAll: true,
+      exportExcel: true,
+    },
     canManagePersonnel: true,
     canManageKaraneh: true,
     canManageJobGroups: true,
@@ -122,6 +131,8 @@ export function getEmptyPermissions(): UserPermissions {
       deleteAll: false,
       importExcel: false,
       exportExcel: false,
+      submit: false,
+      allowedUnits: [],
     },
     jobGroups: {
       view: false,
@@ -191,6 +202,13 @@ export function getEmptyPermissions(): UserPermissions {
       exportExcel: false,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: false,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      exportExcel: false,
+    },
     canManagePersonnel: false,
     canManageKaraneh: false,
     canManageJobGroups: false,
@@ -223,6 +241,8 @@ export function getDefaultViewerPermissions(): UserPermissions {
       deleteAll: false,
       importExcel: false,
       exportExcel: true,
+      submit: false,
+      allowedUnits: [],
     },
     jobGroups: {
       view: true,
@@ -292,6 +312,13 @@ export function getDefaultViewerPermissions(): UserPermissions {
       exportExcel: false,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: true,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      exportExcel: true,
+    },
     canManagePersonnel: false,
     canManageKaraneh: false,
     canManageJobGroups: false,
@@ -324,6 +351,8 @@ export function getCeoPermissions(): UserPermissions {
       deleteAll: false,
       importExcel: false,
       exportExcel: true,
+      submit: false,
+      allowedUnits: [],
     },
     jobGroups: {
       view: true,
@@ -393,6 +422,13 @@ export function getCeoPermissions(): UserPermissions {
       exportExcel: true,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: true,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      exportExcel: true,
+    },
     canManagePersonnel: false,
     canManageKaraneh: false,
     canManageJobGroups: false,
@@ -425,6 +461,8 @@ export function getHrSpecialistPermissions(): UserPermissions {
       deleteAll: false,
       importExcel: false,
       exportExcel: true,
+      submit: false,
+      allowedUnits: [],
     },
     jobGroups: {
       view: true,
@@ -494,6 +532,13 @@ export function getHrSpecialistPermissions(): UserPermissions {
       exportExcel: false,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: true,
+      edit: false,
+      delete: false,
+      deleteAll: false,
+      exportExcel: true,
+    },
     canManagePersonnel: true,
     canManageKaraneh: false,
     canManageJobGroups: true,
@@ -526,6 +571,8 @@ export function getKaranehSpecialistPermissions(): UserPermissions {
       deleteAll: false,
       importExcel: true,
       exportExcel: true,
+      submit: true,
+      allowedUnits: [],
     },
     jobGroups: {
       view: true,
@@ -595,6 +642,13 @@ export function getKaranehSpecialistPermissions(): UserPermissions {
       exportExcel: false,
       allowedUnits: [],
     },
+    finalKaraneh: {
+      view: true,
+      edit: true,
+      delete: false,
+      deleteAll: false,
+      exportExcel: true,
+    },
     canManagePersonnel: false,
     canManageKaraneh: true,
     canManageJobGroups: false,
@@ -633,6 +687,27 @@ export function getWorkshopOfficerPermissions(): UserPermissions {
   return getUnitSupervisorPermissions(['تعمیرگاه و ماشین‌آلات سنگین', 'نگهداری و تعمیرات (نت) و تاسیسات']);
 }
 
+export function getUnitKaranehManagerPermissions(allowedUnits: string[] = []): UserPermissions {
+  const base = getEmptyPermissions();
+  return {
+    ...base,
+    karaneh: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true,
+      deleteAll: false,
+      importExcel: true,
+      exportExcel: true,
+      submit: true,
+      allowedUnits,
+    },
+    canManageKaraneh: true,
+    canExportExcel: true,
+    canImportExcel: true,
+  };
+}
+
 export function canUserAccessMiningUnit(
   perms: UserPermissions | undefined,
   isAdmin: boolean,
@@ -647,6 +722,31 @@ export function canUserAccessMiningUnit(
       .replace(/\u200c/g, ' ')
       .replace(/[يی]/g, 'ی')
       .replace(/[كک]/g, 'ک')
+      .trim()
+      .toLowerCase();
+  const target = norm(unitName);
+  return allowed.some((u) => {
+    const nu = norm(u);
+    return nu === target || target.includes(nu) || nu.includes(target);
+  });
+}
+
+export function canUserAccessKaranehUnit(
+  perms: UserPermissions | undefined,
+  isAdmin: boolean,
+  unitName: string
+): boolean {
+  if (isAdmin || perms?.finalKaraneh?.view) return true;
+  if (!perms?.karaneh?.view) return false;
+  const allowed = (perms.karaneh.allowedUnits || []).map((u) => String(u || '').trim()).filter(Boolean);
+  if (allowed.length === 0) return true;
+  if (!unitName) return false;
+  const norm = (s: string) =>
+    String(s || '')
+      .replace(/\u200c/g, ' ')
+      .replace(/[يی]/g, 'ی')
+      .replace(/[كک]/g, 'ک')
+      .replace(/\s+/g, ' ')
       .trim()
       .toLowerCase();
   const target = norm(unitName);
@@ -676,6 +776,7 @@ function syncLegacyPermissionFlags(perms: Omit<UserPermissions,
     canExportExcel: Boolean(
       perms.personnel.exportExcel ||
       perms.karaneh.exportExcel ||
+      perms.finalKaraneh?.exportExcel ||
       perms.jobGroups.exportExcel ||
       perms.commitments.exportExcel ||
       perms.payroll.exportExcel ||
@@ -704,6 +805,7 @@ export function normalizePermissions(raw?: any): UserPermissions {
   const hasModernSchema = Boolean(
     (raw.personnel && typeof raw.personnel === 'object') ||
     (raw.karaneh && typeof raw.karaneh === 'object') ||
+    (raw.finalKaraneh && typeof raw.finalKaraneh === 'object') ||
     (raw.jobGroups && typeof raw.jobGroups === 'object') ||
     (raw.commitments && typeof raw.commitments === 'object') ||
     (raw.payroll && typeof raw.payroll === 'object') ||
@@ -745,6 +847,8 @@ export function normalizePermissions(raw?: any): UserPermissions {
         deleteAll: false,
         importExcel: lk && li,
         exportExcel: lk && le,
+        submit: lk,
+        allowedUnits: [],
       },
       jobGroups: {
         view: lj,
@@ -814,12 +918,20 @@ export function normalizePermissions(raw?: any): UserPermissions {
         exportExcel: false,
         allowedUnits: [],
       },
+      finalKaraneh: {
+        view: false,
+        edit: false,
+        delete: false,
+        deleteAll: false,
+        exportExcel: false,
+      },
     });
   }
 
   // Modern schema: strictly fail-closed (every flag is false unless explicitly true)
   const p = raw.personnel || {};
   const k = raw.karaneh || {};
+  const fk = raw.finalKaraneh || {};
   const jg = raw.jobGroups || {};
   const c = raw.commitments || {};
   const pr = raw.payroll || {};
@@ -851,6 +963,8 @@ export function normalizePermissions(raw?: any): UserPermissions {
       deleteAll: b(k.deleteAll),
       importExcel: b(k.importExcel),
       exportExcel: b(k.exportExcel),
+      submit: b(k.submit),
+      allowedUnits: Array.isArray(k.allowedUnits) ? k.allowedUnits.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
     },
     jobGroups: {
       view: b(jg.view),
@@ -920,6 +1034,13 @@ export function normalizePermissions(raw?: any): UserPermissions {
       exportExcel: b(uo.exportExcel),
       allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [],
     },
+    finalKaraneh: {
+      view: b(fk.view),
+      edit: b(fk.edit),
+      delete: b(fk.delete),
+      deleteAll: b(fk.deleteAll),
+      exportExcel: b(fk.exportExcel),
+    },
   });
 }
 
@@ -927,6 +1048,7 @@ export function countActivePermissions(perms: UserPermissions): { active: number
   const modules: any[] = [
     perms.personnel,
     perms.karaneh,
+    perms.finalKaraneh,
     perms.jobGroups,
     perms.commitments,
     perms.payroll,
@@ -958,6 +1080,7 @@ export function getFirstAccessibleTab(perms: UserPermissions, isAdmin: boolean):
   if (perms.smartDashboard?.view) return 'smart-dashboard';
   if (perms.personnel?.view) return 'personnel';
   if (perms.karaneh?.view) return 'karaneh';
+  if (perms.finalKaraneh?.view) return 'final-karaneh';
   if (perms.payroll?.view) return 'payroll';
   if (perms.jobGroups?.view) return 'job-groups';
   if (perms.commitments?.view) return 'commitments';

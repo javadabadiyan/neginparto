@@ -178,7 +178,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('مدیر عامل') || p.includes('مدیرعامل')) {
     return {
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
+      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
       jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
       commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
       payroll: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
@@ -194,7 +195,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('دیسپچینگ')) {
     return {
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
-      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
@@ -210,7 +212,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('تعمیرگاه')) {
     return {
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
-      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
@@ -226,7 +229,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('سرپرست واحد')) {
     return {
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: false, documents: false },
-      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
@@ -239,10 +243,28 @@ function buildPresetPermissions(presetName: string): any {
       canManageUsers: false, canExportExcel: true, canImportExcel: true, canBackupRestore: false,
     };
   }
+  if (p.includes('مدیر کارانه واحد')) {
+    return {
+      personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
+      karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
+      jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
+      payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+      system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+      smartDashboard: { view: false, exportExcel: false, print: false },
+      ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
+      unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
+      canManagePersonnel: false, canManageKaraneh: true, canManageJobGroups: false, canManageCommitments: false,
+      canManageUsers: false, canExportExcel: true, canImportExcel: true, canBackupRestore: false,
+    };
+  }
   if (p.includes('مدیر')) {
     return {
       personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+      karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: true, delete: true, deleteAll: true, exportExcel: true },
       jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
       commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
@@ -258,7 +280,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('کارگزینی')) {
     return {
       personnel: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
+      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
       jobGroups: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true },
       commitments: { view: true, create: true, edit: true, delete: false, deleteAll: false, print: true, archive: true, importExcel: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true },
@@ -274,7 +297,8 @@ function buildPresetPermissions(presetName: string): any {
   if (p.includes('کارانه') || p.includes('حقوق')) {
     return {
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: true, documents: false },
-      karaneh: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true },
+      karaneh: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: true, delete: false, deleteAll: false, exportExcel: true },
       jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: true, create: true, edit: true, delete: false, deleteAll: false, importExcel: true, exportExcel: true },
@@ -289,7 +313,8 @@ function buildPresetPermissions(presetName: string): any {
   }
   return {
     personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: false, documents: false },
-    karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
+    karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] },
+    finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
     jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
     commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
     payroll: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
@@ -515,9 +540,11 @@ async function saveEmbeddedDb(db: EmbeddedDatabase): Promise<void> {
   }
 }
 
+const TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
+
 async function createToken(user: User): Promise<string> {
   const secret = await getEmbeddedSecret();
-  const payload = { uid: user.id, usr: user.username, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+  const payload = { uid: user.id, usr: user.username, exp: Date.now() + TOKEN_TTL_MS };
   const encoded = b64UrlEncode(JSON.stringify(payload));
   const sig = sha256Hex(`${secret}.${encoded}`);
   return `emb.${encoded}.${sig}`;
@@ -589,6 +616,41 @@ function hasMiningOrUnitPermEmb(user: User | null, action: string): boolean {
   return hasPerm(user, 'ceoDashboard', action) || hasPerm(user, 'unitOperations', action);
 }
 
+function normalizeUnitTextEmb(s?: string): string {
+  return String(s || '')
+    .replace(/\u200c/g, ' ')
+    .replace(/[يی]/g, 'ی')
+    .replace(/[كک]/g, 'ک')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function getKaranehAllowedUnitsEmb(user: User | null): string[] {
+  const raw = (user?.permissions as any)?.karaneh?.allowedUnits;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x: any) => String(x || '').trim()).filter(Boolean);
+}
+
+function hasFullKaranehScopeEmb(user: User | null): boolean {
+  if (!user || !user.isActive) return false;
+  if (isSuperAdmin(user) || hasPerm(user, 'finalKaraneh', 'view')) return true;
+  return getKaranehAllowedUnitsEmb(user).length === 0;
+}
+
+function isKaranehUnitAllowedEmb(user: User | null, unitName?: string): boolean {
+  if (!user || !user.isActive) return false;
+  if (hasFullKaranehScopeEmb(user)) return true;
+  if (!hasPerm(user, 'karaneh', 'view')) return false;
+  const allowed = getKaranehAllowedUnitsEmb(user);
+  const target = normalizeUnitTextEmb(unitName);
+  if (!target) return false;
+  return allowed.some((a) => {
+    const na = normalizeUnitTextEmb(a);
+    return na === target || target.includes(na) || na.includes(target);
+  });
+}
+
 function stripPass(u: any): User {
   const { password: _, ...rest } = u;
   return {
@@ -658,7 +720,10 @@ export const embeddedDb = {
     if (check.needsMigration) user.password = hashPasswordClient(String(password));
     user.lastLogin = new Date().toLocaleString('fa-IR');
     await saveEmbeddedDb(db);
-    return { success: true, data: { user: stripPass(user), token: await createToken(user) } };
+    return {
+      success: true,
+      data: { user: stripPass(user), token: await createToken(user), expiresAt: Date.now() + TOKEN_TTL_MS },
+    };
   },
 
   async firebaseLogin(idToken: string) {
@@ -688,7 +753,10 @@ export const embeddedDb = {
     user.email = email;
     user.lastLogin = new Date().toLocaleString('fa-IR');
     await saveEmbeddedDb(db);
-    return { success: true, data: { user: stripPass(user), token: await createToken(user) } };
+    return {
+      success: true,
+      data: { user: stripPass(user), token: await createToken(user), expiresAt: Date.now() + TOKEN_TTL_MS },
+    };
   },
 
   async verifySession() {
@@ -1081,14 +1149,36 @@ export const embeddedDb = {
     return { success: true, deletedCount, message: `تمامی اطلاعات بستگان پرسنل (${deletedCount} رکورد) پاکسازی شد.` };
   },
 
-  async getKaraneh(period?: string): Promise<KaranehRecord[]> {
+  async getKaraneh(period?: string, scope?: 'all' | 'submitted'): Promise<KaranehRecord[]> {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', 'view')) return [];
-    return period ? db.karaneh.filter((k) => k.period === period) : db.karaneh;
+    if (!hasPerm(auth, 'karaneh', 'view') && !hasPerm(auth, 'finalKaraneh', 'view')) return [];
+    let rows = period ? db.karaneh.filter((k) => k.period === period) : db.karaneh;
+    if (scope === 'submitted') {
+      rows = rows.filter((k) => k.status === 'submitted');
+    }
+    if (!hasFullKaranehScopeEmb(auth)) {
+      rows = rows.filter((k) => isKaranehUnitAllowedEmb(auth, k.department));
+    }
+    return rows;
   },
 
-  async getKaranehComparison(currentPeriod: string, previousPeriod: string): Promise<{
+  async getKaranehUnitPersonnel(): Promise<Personnel[]> {
+    const db = await loadEmbeddedDb();
+    const auth = await getCurrentAuthUser(db);
+    if (!hasPerm(auth, 'karaneh', 'view') && !hasPerm(auth, 'finalKaraneh', 'view')) return [];
+    const filtered = hasFullKaranehScopeEmb(auth)
+      ? db.personnel
+      : db.personnel.filter((p) => isKaranehUnitAllowedEmb(auth, p.department));
+    return filtered.map((p) => ({
+      ...p,
+      baseSalary: hasPerm(auth, 'personnel', 'viewSalary') ? p.baseSalary : 0,
+      documents: undefined,
+      relatives: undefined,
+    }));
+  },
+
+  async getKaranehComparison(currentPeriod: string, previousPeriod: string, scope?: 'all' | 'submitted'): Promise<{
     currentPeriod: string;
     previousPeriod: string;
     comparisonRows: KaranehComparisonRow[];
@@ -1096,7 +1186,7 @@ export const embeddedDb = {
   }> {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', 'view')) {
+    if (!hasPerm(auth, 'karaneh', 'view') && !hasPerm(auth, 'finalKaraneh', 'view')) {
       return {
         currentPeriod,
         previousPeriod,
@@ -1107,8 +1197,16 @@ export const embeddedDb = {
         },
       };
     }
-    const currentRecords = db.karaneh.filter((k) => k.period === currentPeriod);
-    const previousRecords = db.karaneh.filter((k) => k.period === previousPeriod);
+    const unitAllowed = (dept?: string) => hasFullKaranehScopeEmb(auth) || isKaranehUnitAllowedEmb(auth, dept);
+    const currentRecords = db.karaneh.filter(
+      (k) =>
+        k.period === currentPeriod &&
+        unitAllowed(k.department) &&
+        (scope === 'submitted' ? k.status === 'submitted' : true)
+    );
+    const previousRecords = db.karaneh.filter(
+      (k) => k.period === previousPeriod && unitAllowed(k.department)
+    );
     const prevMap = new Map(previousRecords.map((p) => [String(p.personnelCode).trim(), p]));
     const comparisonRows: any[] = currentRecords.map((curr) => {
       const prev = prevMap.get(String(curr.personnelCode).trim());
@@ -1121,6 +1219,7 @@ export const embeddedDb = {
         id: curr.id, personnelId: curr.personnelId, personnelCode: curr.personnelCode, fullName: curr.fullName,
         department: curr.department, position: curr.position, currentKaraneh: currFinal, previousKaraneh: prevFinal,
         diffAmount, diffPercent, trend, notes: curr.notes || '',
+        status: curr.status || 'draft', submittedAt: curr.submittedAt, submittedByName: curr.submittedByName,
       };
     });
     const totalCurrent = comparisonRows.reduce((s, r) => s + r.currentKaraneh, 0);
@@ -1142,19 +1241,42 @@ export const embeddedDb = {
   async saveKaraneh(record: Partial<KaranehRecord>) {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', record.id ? 'edit' : 'create')) return { success: false, message: 'عدم دسترسی ثبت کارانه.' };
+    const canSave = hasPerm(auth, 'karaneh', record.id ? 'edit' : 'create') || (Boolean(record.id) && hasPerm(auth, 'finalKaraneh', 'edit'));
+    if (!canSave) return { success: false, message: 'عدم دسترسی ثبت کارانه.' };
     if (!record.personnelCode || !record.period) return { success: false, message: 'کد پرسنلی و دوره الزامی است.' };
-    const idx = db.karaneh.findIndex((k) => String(k.personnelCode).trim() === String(record.personnelCode).trim() && k.period === record.period);
+    const code = String(record.personnelCode).trim();
+    const idx = db.karaneh.findIndex((k) => String(k.personnelCode).trim() === code && k.period === record.period);
+    const existing = idx >= 0 ? db.karaneh[idx] : null;
+    const allowedUnits = getKaranehAllowedUnitsEmb(auth);
+    const targetDept = String(record.department || existing?.department || (allowedUnits[0] || 'عمومی')).trim();
+    if (!hasFullKaranehScopeEmb(auth)) {
+      if (!isKaranehUnitAllowedEmb(auth, targetDept) || (existing && !isKaranehUnitAllowedEmb(auth, existing.department))) {
+        return { success: false, message: 'امکان ثبت یا ویرایش کارانه برای واحد سازمانی دیگر وجود ندارد.' };
+      }
+    }
     const baseKaraneh = Number(record.baseKaraneh || 0);
     const overtimeBonus = Number(record.overtimeBonus || 0);
     const deductions = Number(record.deductions || 0);
     const finalKaraneh = record.finalKaraneh !== undefined ? Number(record.finalKaraneh) : (baseKaraneh + overtimeBonus - deductions);
+    const nextStatus: 'draft' | 'submitted' = record.status === 'submitted' ? 'submitted' : (existing?.status === 'submitted' ? 'submitted' : 'draft');
     const rec: any = {
-      id: idx >= 0 ? db.karaneh[idx].id : `k-${Date.now()}`,
-      personnelId: record.personnelId || '', personnelCode: String(record.personnelCode).trim(),
-      fullName: record.fullName || 'پرسنل', department: record.department || 'عمومی', position: record.position || '',
-      period: record.period, baseKaraneh, overtimeBonus, deductions, finalKaraneh,
-      notes: record.notes || '', updatedAt: new Date().toLocaleDateString('fa-IR'),
+      id: existing ? existing.id : `k-${Date.now()}`,
+      personnelId: record.personnelId || existing?.personnelId || '',
+      personnelCode: code,
+      fullName: record.fullName || existing?.fullName || 'پرسنل',
+      department: targetDept,
+      position: record.position || existing?.position || '',
+      period: record.period,
+      baseKaraneh,
+      overtimeBonus,
+      deductions,
+      finalKaraneh,
+      notes: record.notes || '',
+      status: nextStatus,
+      submittedAt: nextStatus === 'submitted' ? (record.submittedAt || existing?.submittedAt) : undefined,
+      submittedBy: nextStatus === 'submitted' ? (record.submittedBy || existing?.submittedBy) : undefined,
+      submittedByName: nextStatus === 'submitted' ? (record.submittedByName || existing?.submittedByName) : undefined,
+      updatedAt: new Date().toLocaleDateString('fa-IR'),
     };
     if (idx >= 0) db.karaneh[idx] = rec; else db.karaneh.push(rec);
     await saveEmbeddedDb(db);
@@ -1165,25 +1287,46 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'karaneh', 'importExcel')) return { success: false, message: 'عدم دسترسی ورود اکسل کارانه.' };
+    const fullScope = hasFullKaranehScopeEmb(auth);
+    const allowedUnits = getKaranehAllowedUnitsEmb(auth);
     let count = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
       if (!code) continue;
       const mp = db.personnel.find((p) => String(p.personnelCode).trim() === code);
+      const dept = String(
+        row.department || row['واحد اداری'] || row['واحد سازمانی'] || row['واحد'] || (mp ? mp.department : (allowedUnits[0] || 'عمومی'))
+      ).trim();
+      if (!fullScope && !isKaranehUnitAllowedEmb(auth, dept)) {
+        return {
+          success: false,
+          message: `واحد "${dept}" در مجوز کارانه حساب کاربری شما تعریف نشده است. تنها امکان بارگذاری کارانه واحد مجاز خود را دارید.`,
+        };
+      }
       const baseKaraneh = Number(row.baseKaraneh || row['کارانه پایه (ریال)'] || row['کارانه پایه'] || 0);
       const overtimeBonus = Number(row.overtimeBonus || row['پاداش تشویقی (ریال)'] || row['پاداش تشویقی'] || row['اضافه کاری'] || 0);
       const deductions = Number(row.deductions || row['کسورات (ریال)'] || row['کسورات'] || 0);
       const explicitFinal = row.finalKaraneh ?? row['مبلغ کارانه (ریال)'] ?? row['مبلغ کارانه'] ?? row['کارانه خالص نهایی (ریال)'] ?? row['کارانه خالص'] ?? row['کارانه'] ?? row['مبلغ'] ?? row.amount;
       const finalKaraneh = explicitFinal !== undefined ? Number(explicitFinal) : (baseKaraneh + overtimeBonus - deductions);
       const idx = db.karaneh.findIndex((k) => String(k.personnelCode).trim() === code && k.period === period);
+      const existing = idx >= 0 ? db.karaneh[idx] : null;
       const rec: any = {
-        id: idx >= 0 ? db.karaneh[idx].id : `k-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        personnelId: mp ? mp.id : '', personnelCode: code,
+        id: existing ? existing.id : `k-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        personnelId: mp ? mp.id : '',
+        personnelCode: code,
         fullName: row.fullName || row['نام و نام خانوادگی'] || row['نام'] || (mp ? mp.fullName : 'پرسنل'),
-        department: row.department || row['واحد اداری'] || row['واحد سازمانی'] || row['واحد'] || (mp ? mp.department : 'عمومی'),
+        department: dept,
         position: row.position || row['پست سازمانی'] || row['پست و سمت'] || row['پست'] || row['سمت'] || (mp ? mp.position : ''),
-        period, baseKaraneh, overtimeBonus, deductions, finalKaraneh,
+        period,
+        baseKaraneh,
+        overtimeBonus,
+        deductions,
+        finalKaraneh,
         notes: row.notes || row['توضیحات'] || row['یادداشت'] || '',
+        status: existing?.status === 'submitted' ? 'submitted' : 'draft',
+        submittedAt: existing?.submittedAt,
+        submittedBy: existing?.submittedBy,
+        submittedByName: existing?.submittedByName,
         updatedAt: new Date().toLocaleDateString('fa-IR'),
       };
       if (idx >= 0) db.karaneh[idx] = rec; else db.karaneh.push(rec);
@@ -1193,10 +1336,76 @@ export const embeddedDb = {
     return { success: true, message: `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت گردید).` };
   },
 
+  async submitKaraneh(period: string, department?: string) {
+    const db = await loadEmbeddedDb();
+    const auth = await getCurrentAuthUser(db);
+    const canSubmit = isSuperAdmin(auth) || hasPerm(auth, 'karaneh', 'submit') || hasPerm(auth, 'karaneh', 'create') || hasPerm(auth, 'karaneh', 'edit');
+    if (!canSubmit || !auth) return { success: false, message: 'عدم دسترسی تأیید و ارسال کارانه نهایی.' };
+    if (!period) return { success: false, message: 'دوره کارانه مشخص نشده است.' };
+    const fullScope = hasFullKaranehScopeEmb(auth);
+    if (department && !fullScope && !isKaranehUnitAllowedEmb(auth, department)) {
+      return { success: false, message: 'شما مجوز ارسال کارانه برای این واحد را ندارید.' };
+    }
+    const nowFa = new Date().toLocaleString('fa-IR');
+    const targetNorm = department ? normalizeUnitTextEmb(department) : '';
+    let submittedCount = 0;
+    db.karaneh = db.karaneh.map((k) => {
+      if (k.period !== period) return k;
+      if (!fullScope && !isKaranehUnitAllowedEmb(auth, k.department)) return k;
+      if (targetNorm && normalizeUnitTextEmb(k.department) !== targetNorm) return k;
+      submittedCount++;
+      return {
+        ...k,
+        status: 'submitted',
+        submittedAt: nowFa,
+        submittedBy: auth.id,
+        submittedByName: auth.fullName,
+      };
+    });
+    if (submittedCount === 0) {
+      return { success: false, message: 'رکورد کارانه‌ای در این دوره برای ارسال یافت نشد.' };
+    }
+    await saveEmbeddedDb(db);
+    return {
+      success: true,
+      submittedCount,
+      message: `${submittedCount} ردیف کارانه دوره ${period} تأیید و به کارانه نهایی ارسالی منتقل شد.`,
+    };
+  },
+
+  async reopenKaraneh(period: string, department?: string) {
+    const db = await loadEmbeddedDb();
+    const auth = await getCurrentAuthUser(db);
+    if (!isSuperAdmin(auth) && !hasPerm(auth, 'finalKaraneh', 'edit')) {
+      return { success: false, message: 'عدم دسترسی بازگرداندن کارانه به پیش‌نویس.' };
+    }
+    if (!period) return { success: false, message: 'دوره مشخص نشده است.' };
+    const targetNorm = department ? normalizeUnitTextEmb(department) : '';
+    let reopenedCount = 0;
+    db.karaneh = db.karaneh.map((k) => {
+      if (k.period !== period || k.status !== 'submitted') return k;
+      if (targetNorm && normalizeUnitTextEmb(k.department) !== targetNorm) return k;
+      reopenedCount++;
+      const { submittedAt: _sa, submittedBy: _sb, submittedByName: _sbn, ...rest } = k as any;
+      return { ...rest, status: 'draft' };
+    });
+    await saveEmbeddedDb(db);
+    return {
+      success: true,
+      reopenedCount,
+      message: `${reopenedCount} ردیف کارانه به حالت پیش‌نویس واحد بازگردانده شد.`,
+    };
+  },
+
   async deleteKaraneh(id: string) {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const canDel = hasPerm(auth, 'karaneh', 'delete') || hasPerm(auth, 'finalKaraneh', 'delete');
+    if (!canDel) return { success: false, message: 'عدم دسترسی حذف.' };
+    const target = db.karaneh.find((k) => k.id === id);
+    if (target && !hasFullKaranehScopeEmb(auth) && !isKaranehUnitAllowedEmb(auth, target.department)) {
+      return { success: false, message: 'امکان حذف کارانه سایر واحدها وجود ندارد.' };
+    }
     db.karaneh = db.karaneh.filter((k) => k.id !== id);
     await saveEmbeddedDb(db);
     return { success: true, message: 'رکورد کارانه حذف گردید.' };
@@ -1205,21 +1414,38 @@ export const embeddedDb = {
   async batchDeleteKaraneh(ids: string[]) {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const canDel = hasPerm(auth, 'karaneh', 'delete') || hasPerm(auth, 'finalKaraneh', 'delete');
+    if (!canDel) return { success: false, message: 'عدم دسترسی حذف.' };
     const idSet = new Set(ids.map(String));
+    const fullScope = hasFullKaranehScopeEmb(auth);
     const before = db.karaneh.length;
-    db.karaneh = db.karaneh.filter((k) => !idSet.has(k.id));
+    db.karaneh = db.karaneh.filter((k) => {
+      if (!idSet.has(k.id)) return true;
+      if (!fullScope && !isKaranehUnitAllowedEmb(auth, k.department)) return true;
+      return false;
+    });
     const deletedCount = before - db.karaneh.length;
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} رکورد کارانه حذف شد.` };
   },
 
-  async deleteAllKaraneh(period?: string) {
+  async deleteAllKaraneh(period?: string, scope?: 'all' | 'submitted') {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
-    if (!hasPerm(auth, 'karaneh', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی کارانه.' };
+    const isSubmittedOnly = scope === 'submitted';
+    const canDelAll = isSubmittedOnly
+      ? (hasPerm(auth, 'finalKaraneh', 'deleteAll') || hasPerm(auth, 'karaneh', 'deleteAll'))
+      : hasPerm(auth, 'karaneh', 'deleteAll');
+    if (!canDelAll) return { success: false, message: 'عدم دسترسی پاکسازی کارانه.' };
+    const fullScope = hasFullKaranehScopeEmb(auth);
     const before = db.karaneh.length;
-    db.karaneh = period ? db.karaneh.filter((k) => k.period !== period) : [];
+    db.karaneh = db.karaneh.filter((k) => {
+      const matchesPeriod = !period || k.period === period;
+      const matchesScope = !isSubmittedOnly || k.status === 'submitted';
+      const matchesUnit = fullScope || isKaranehUnitAllowedEmb(auth, k.department);
+      if (matchesPeriod && matchesScope && matchesUnit) return false;
+      return true;
+    });
     const deletedCount = before - db.karaneh.length;
     await saveEmbeddedDb(db);
     return {
@@ -1227,7 +1453,7 @@ export const embeddedDb = {
       deletedCount,
       message: period
         ? `تمام رکوردهای کارانه دوره ${period} (${deletedCount} رکورد) حذف شدند.`
-        : `کل جدول کارانه (${deletedCount} رکورد) پاکسازی شد.`,
+        : `جدول کارانه (${deletedCount} رکورد) پاکسازی شد.`,
     };
   },
 
@@ -2014,7 +2240,7 @@ export const embeddedDb = {
     const auth = await getCurrentAuthUser(db);
     const canStats = isSuperAdmin(auth) || hasPerm(auth, 'system', 'dashboardStats') || hasPerm(auth, 'system', 'backupDatabase') || hasPerm(auth, 'system', 'restoreDatabase');
     const canPers = canStats || hasPerm(auth, 'personnel', 'view');
-    const canKar = canStats || hasPerm(auth, 'karaneh', 'view');
+    const canKar = canStats || hasPerm(auth, 'karaneh', 'view') || hasPerm(auth, 'finalKaraneh', 'view');
     const canPay = canStats || hasPerm(auth, 'payroll', 'view');
     const canUsers = canStats || hasPerm(auth, 'users', 'view');
     const canJg = canStats || hasPerm(auth, 'jobGroups', 'view');

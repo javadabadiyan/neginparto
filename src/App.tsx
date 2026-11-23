@@ -10,6 +10,7 @@ import { DashboardOverview } from './components/DashboardOverview';
 
 const PersonnelModule = lazy(() => import('./components/PersonnelModule').then((m) => ({ default: m.PersonnelModule })));
 const KaranehModule = lazy(() => import('./components/KaranehModule').then((m) => ({ default: m.KaranehModule })));
+const FinalKaranehModule = lazy(() => import('./components/FinalKaranehModule').then((m) => ({ default: m.FinalKaranehModule })));
 const JobGroupsModule = lazy(() => import('./components/JobGroupsModule').then((m) => ({ default: m.JobGroupsModule })));
 const CommitmentsModule = lazy(() => import('./components/CommitmentsModule').then((m) => ({ default: m.CommitmentsModule })));
 const UsersModule = lazy(() => import('./components/UsersModule').then((m) => ({ default: m.UsersModule })));
@@ -68,6 +69,7 @@ export default function App() {
 
   // Core Data Lists
   const [personnelList, setPersonnelList] = useState<Personnel[]>([]);
+  const [karanehUnitPersonnel, setKaranehUnitPersonnel] = useState<Personnel[]>([]);
   const [karanehList, setKaranehList] = useState<KaranehRecord[]>([]);
   const [payrollList, setPayrollList] = useState<PayrollRecord[]>([]);
   const [jobGroups, setJobGroups] = useState<JobGroup[]>([]);
@@ -122,47 +124,143 @@ export default function App() {
     }, type === 'error' ? 7500 : 4500);
   };
 
+  const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+
+  const getStoredSessionExpiresAt = (): number => {
+    try {
+      const candidates: number[] = [];
+      const storedExp = Number(localStorage.getItem('hr_auth_expires_at') || 0);
+      if (Number.isFinite(storedExp) && storedExp > 0) {
+        candidates.push(storedExp);
+      }
+      const token = localStorage.getItem('hr_auth_token') || '';
+      if (token.startsWith('emb.')) {
+        const parts = token.split('.');
+        if (parts.length >= 2) {
+          const parsed = JSON.parse(atob(parts[1]));
+          const exp = Number(parsed?.exp || 0);
+          if (Number.isFinite(exp) && exp > 0) {
+            candidates.push(exp < 1e12 ? exp * 1000 : exp);
+          }
+        }
+      } else if (token.includes('.')) {
+        const parts = token.split('.');
+        if (parts.length >= 2) {
+          const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+          const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+          const parsed = JSON.parse(atob(padded));
+          const exp = Number(parsed?.exp || 0);
+          if (Number.isFinite(exp) && exp > 0) {
+            candidates.push(exp < 1e12 ? exp * 1000 : exp);
+          }
+        }
+      }
+      if (candidates.length === 0) return 0;
+      return Math.min(...candidates);
+    } catch {
+      return 0;
+    }
+  };
+
+  const forceSessionExpire = (reason?: string) => {
+    const msg =
+      reason ||
+      'به دلیل اتمام مهلت امنیتی ۲ ساعته، نشست کاربری شما بسته شد. لطفاً مجدداً وارد شوید.';
+    try {
+      localStorage.removeItem('hr_auth_token');
+      localStorage.removeItem('hr_current_user');
+      localStorage.removeItem('hr_auth_expires_at');
+      sessionStorage.setItem('hr_logout_reason', msg);
+    } catch {
+      // ignore storage errors
+    }
+    loadedForUserIdRef.current = null;
+    setCurrentUser(null);
+    setActiveTab('dashboard');
+  };
+
   // Check stored auth session & listen for 401 unauthorized events
   useEffect(() => {
     const storedUser = localStorage.getItem('hr_current_user');
     const token = localStorage.getItem('hr_auth_token');
     if (storedUser && token) {
-      try {
-        setCurrentUser(JSON.parse(storedUser));
-        api.verifySession().then((res) => {
-          if (res && res.success && res.data) {
-            setCurrentUser(res.data);
-            localStorage.setItem('hr_current_user', JSON.stringify(res.data));
-          } else if (res && (res.status === 401 || res.status === 403)) {
-            localStorage.removeItem('hr_current_user');
-            localStorage.removeItem('hr_auth_token');
-            setCurrentUser(null);
+      const expAt = getStoredSessionExpiresAt();
+      if (expAt > 0 && Date.now() >= expAt) {
+        forceSessionExpire();
+      } else {
+        try {
+          if (expAt <= 0) {
+            localStorage.setItem('hr_auth_expires_at', String(Date.now() + SESSION_TTL_MS));
           }
-        }).catch(() => {
-          // Keep cached state if offline, server check will run on API requests
-        });
-      } catch {
-        localStorage.removeItem('hr_current_user');
-        localStorage.removeItem('hr_auth_token');
+          setCurrentUser(JSON.parse(storedUser));
+          api.verifySession().then((res) => {
+            if (res && res.success && res.data) {
+              setCurrentUser(res.data);
+              localStorage.setItem('hr_current_user', JSON.stringify(res.data));
+            } else if (res && (res.status === 401 || res.status === 403)) {
+              forceSessionExpire((res as any)?.message);
+            }
+          }).catch(() => {
+            // Keep cached state if offline, server check will run on API requests
+          });
+        } catch {
+          localStorage.removeItem('hr_current_user');
+          localStorage.removeItem('hr_auth_token');
+          localStorage.removeItem('hr_auth_expires_at');
+        }
       }
     }
 
     const onUnauthorized = (ev: Event) => {
       const customMsg = (ev as CustomEvent<{ message?: string }>)?.detail?.message;
-      localStorage.removeItem('hr_auth_token');
-      localStorage.removeItem('hr_current_user');
-      loadedForUserIdRef.current = null;
-      setCurrentUser(null);
-      setActiveTab('dashboard');
-      showNotification(
-        customMsg || 'نشست کاربری شما منقضی شده است. لطفاً مجدداً وارد شوید.',
-        'error'
-      );
+      const reason =
+        customMsg || 'نشست کاربری شما منقضی شده است (حداکثر زمان مجاز: ۲ ساعت). لطفاً مجدداً وارد شوید.';
+      forceSessionExpire(reason);
+      showNotification(reason, 'error');
     };
 
     window.addEventListener('hr:unauthorized', onUnauthorized);
     return () => window.removeEventListener('hr:unauthorized', onUnauthorized);
   }, []);
+
+  // Strict 2-hour client-side security auto-logout watcher (timer + focus + tab visibility)
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let expiresAt = getStoredSessionExpiresAt();
+    if (!expiresAt || expiresAt <= 0) {
+      expiresAt = Date.now() + SESSION_TTL_MS;
+      try {
+        localStorage.setItem('hr_auth_expires_at', String(expiresAt));
+      } catch {
+        // ignore storage errors
+      }
+    }
+
+    const checkExpiry = () => {
+      const currentExp = getStoredSessionExpiresAt() || expiresAt;
+      if (Date.now() >= currentExp) {
+        forceSessionExpire();
+      }
+    };
+
+    const remainingMs = Math.max(1000, expiresAt - Date.now());
+    const timeoutId = setTimeout(checkExpiry, remainingMs + 250);
+    const intervalId = setInterval(checkExpiry, 30000);
+    const onFocusOrVisibility = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        checkExpiry();
+      }
+    };
+
+    window.addEventListener('focus', onFocusOrVisibility);
+    document.addEventListener('visibilitychange', onFocusOrVisibility);
+    return () => {
+      clearTimeout(timeoutId);
+      clearInterval(intervalId);
+      window.removeEventListener('focus', onFocusOrVisibility);
+      document.removeEventListener('visibilitychange', onFocusOrVisibility);
+    };
+  }, [currentUser?.id]);
 
   // Keep lastSyncVersionRef aligned whenever dbStatus refreshes from any local mutation
   useEffect(() => {
@@ -181,6 +279,9 @@ export default function App() {
       setPersonnelList(bundle.personnel || []);
     }
     setKaranehList(bundle.karaneh || []);
+    if (Array.isArray(bundle.karanehPersonnel)) {
+      setKaranehUnitPersonnel(bundle.karanehPersonnel);
+    }
     setJobGroups(bundle.jobGroups || []);
     setJobClassifications(bundle.jobClassifications || []);
     setCommitments(bundle.commitments || []);
@@ -295,6 +396,7 @@ export default function App() {
       (activeTab === 'unit-operations' && perms.unitOperations?.view) ||
       (activeTab === 'personnel' && perms.personnel?.view) ||
       (activeTab === 'karaneh' && perms.karaneh?.view) ||
+      (activeTab === 'final-karaneh' && perms.finalKaraneh?.view) ||
       (activeTab === 'payroll' && perms.payroll?.view) ||
       (activeTab === 'job-groups' && perms.jobGroups?.view) ||
       (activeTab === 'commitments' && perms.commitments?.view) ||
@@ -559,6 +661,14 @@ export default function App() {
   const handleLoginSuccess = (user: User) => {
     const isAdmin = user.role === 'super_admin' || user.username === 'javadabadiyan';
     const perms = isAdmin ? getFullAdminPermissions() : normalizePermissions(user.permissions);
+    try {
+      if (!localStorage.getItem('hr_auth_expires_at')) {
+        localStorage.setItem('hr_auth_expires_at', String(Date.now() + SESSION_TTL_MS));
+      }
+      sessionStorage.removeItem('hr_logout_reason');
+    } catch {
+      // ignore storage errors
+    }
     setCurrentUser(user);
     setActiveTab(getFirstAccessibleTab(perms, isAdmin));
     showNotification(`خوش آمدید، جناب ${user.fullName}`);
@@ -567,6 +677,12 @@ export default function App() {
   const handleLogout = () => {
     localStorage.removeItem('hr_auth_token');
     localStorage.removeItem('hr_current_user');
+    localStorage.removeItem('hr_auth_expires_at');
+    try {
+      sessionStorage.removeItem('hr_logout_reason');
+    } catch {
+      // ignore storage errors
+    }
     lockGitHubSession();
     githubAutoPulledRef.current = false;
     loadedForUserIdRef.current = null;
@@ -705,6 +821,40 @@ export default function App() {
       }
     } catch (e: any) {
       showNotification(e?.message || 'خطا در پردازش فایل اکسل کارانه.', 'error');
+      return false;
+    }
+  };
+
+  const handleSubmitKaraneh = async (period: string, department?: string): Promise<boolean> => {
+    try {
+      const res = await api.submitKaraneh(period, department);
+      if (res.success) {
+        showNotification(res.message || 'کارانه این دوره با موفقیت تأیید و به کارانه نهایی ارسالی ارسال شد.');
+        await afterUploadRefresh();
+        triggerGitHubAutoSync();
+        return true;
+      }
+      showNotification(res.message || 'خطا در ارسال کارانه به کارانه نهایی.', 'error');
+      return false;
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در ارسال کارانه به کارانه نهایی.', 'error');
+      return false;
+    }
+  };
+
+  const handleReopenKaraneh = async (period: string, department?: string): Promise<boolean> => {
+    try {
+      const res = await api.reopenKaraneh(period, department);
+      if (res.success) {
+        showNotification(res.message || 'کارانه واحد با موفقیت به وضعیت پیش‌نویس بازگردانده شد.');
+        await afterUploadRefresh();
+        triggerGitHubAutoSync();
+        return true;
+      }
+      showNotification(res.message || 'خطا در بازگرداندن کارانه به پیش‌نویس.', 'error');
+      return false;
+    } catch (e: any) {
+      showNotification(e?.message || 'خطا در بازگرداندن کارانه به پیش‌نویس.', 'error');
       return false;
     }
   };
@@ -1250,12 +1400,17 @@ export default function App() {
     }
   };
 
-  const handleDeleteAllKaraneh = async (period?: string): Promise<boolean> => {
+  const handleDeleteAllKaraneh = async (period?: string, scope?: 'all' | 'submitted'): Promise<boolean> => {
     try {
-      const matchingIds = (period ? karanehList.filter(k => k.period === period) : karanehList).map(k => k.id);
-      const res = await api.deleteAllKaraneh(period);
+      const matchesTarget = (k: KaranehRecord) => {
+        if (period && k.period !== period) return false;
+        if (scope === 'submitted' && k.status !== 'submitted') return false;
+        return true;
+      };
+      const matchingIds = karanehList.filter(matchesTarget).map(k => k.id);
+      const res = await api.deleteAllKaraneh(period, scope);
       if (res.success) {
-        setKaranehList(prev => (period ? prev.filter(k => k.period !== period) : []));
+        setKaranehList(prev => prev.filter(k => !matchesTarget(k)));
         if (auth.currentUser?.emailVerified && matchingIds.length > 0) {
           deleteIdsFromFirestore('karaneh', matchingIds).catch(() => {});
         }
@@ -1799,6 +1954,7 @@ export default function App() {
                 canCreatePersonnel={isSuperAdmin || Boolean(userPerms.personnel?.create)}
                 canViewKaraneh={isSuperAdmin || Boolean(userPerms.karaneh?.view)}
                 canImportKaraneh={isSuperAdmin || Boolean(userPerms.karaneh?.importExcel)}
+                canViewFinalKaraneh={isSuperAdmin || Boolean(userPerms.finalKaraneh?.view)}
                 canViewCommitments={isSuperAdmin || Boolean(userPerms.commitments?.view)}
                 canViewJobGroups={isSuperAdmin || Boolean(userPerms.jobGroups?.view)}
                 canViewPayroll={isSuperAdmin || Boolean(userPerms.payroll?.view)}
@@ -1926,22 +2082,47 @@ export default function App() {
             {activeTab === 'karaneh' && (
               (isSuperAdmin || userPerms.karaneh.view) ? (
                 <KaranehModule
-                  personnelList={personnelList}
+                  personnelList={personnelList.length > 0 ? personnelList : karanehUnitPersonnel}
                   karanehList={karanehList}
                   onSaveKaraneh={handleSaveKaraneh}
                   onDeleteKaraneh={handleDeleteKaraneh}
                   onBatchDeleteKaraneh={handleBatchDeleteKaraneh}
                   onDeleteAllKaraneh={handleDeleteAllKaraneh}
                   onBatchImportKaraneh={handleBatchImportKaraneh}
+                  onSubmitKaraneh={handleSubmitKaraneh}
                   canManage={canManageKaraneh}
                   canExport={isSuperAdmin || Boolean(userPerms.karaneh.exportExcel)}
                   canImport={isSuperAdmin || Boolean(userPerms.karaneh.importExcel)}
                   granularPermissions={userPerms.karaneh}
+                  userPermissions={userPerms}
+                  isAdmin={isSuperAdmin}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
                   <div className="font-bold text-slate-800 text-sm">عدم دسترسی به سامانه کارانه</div>
                   <p>مجوز مشاهده و تحلیل کارانه پرسنل برای شما تعریف نشده است.</p>
+                </div>
+              )
+            )}
+
+            {activeTab === 'final-karaneh' && (
+              (isSuperAdmin || userPerms.finalKaraneh?.view) ? (
+                <FinalKaranehModule
+                  karanehList={karanehList}
+                  onSaveKaraneh={handleSaveKaraneh}
+                  onDeleteKaraneh={handleDeleteKaraneh}
+                  onBatchDeleteKaraneh={handleBatchDeleteKaraneh}
+                  onDeleteAllKaraneh={handleDeleteAllKaraneh}
+                  onReopenKaraneh={handleReopenKaraneh}
+                  canEdit={isSuperAdmin || Boolean(userPerms.finalKaraneh?.edit)}
+                  canDelete={isSuperAdmin || Boolean(userPerms.finalKaraneh?.delete)}
+                  canDeleteAll={isSuperAdmin || Boolean(userPerms.finalKaraneh?.deleteAll)}
+                  canExportExcel={isSuperAdmin || Boolean(userPerms.finalKaraneh?.exportExcel)}
+                />
+              ) : (
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
+                  <div className="font-bold text-slate-800 text-sm">عدم دسترسی به کارانه نهایی ارسالی</div>
+                  <p>مجوز مشاهده کارانه نهایی ارسالی واحدها برای حساب کاربری شما فعال نشده است.</p>
                 </div>
               )
             )}

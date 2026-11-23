@@ -17,11 +17,26 @@ import { embeddedDb } from './embeddedDb';
 export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
 
 const LS_CLOUDFLARE_API_URL_KEY = 'npn_cloudflare_api_url_v1';
+const LS_CLOUDFLARE_UNIFIED_FLAG = 'npn_cf_url_unified_v2';
 
-const DEFAULT_CLOUDFLARE_API_URL = 'https://neginparto-api.ci-runner-223bd6.workers.dev';
+export const DEFAULT_CLOUDFLARE_API_URL = 'https://neginparto-api.ci-runner-223bd6.workers.dev';
 
 let detectedEngine: StorageEngine | null = null;
 let engineDetectPromise: Promise<StorageEngine> | null = null;
+
+function ensureUnifiedCloudflareDefault(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(LS_CLOUDFLARE_UNIFIED_FLAG) !== '1') {
+      localStorage.removeItem(LS_CLOUDFLARE_API_URL_KEY);
+      localStorage.setItem(LS_CLOUDFLARE_UNIFIED_FLAG, '1');
+    }
+  } catch {
+    // ignore storage access error
+  }
+}
+
+ensureUnifiedCloudflareDefault();
 
 function toAsciiDigits(raw: string): string {
   return String(raw || '')
@@ -40,6 +55,7 @@ export function normalizeCloudflareUrl(raw: string): string {
 }
 
 export function getCloudflareApiUrl(): string {
+  ensureUnifiedCloudflareDefault();
   try {
     const lsVal = typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CLOUDFLARE_API_URL_KEY) || '' : '';
     if (lsVal.trim()) return normalizeCloudflareUrl(lsVal);
@@ -56,7 +72,8 @@ export function getCloudflareApiUrl(): string {
 export function setCloudflareApiUrl(rawUrl: string): string {
   const normalized = normalizeCloudflareUrl(rawUrl);
   try {
-    if (normalized) {
+    localStorage.setItem(LS_CLOUDFLARE_UNIFIED_FLAG, '1');
+    if (normalized && normalized !== DEFAULT_CLOUDFLARE_API_URL) {
       localStorage.setItem(LS_CLOUDFLARE_API_URL_KEY, normalized);
     } else {
       localStorage.removeItem(LS_CLOUDFLARE_API_URL_KEY);
@@ -65,7 +82,20 @@ export function setCloudflareApiUrl(rawUrl: string): string {
     // ignore storage write error
   }
   resetDetectedEngine();
-  return normalized;
+  return normalized || getCloudflareApiUrl();
+}
+
+export function resetCloudflareApiUrl(): string {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(LS_CLOUDFLARE_API_URL_KEY);
+      localStorage.setItem(LS_CLOUDFLARE_UNIFIED_FLAG, '1');
+    }
+  } catch {
+    // ignore
+  }
+  resetDetectedEngine();
+  return getCloudflareApiUrl();
 }
 
 export function resetDetectedEngine(): void {
@@ -300,17 +330,28 @@ async function callBackend(
   return lastRes;
 }
 
+function compactRowForUpload(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (!t) continue;
+      out[k] = t;
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
 function compactPayrollItemForUpload(item: any): any {
   if (!item || typeof item !== 'object') return item;
   const raw = item.rawFields;
-  if (!raw || typeof raw !== 'object') return item;
-  const compactRaw: Record<string, any> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === undefined || v === null) continue;
-    if (typeof v === 'string' && v.trim() === '') continue;
-    compactRaw[k] = v;
-  }
-  return { ...item, rawFields: compactRaw };
+  const base = compactRowForUpload(item);
+  if (!raw || typeof raw !== 'object') return base;
+  return { ...base, rawFields: compactRowForUpload(raw) };
 }
 
 async function sendBatchInChunks(
@@ -611,9 +652,10 @@ export const api = {
   async batchImportPersonnel(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportPersonnel(items);
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
-      items,
-      50,
+      compacted,
+      120,
       (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
       2
     );
@@ -683,6 +725,13 @@ export const api = {
     return json.data;
   },
 
+  async getKaranehUnitPersonnel(): Promise<Personnel[]> {
+    const engine = await detectStorageEngine();
+    if (engine === 'indexeddb') return embeddedDb.getKaranehUnitPersonnel();
+    const json = await callBackend('/karaneh/unit-personnel');
+    return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت لیست پرسنل واحد');
+  },
+
   async saveKaraneh(record: Partial<KaranehRecord>) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.saveKaraneh(record);
@@ -692,12 +741,25 @@ export const api = {
   async batchImportKaraneh(period: string, items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportKaraneh(period, items);
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
-      items,
-      60,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk } }),
+      compacted,
+      150,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 45000 }),
       2
     );
+  },
+
+  async submitKaraneh(period: string, department?: string) {
+    const engine = await detectStorageEngine();
+    if (engine === 'indexeddb') return embeddedDb.submitKaraneh(period, department);
+    return callBackend('/karaneh/submit', { method: 'POST', body: { period, ...(department ? { department } : {}) } });
+  },
+
+  async reopenKaraneh(period: string, department?: string) {
+    const engine = await detectStorageEngine();
+    if (engine === 'indexeddb') return embeddedDb.reopenKaraneh(period, department);
+    return callBackend('/karaneh/reopen', { method: 'POST', body: { period, ...(department ? { department } : {}) } });
   },
 
   async deleteKaraneh(id: string) {
@@ -712,10 +774,16 @@ export const api = {
     return callBackend('/karaneh/batch-delete', { method: 'POST', body: { ids } });
   },
 
-  async deleteAllKaraneh(period?: string) {
+  async deleteAllKaraneh(period?: string, scope?: 'all' | 'submitted') {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.deleteAllKaraneh(period);
-    return callBackend('/karaneh/delete-all', { method: 'POST', body: period ? { period } : {} });
+    if (engine === 'indexeddb') return embeddedDb.deleteAllKaraneh(period, scope);
+    return callBackend('/karaneh/delete-all', {
+      method: 'POST',
+      body: {
+        ...(period ? { period } : {}),
+        ...(scope ? { scope } : {}),
+      },
+    });
   },
 
   // Job Groups
@@ -785,8 +853,10 @@ export const api = {
   async batchImportJobClassifications(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportJobClassifications(items);
-    return sendBatchInChunks(items, 40, (chunk) =>
-      callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk } })
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
+    return sendBatchInChunks(compacted, 120, (chunk) =>
+      callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
+      2
     );
   },
 
@@ -831,8 +901,10 @@ export const api = {
   async batchImportCommitments(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportCommitments(items);
-    return sendBatchInChunks(items, 40, (chunk) =>
-      callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk } })
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
+    return sendBatchInChunks(compacted, 120, (chunk) =>
+      callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
+      2
     );
   },
 
@@ -866,7 +938,7 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      15,
+      30,
       (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 45000 }),
       2
     );
@@ -1064,6 +1136,7 @@ export const api = {
   async getBootstrapData(options?: { lite?: boolean }): Promise<{
     personnel: Personnel[];
     karaneh: KaranehRecord[];
+    karanehPersonnel?: Personnel[];
     payroll: PayrollRecord[];
     jobGroups: JobGroup[];
     jobClassifications: JobClassificationRecord[];
@@ -1152,9 +1225,10 @@ export const api = {
       }
     }
 
-    const [pData, kData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
+    const [pData, kData, kpData, payData, jData, jcData, cData, volData, machData, urData, uData, sData] = await Promise.all([
       api.getPersonnel({ lite: wantLite }),
       api.getKaraneh(),
+      api.getKaranehUnitPersonnel().catch(() => [] as Personnel[]),
       wantLite ? Promise.resolve([] as PayrollRecord[]) : api.getPayroll(),
       api.getJobGroups(),
       api.getJobClassifications(),
@@ -1169,6 +1243,7 @@ export const api = {
     return {
       personnel: pData || [],
       karaneh: kData || [],
+      karanehPersonnel: kpData || [],
       payroll: payData || [],
       jobGroups: jData || [],
       jobClassifications: jcData || [],

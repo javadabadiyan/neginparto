@@ -20,7 +20,7 @@ export interface Env {
   ALLOWED_ORIGIN?: string;
 }
 
-const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+const TOKEN_TTL_MS = 1000 * 60 * 60 * 2; // 2 hours (strict security session expiration)
 
 // ================= CORS & RESPONSE HELPERS =================
 
@@ -281,6 +281,7 @@ function syncLegacyPermissions(perms: any) {
     canExportExcel: Boolean(
       perms.personnel.exportExcel ||
       perms.karaneh.exportExcel ||
+      perms.finalKaraneh?.exportExcel ||
       perms.jobGroups.exportExcel ||
       perms.commitments.exportExcel ||
       perms.payroll.exportExcel ||
@@ -306,7 +307,8 @@ function syncLegacyPermissions(perms: any) {
 function getFullAdminPermissions() {
   return syncLegacyPermissions({
     personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
+    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+    finalKaraneh: { view: true, edit: true, delete: true, deleteAll: true, exportExcel: true },
     jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
     commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
     payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
@@ -321,7 +323,8 @@ function getFullAdminPermissions() {
 function getEmptyPermissions() {
   return syncLegacyPermissions({
     personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
-    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
+    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] },
+    finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
     jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
     commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
     payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
@@ -339,6 +342,7 @@ function normalizePermissions(raw?: any) {
   const hasModernSchema = Boolean(
     (raw.personnel && typeof raw.personnel === 'object') ||
     (raw.karaneh && typeof raw.karaneh === 'object') ||
+    (raw.finalKaraneh && typeof raw.finalKaraneh === 'object') ||
     (raw.jobGroups && typeof raw.jobGroups === 'object') ||
     (raw.commitments && typeof raw.commitments === 'object') ||
     (raw.payroll && typeof raw.payroll === 'object') ||
@@ -361,7 +365,8 @@ function normalizePermissions(raw?: any) {
 
     return syncLegacyPermissions({
       personnel: { view: lp, create: lp, edit: lp, delete: lp && lu, deleteAll: false, importExcel: lp && li, exportExcel: lp && le, viewSalary: lp, documents: lp },
-      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le },
+      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le, submit: false, allowedUnits: [] },
+      finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: lj, create: lj, edit: lj, delete: lj && lu, deleteAll: false, importExcel: lj && li, exportExcel: lj && le },
       commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
       payroll: { view: lk || lp, create: lk || lp, edit: lk || lp, delete: (lk || lp) && lu, deleteAll: false, importExcel: (lk || lp) && li, exportExcel: (lk || lp) && le },
@@ -375,6 +380,7 @@ function normalizePermissions(raw?: any) {
 
   const p = raw.personnel || {};
   const k = raw.karaneh || {};
+  const fk = raw.finalKaraneh || {};
   const jg = raw.jobGroups || {};
   const c = raw.commitments || {};
   const pr = raw.payroll || {};
@@ -387,7 +393,24 @@ function normalizePermissions(raw?: any) {
 
   return syncLegacyPermissions({
     personnel: { view: b(p.view), create: b(p.create), edit: b(p.edit), delete: b(p.delete), deleteAll: b(p.deleteAll), importExcel: b(p.importExcel), exportExcel: b(p.exportExcel), viewSalary: b(p.viewSalary), documents: b(p.documents) },
-    karaneh: { view: b(k.view), create: b(k.create), edit: b(k.edit), delete: b(k.delete), deleteAll: b(k.deleteAll), importExcel: b(k.importExcel), exportExcel: b(k.exportExcel) },
+    karaneh: {
+      view: b(k.view),
+      create: b(k.create),
+      edit: b(k.edit),
+      delete: b(k.delete),
+      deleteAll: b(k.deleteAll),
+      importExcel: b(k.importExcel),
+      exportExcel: b(k.exportExcel),
+      submit: b(k.submit),
+      allowedUnits: Array.isArray(k.allowedUnits) ? k.allowedUnits.map(String).filter(Boolean) : [],
+    },
+    finalKaraneh: {
+      view: b(fk.view),
+      edit: b(fk.edit),
+      delete: b(fk.delete),
+      deleteAll: b(fk.deleteAll),
+      exportExcel: b(fk.exportExcel),
+    },
     jobGroups: { view: b(jg.view), create: b(jg.create), edit: b(jg.edit), delete: b(jg.delete), deleteAll: b(jg.deleteAll), importExcel: b(jg.importExcel), exportExcel: b(jg.exportExcel) },
     commitments: { view: b(c.view), create: b(c.create), edit: b(c.edit), delete: b(c.delete), deleteAll: b(c.deleteAll), print: b(c.print), archive: b(c.archive), importExcel: b(c.importExcel), exportExcel: b(c.exportExcel) },
     payroll: { view: b(pr.view), create: b(pr.create), edit: b(pr.edit), delete: b(pr.delete), deleteAll: b(pr.deleteAll), importExcel: b(pr.importExcel), exportExcel: b(pr.exportExcel) },
@@ -545,12 +568,38 @@ function hasMiningOrUnitPerm(user: any, action: string): boolean {
   return checkPermission(user, 'ceoDashboard', action) || checkPermission(user, 'unitOperations', action);
 }
 
+function getKaranehAllowedUnitsForUser(user: any): string[] {
+  const raw = user?.permissions?.karaneh?.allowedUnits;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x: any) => String(x || '').trim()).filter(Boolean);
+}
+
+function hasFullKaranehScope(user: any): boolean {
+  if (!user || !user.isActive) return false;
+  if (isSuperAdminUser(user) || checkPermission(user, 'finalKaraneh', 'view')) return true;
+  return getKaranehAllowedUnitsForUser(user).length === 0;
+}
+
+function isKaranehUnitAllowedForUser(user: any, deptName?: string): boolean {
+  if (!user || !user.isActive) return false;
+  if (hasFullKaranehScope(user)) return true;
+  const allowed = getKaranehAllowedUnitsForUser(user);
+  if (allowed.length === 0) return true;
+  if (!deptName) return false;
+  const norm = normKey(deptName);
+  return allowed.some((a) => {
+    const na = normKey(a);
+    return na === norm || norm.includes(na) || na.includes(norm);
+  });
+}
+
 function buildPresetPermissions(presetName: string) {
   const p = String(presetName || '').trim();
   if (p.includes('مدیر عامل') || p.includes('مدیرعامل')) {
     return normalizePermissions({
       personnel: { view: true, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, exportExcel: true },
+      karaneh: { view: true, exportExcel: true, allowedUnits: [] },
+      finalKaraneh: { view: true, exportExcel: true },
       jobGroups: { view: true, exportExcel: true },
       commitments: { view: true, print: true, exportExcel: true },
       payroll: { view: true, exportExcel: true },
@@ -558,6 +607,11 @@ function buildPresetPermissions(presetName: string) {
       smartDashboard: { view: true, exportExcel: true, print: true },
       ceoDashboard: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, print: true },
       unitOperations: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, allowedUnits: [] },
+    });
+  }
+  if (p.includes('واحد') && p.includes('کارانه')) {
+    return normalizePermissions({
+      karaneh: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
     });
   }
   if (p.includes('مدیر')) return getFullAdminPermissions();
@@ -575,7 +629,8 @@ function buildPresetPermissions(presetName: string) {
   if (p.includes('کارانه') || p.includes('حقوق')) {
     return normalizePermissions({
       personnel: { view: true, exportExcel: true, viewSalary: true },
-      karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
+      karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      finalKaraneh: { view: true, edit: true, exportExcel: true },
       jobGroups: { view: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
       system: { dashboardStats: true },
@@ -766,10 +821,37 @@ async function getPersonnelLookupMap(
 }
 
 async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  const CHUNK = 50;
+  const CHUNK = 25;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
   }
+}
+
+function buildMultiRowUpsertStmts(
+  db: D1Database,
+  table: string,
+  columns: string[],
+  conflictCol: string,
+  updateCols: string[],
+  rows: any[][]
+): D1PreparedStatement[] {
+  if (rows.length === 0) return [];
+  const maxRowsPerStmt = Math.max(1, Math.floor(80 / columns.length));
+  const colList = columns.join(', ');
+  const rowPlaceholder = `(${columns.map(() => '?').join(',')})`;
+  const updateSql = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
+  const stmts: D1PreparedStatement[] = [];
+  for (let i = 0; i < rows.length; i += maxRowsPerStmt) {
+    const slice = rows.slice(i, i + maxRowsPerStmt);
+    const valuesSql = slice.map(() => rowPlaceholder).join(',');
+    const sql = `INSERT INTO ${table} (${colList}) VALUES ${valuesSql} ON CONFLICT(${conflictCol}) DO UPDATE SET ${updateSql}`;
+    const binds: any[] = [];
+    for (const r of slice) {
+      for (const v of r) binds.push(v);
+    }
+    stmts.push(db.prepare(sql).bind(...binds));
+  }
+  return stmts;
 }
 
 async function touchLastSaved(db: D1Database): Promise<string> {
@@ -841,7 +923,7 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
     checkPermission(authUser, 'system', 'backupDatabase') ||
     checkPermission(authUser, 'system', 'restoreDatabase');
   const canPers = canStats || checkPermission(authUser, 'personnel', 'view');
-  const canKar = canStats || checkPermission(authUser, 'karaneh', 'view');
+  const canKar = canStats || checkPermission(authUser, 'karaneh', 'view') || checkPermission(authUser, 'finalKaraneh', 'view');
   const canPay = canStats || checkPermission(authUser, 'payroll', 'view');
   const canUsers = canStats || checkPermission(authUser, 'users', 'view');
   const canJg = canStats || checkPermission(authUser, 'jobGroups', 'view');
@@ -1261,7 +1343,7 @@ export default {
         const token = await createAuthToken(user, env);
         return jsonRes(request, env, {
           success: true,
-          data: { user: sanitizeUser(user), token },
+          data: { user: sanitizeUser(user), token, expiresAt: Date.now() + TOKEN_TTL_MS },
         });
       }
 
@@ -1287,6 +1369,9 @@ export default {
         const hideSalary = canPers && !checkPermission(authUser, 'personnel', 'viewSalary');
         const hideDocs = canPers && (!checkPermission(authUser, 'personnel', 'documents') || isLite);
         const canKar = checkPermission(authUser, 'karaneh', 'view');
+        const canFinalKar = checkPermission(authUser, 'finalKaraneh', 'view');
+        const canAnyKar = canKar || canFinalKar;
+        const canKarFull = canKar && hasFullKaranehScope(authUser);
         const canPay = !isLite && checkPermission(authUser, 'payroll', 'view');
         const canJg = checkPermission(authUser, 'jobGroups', 'view');
         const canCmt = checkPermission(authUser, 'commitments', 'view');
@@ -1300,7 +1385,8 @@ export default {
 
         const [
           personnelJson,
-          karanehJson,
+          karanehResult,
+          karanehPersJson,
           payrollJson,
           jobGroupsJson,
           jobClassificationsJson,
@@ -1344,7 +1430,34 @@ export default {
                 0
               )
             : getRawJsonArrayString(env.DB, 'personnel', '', [], 'data_json', persLimit, 0),
-          canKar ? getRawJsonArrayString(env.DB, 'karaneh', '', [], 'data_json', karLimit, 0) : Promise.resolve('[]'),
+          !canAnyKar
+            ? Promise.resolve({ json: '[]', total: 0 })
+            : canKarFull
+            ? getRawJsonArrayString(env.DB, 'karaneh', '', [], 'data_json', karLimit, 0).then((json) => ({ json, total: -1 }))
+            : getJsonRows(env.DB, 'karaneh').then((rows) => {
+                const filtered = rows.filter(
+                  (k: any) =>
+                    (canKar && isKaranehUnitAllowedForUser(authUser, k.department)) ||
+                    (canFinalKar && k.status === 'submitted')
+                );
+                return { json: JSON.stringify(filtered.slice(0, karLimit)), total: filtered.length };
+              }),
+          !canKar || canPers
+            ? Promise.resolve('[]')
+            : env.DB.prepare(
+                `SELECT id,
+                        TRIM(personnel_code) as personnelCode,
+                        COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
+                        COALESCE(json_extract(data_json, '$.department'), '') as department,
+                        COALESCE(json_extract(data_json, '$.position'), '') as position
+                 FROM personnel`
+              )
+                .all<any>()
+                .then(({ results }) =>
+                  JSON.stringify(
+                    (results || []).filter((p: any) => isKaranehUnitAllowedForUser(authUser, p.department))
+                  )
+                ),
           canPay ? getRawJsonArrayString(env.DB, 'payroll', '', [], 'data_json', payLimit, 0) : Promise.resolve('[]'),
           canJg ? getRawJsonArrayString(env.DB, 'job_groups') : Promise.resolve('[]'),
           canJg ? getRawJsonArrayString(env.DB, 'job_classifications') : Promise.resolve('[]'),
@@ -1374,10 +1487,18 @@ export default {
           computeDatabaseStatus(env.DB, authUser),
         ]);
 
+        const resolvedKarTotal =
+          !canAnyKar
+            ? 0
+            : karanehResult.total >= 0
+            ? karanehResult.total
+            : Number(dbStatus.totalKaranehRecords || 0);
+
         const payloadStr =
           `{"success":true,"data":{` +
           `"personnel":${personnelJson},` +
-          `"karaneh":${karanehJson},` +
+          `"karaneh":${karanehResult.json},` +
+          `"karanehPersonnel":${karanehPersJson},` +
           `"payroll":${payrollJson},` +
           `"jobGroups":${jobGroupsJson},` +
           `"jobClassifications":${jobClassificationsJson},` +
@@ -1390,7 +1511,7 @@ export default {
           `"syncVersion":${JSON.stringify(dbStatus.syncVersion)},` +
           `"lite":${isLite},` +
           `"personnelTotal":${canPers ? Number(dbStatus.totalPersonnel || 0) : 0},` +
-          `"karanehTotal":${canKar ? Number(dbStatus.totalKaranehRecords || 0) : 0},` +
+          `"karanehTotal":${resolvedKarTotal},` +
           `"payrollTotal":${checkPermission(authUser, 'payroll', 'view') ? Number(dbStatus.totalPayrollRecords || 0) : 0}` +
           `}}`;
 
@@ -1701,7 +1822,7 @@ export default {
           }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
         const nowStr = faDate();
@@ -1767,20 +1888,24 @@ export default {
           if (existing) updated++;
           else added++;
 
-          stmts.push(
-            env.DB.prepare(
-              'INSERT OR REPLACE INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)'
-            ).bind(merged.id, code, JSON.stringify(merged), nowStr)
-          );
+          pendingMap.set(merged.id, [merged.id, code, JSON.stringify(merged), nowStr]);
         }
 
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
             success: false,
             message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل اکسل یافت نشد. لطفاً ستون کد پرسنلی را در نگاشت اکسل مشخص کنید.',
           }, 400);
         }
 
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'personnel',
+          ['id', 'personnel_code', 'data_json', 'updated_at'],
+          'id',
+          ['personnel_code', 'data_json', 'updated_at'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {
@@ -1937,42 +2062,117 @@ export default {
       }
 
       // ================= KARANEH ROUTES =================
+      if (path === '/karaneh/unit-personnel' && method === 'GET') {
+        const canAccess =
+          checkPermission(authUser, 'karaneh', 'view') ||
+          checkPermission(authUser, 'karaneh', 'create') ||
+          checkPermission(authUser, 'karaneh', 'edit') ||
+          checkPermission(authUser, 'finalKaraneh', 'view');
+        if (!canAccess) return jsonRes(request, env, { success: true, data: [] });
+        const { results } = await env.DB.prepare(
+          `SELECT id,
+                  TRIM(personnel_code) as personnelCode,
+                  COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
+                  COALESCE(json_extract(data_json, '$.department'), '') as department,
+                  COALESCE(json_extract(data_json, '$.position'), '') as position
+           FROM personnel`
+        ).all<any>();
+        const rows = (results || []).filter((p: any) => isKaranehUnitAllowedForUser(authUser, p.department));
+        return jsonRes(request, env, { success: true, data: rows });
+      }
+
       if (path === '/karaneh' && method === 'GET') {
-        if (!checkPermission(authUser, 'karaneh', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        const canKarView = checkPermission(authUser, 'karaneh', 'view');
+        const canFinalView = checkPermission(authUser, 'finalKaraneh', 'view');
+        if (!canKarView && !canFinalView) return jsonRes(request, env, { success: true, data: [] });
         const period = url.searchParams.get('period');
+        const scope = url.searchParams.get('scope');
         const whereClause = period ? 'period = ?' : '';
         const binds = period ? [period] : [];
-        const pg = parsePagination(url);
-        if (pg.hasPagination) {
-          const countSql = whereClause ? `SELECT COUNT(*) as total FROM karaneh WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM karaneh';
-          const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
-          const [countRow, rawArr] = await Promise.all([
-            countStmt.first<{ total: number }>(),
-            getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds, 'data_json', pg.limit, pg.offset),
-          ]);
-          const total = Number(countRow?.total || 0);
-          const hasMore = pg.offset + pg.limit < total;
-          return rawJsonResponse(
-            request,
-            env,
-            `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+        const fullScope = hasFullKaranehScope(authUser);
+
+        if (canKarView && fullScope && scope !== 'submitted') {
+          const pg = parsePagination(url);
+          if (pg.hasPagination) {
+            const countSql = whereClause ? `SELECT COUNT(*) as total FROM karaneh WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM karaneh';
+            const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
+            const [countRow, rawArr] = await Promise.all([
+              countStmt.first<{ total: number }>(),
+              getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds, 'data_json', pg.limit, pg.offset),
+            ]);
+            const total = Number(countRow?.total || 0);
+            const hasMore = pg.offset + pg.limit < total;
+            return rawJsonResponse(
+              request,
+              env,
+              `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+            );
+          }
+          const rawArr = await getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds);
+          return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
+        }
+
+        let rows = await getJsonRows(env.DB, 'karaneh', whereClause, binds);
+        if (scope === 'submitted') {
+          if (!canFinalView && !isSuperAdminUser(authUser)) {
+            rows = rows.filter((k: any) => k.status === 'submitted' && isKaranehUnitAllowedForUser(authUser, k.department));
+          } else {
+            rows = rows.filter((k: any) => k.status === 'submitted');
+          }
+        } else {
+          rows = rows.filter(
+            (k: any) =>
+              (canKarView && isKaranehUnitAllowedForUser(authUser, k.department)) ||
+              (canFinalView && k.status === 'submitted')
           );
         }
-        const rawArr = await getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds);
-        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
+        const pg = parsePagination(url);
+        if (pg.hasPagination) {
+          const slice = rows.slice(pg.offset, pg.offset + pg.limit);
+          return jsonRes(request, env, {
+            success: true,
+            data: slice,
+            total: rows.length,
+            limit: pg.limit,
+            offset: pg.offset,
+            hasMore: pg.offset + pg.limit < rows.length,
+          });
+        }
+        return jsonRes(request, env, { success: true, data: rows });
       }
 
       if (path === '/karaneh/comparison' && method === 'GET') {
-        if (!checkPermission(authUser, 'karaneh', 'view')) return forbidden(request, env);
+        const canKarView = checkPermission(authUser, 'karaneh', 'view');
+        const canFinalView = checkPermission(authUser, 'finalKaraneh', 'view');
+        if (!canKarView && !canFinalView) return forbidden(request, env);
         const currentPeriod = url.searchParams.get('currentPeriod') || '1403-08';
         const previousPeriod = url.searchParams.get('previousPeriod') || '1403-07';
-        const currentRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [currentPeriod]);
-        const previousRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [previousPeriod]);
+        const scope = url.searchParams.get('scope');
+        let currentRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [currentPeriod]);
+        let previousRecords = await getJsonRows(env.DB, 'karaneh', 'period = ?', [previousPeriod]);
+
+        const filterForUser = (list: any[]) => {
+          if (scope === 'submitted') {
+            return canFinalView || isSuperAdminUser(authUser)
+              ? list.filter((k: any) => k.status === 'submitted')
+              : list.filter((k: any) => k.status === 'submitted' && isKaranehUnitAllowedForUser(authUser, k.department));
+          }
+          if (canKarView && hasFullKaranehScope(authUser)) return list;
+          return list.filter(
+            (k: any) =>
+              (canKarView && isKaranehUnitAllowedForUser(authUser, k.department)) ||
+              (canFinalView && k.status === 'submitted')
+          );
+        };
+
+        currentRecords = filterForUser(currentRecords);
+        previousRecords = filterForUser(previousRecords);
+
         const prevMap = new Map<string, any>();
-        for (const prev of previousRecords) prevMap.set(String(prev.personnelCode).trim(), prev);
+        for (const prev of previousRecords) prevMap.set(toAsciiDigits(prev.personnelCode).trim(), prev);
 
         const comparisonRows = currentRecords.map((curr: any) => {
-          const prev = prevMap.get(String(curr.personnelCode).trim());
+          const prev = prevMap.get(toAsciiDigits(curr.personnelCode).trim());
           const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
           const currFinal = Number(curr.finalKaraneh || 0);
           const diffAmount = currFinal - prevFinal;
@@ -1991,6 +2191,10 @@ export default {
             diffPercent,
             trend,
             notes: curr.notes || '',
+            status: curr.status === 'submitted' ? 'submitted' : 'draft',
+            submittedAt: curr.submittedAt || '',
+            submittedBy: curr.submittedBy || '',
+            submittedByName: curr.submittedByName || '',
           };
         });
         const totalCurrent = comparisonRows.reduce((s, r) => s + r.currentKaraneh, 0);
@@ -2020,33 +2224,69 @@ export default {
 
       if (path === '/karaneh' && method === 'POST') {
         const kData: any = await request.json().catch(() => ({}));
-        if (!checkPermission(authUser, 'karaneh', kData.id ? 'edit' : 'create')) return forbidden(request, env);
+        const isEdit = Boolean(kData.id);
+        const hasKarPerm = checkPermission(authUser, 'karaneh', isEdit ? 'edit' : 'create');
+        const hasFinalEditPerm = isEdit && checkPermission(authUser, 'finalKaraneh', 'edit');
+        if (!hasKarPerm && !hasFinalEditPerm) return forbidden(request, env);
         if (!kData.personnelCode || !kData.period) {
           return jsonRes(request, env, { success: false, message: 'کد پرسنلی و دوره کارانه الزامی است.' }, 400);
         }
-        const existingRow = await env.DB.prepare('SELECT id FROM karaneh WHERE period = ? AND TRIM(personnel_code) = ?')
-          .bind(kData.period, String(kData.personnelCode).trim())
-          .first<{ id: string }>();
+        const cleanCode = toAsciiDigits(kData.personnelCode).trim();
+        const existingRow = await env.DB.prepare('SELECT id, data_json FROM karaneh WHERE period = ? AND TRIM(personnel_code) = ?')
+          .bind(kData.period, cleanCode)
+          .first<{ id: string; data_json?: string }>();
+        const existingParsed = existingRow?.data_json ? JSON.parse(existingRow.data_json) : null;
+
+        let effectiveDept = String(kData.department || existingParsed?.department || '').trim();
+        if (!hasFullKaranehScope(authUser)) {
+          const allowed = getKaranehAllowedUnitsForUser(authUser);
+          if (!effectiveDept || effectiveDept === 'عمومی') {
+            effectiveDept = allowed[0] || 'عمومی';
+          }
+          if (!isKaranehUnitAllowedForUser(authUser, effectiveDept) || (existingParsed && !isKaranehUnitAllowedForUser(authUser, existingParsed.department))) {
+            return forbidden(request, env, `شما فقط مجاز به ثبت یا ویرایش کارانه واحد ${allowed.join('، ')} هستید.`);
+          }
+        } else if (!effectiveDept) {
+          effectiveDept = 'عمومی';
+        }
+
         const baseKaraneh = Number(kData.baseKaraneh || 0);
         const overtimeBonus = Number(kData.overtimeBonus || 0);
         const deductions = Number(kData.deductions || 0);
         const finalKaraneh = kData.finalKaraneh !== undefined ? Number(kData.finalKaraneh) : baseKaraneh + overtimeBonus - deductions;
+        const canKeepSubmitted = isSuperAdminUser(authUser) || checkPermission(authUser, 'finalKaraneh', 'edit');
+        const resolvedStatus =
+          kData.status === 'submitted' && canKeepSubmitted
+            ? 'submitted'
+            : kData.status === 'draft'
+            ? 'draft'
+            : existingParsed?.status === 'submitted' && canKeepSubmitted
+            ? 'submitted'
+            : existingParsed?.status || 'draft';
+
         const record = {
-          id: existingRow?.id || genId('k'),
-          personnelId: kData.personnelId || '',
-          personnelCode: String(kData.personnelCode).trim(),
-          fullName: kData.fullName || 'پرسنل',
-          department: kData.department || 'عمومی',
-          position: kData.position || '',
+          id: existingRow?.id || kData.id || genId('k'),
+          personnelId: kData.personnelId || existingParsed?.personnelId || '',
+          personnelCode: cleanCode,
+          fullName: kData.fullName || existingParsed?.fullName || 'پرسنل',
+          department: effectiveDept,
+          position: kData.position ?? existingParsed?.position ?? '',
           period: kData.period,
           baseKaraneh,
           overtimeBonus,
           deductions,
           finalKaraneh,
-          notes: kData.notes || '',
+          notes: kData.notes ?? existingParsed?.notes ?? '',
+          status: resolvedStatus,
+          submittedAt: resolvedStatus === 'submitted' ? (kData.submittedAt || existingParsed?.submittedAt || '') : '',
+          submittedBy: resolvedStatus === 'submitted' ? (kData.submittedBy || existingParsed?.submittedBy || '') : '',
+          submittedByName: resolvedStatus === 'submitted' ? (kData.submittedByName || existingParsed?.submittedByName || '') : '',
           updatedAt: faDate(),
         };
-        await env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
+        await env.DB.prepare(
+          `INSERT INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET period = excluded.period, personnel_code = excluded.personnel_code, data_json = excluded.data_json`
+        )
           .bind(record.id, record.period, record.personnelCode, JSON.stringify(record))
           .run();
         await touchLastSaved(env.DB);
@@ -2060,27 +2300,45 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره کارانه و لیست رکوردها الزامی است.' }, 400);
 
-        const { results: existingRows } = await env.DB.prepare(
-          `SELECT id,
-                  TRIM(personnel_code) as personnelCode,
-                  COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
-                  COALESCE(json_extract(data_json, '$.department'), '') as department,
-                  COALESCE(json_extract(data_json, '$.position'), '') as position
-           FROM karaneh WHERE period = ?`
-        )
-          .bind(period)
-          .all<any>();
+        const incomingCodes = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي', 'شماره پرسنلی') || '').trim())
+              .filter(Boolean)
+          )
+        );
+        if (incomingCodes.length === 0) {
+          return jsonRes(request, env, { success: false, message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل کارانه یافت نشد.' }, 400);
+        }
 
         const byCode = new Map<string, any>();
-        for (const k of existingRows || []) {
-          const c = toAsciiDigits(k.personnelCode).trim();
-          if (c) byCode.set(c, k);
+        for (let i = 0; i < incomingCodes.length; i += 75) {
+          const slice = incomingCodes.slice(i, i + 75);
+          const placeholders = slice.map(() => '?').join(',');
+          const { results: existingRows } = await env.DB.prepare(
+            `SELECT id, TRIM(personnel_code) as personnelCode, data_json FROM karaneh WHERE period = ? AND TRIM(personnel_code) IN (${placeholders})`
+          )
+            .bind(period, ...slice)
+            .all<any>();
+          for (const k of existingRows || []) {
+            const c = toAsciiDigits(k.personnelCode).trim();
+            if (!c) continue;
+            try {
+              byCode.set(c, JSON.parse(k.data_json));
+            } catch {
+              byCode.set(c, { id: k.id, personnelCode: c });
+            }
+          }
         }
-        const persMap = await getPersonnelLookupMap(env.DB);
 
-        const stmts: D1PreparedStatement[] = [];
+        const persMap = await getPersonnelLookupMap(env.DB, incomingCodes);
+        const fullScope = hasFullKaranehScope(authUser);
+        const allowedUnits = getKaranehAllowedUnitsForUser(authUser);
+        const defaultUnit = !fullScope && allowedUnits.length > 0 ? allowedUnits[0] : 'عمومی';
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skippedUnit = 0;
         const nowStr = faDate();
 
         for (const row of items) {
@@ -2088,10 +2346,17 @@ export default {
           if (!code) continue;
           const matchingP = persMap.get(code);
           const prev = byCode.get(code);
+          let dept = String(getVal(row, 'department', 'واحد اداری', 'واحد سازمانی', 'واحد') || matchingP?.department || prev?.department || '').trim();
+          if (!dept) dept = defaultUnit;
+          if (!fullScope && !isKaranehUnitAllowedForUser(authUser, dept)) {
+            skippedUnit++;
+            continue;
+          }
+
           const baseKaraneh = parseNum(getVal(row, 'baseKaraneh', 'مبلغ کارانه (ریال)', 'مبلغ کارانه', 'کارانه پایه', 'کارانه پایه (ریال)'));
           const overtimeBonus = parseNum(getVal(row, 'overtimeBonus', 'پاداش اضافه‌کاری', 'پاداش', 'پاداش و اضافه‌کار', 'پاداش مازاد'));
           const deductions = parseNum(getVal(row, 'deductions', 'کسورات کارانه', 'کسورات'));
-          const finalRaw = getVal(row, 'finalKaraneh', 'کارانه نهایی قابل پرداخت', 'کارانه نهایی', 'کارانه نهایی (ریال)');
+          const finalRaw = getVal(row, 'finalKaraneh', 'کارانه نهایی قابل پرداخت', 'کارانه نهایی', 'کارانه نهایی (ریال)', 'کارانه', 'مبلغ');
           const finalKaraneh = finalRaw !== undefined ? parseNum(finalRaw) : baseKaraneh + overtimeBonus - deductions;
 
           const record = {
@@ -2099,64 +2364,230 @@ export default {
             personnelId: matchingP?.id || prev?.personnelId || '',
             personnelCode: code,
             fullName: String(getVal(row, 'fullName', 'نام و نام خانوادگی') || matchingP?.fullName || prev?.fullName || 'پرسنل'),
-            department: String(getVal(row, 'department', 'واحد اداری', 'واحد سازمانی', 'واحد') || matchingP?.department || prev?.department || 'عمومی'),
-            position: String(getVal(row, 'position', 'پست سازمانی', 'پست', 'سمت') || matchingP?.position || prev?.position || ''),
+            department: dept,
+            position: String(getVal(row, 'position', 'پست سازمانی', 'پست و سمت', 'پست', 'سمت') || matchingP?.position || prev?.position || ''),
             period,
             baseKaraneh,
             overtimeBonus,
             deductions,
             finalKaraneh,
             notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
+            status: prev?.status === 'submitted' && fullScope ? 'submitted' : 'draft',
+            submittedAt: prev?.status === 'submitted' && fullScope ? (prev.submittedAt || '') : '',
+            submittedBy: prev?.status === 'submitted' && fullScope ? (prev.submittedBy || '') : '',
+            submittedByName: prev?.status === 'submitted' && fullScope ? (prev.submittedByName || '') : '',
             updatedAt: nowStr,
           };
           if (prev) updated++;
           else added++;
           byCode.set(code, record);
-          stmts.push(
-            env.DB.prepare('INSERT OR REPLACE INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
-              .bind(record.id, period, code, JSON.stringify(record))
-          );
+          pendingMap.set(record.id, [record.id, period, code, JSON.stringify(record)]);
         }
 
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
+          if (skippedUnit > 0) {
+            return forbidden(request, env, `هیچ‌یک از ردیف‌های اکسل متعلق به واحد مجاز شما (${allowedUnits.join('، ')}) نبود.`);
+          }
           return jsonRes(request, env, {
             success: false,
             message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل کارانه یافت نشد.',
           }, 400);
         }
 
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'karaneh',
+          ['id', 'period', 'personnel_code', 'data_json'],
+          'id',
+          ['period', 'personnel_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {
           success: true,
           added,
           updated,
-          message: `لیست کارانه دوره ${period} با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).`,
+          skippedUnit,
+          message: `لیست کارانه دوره ${period} با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی${skippedUnit > 0 ? `، ${skippedUnit} ردیف سایر واحدها نادیده گرفته شد` : ''}).`,
+        });
+      }
+
+      if (path === '/karaneh/submit' && method === 'POST') {
+        const canSubmit =
+          isSuperAdminUser(authUser) ||
+          checkPermission(authUser, 'karaneh', 'submit') ||
+          checkPermission(authUser, 'karaneh', 'create') ||
+          checkPermission(authUser, 'karaneh', 'edit') ||
+          checkPermission(authUser, 'karaneh', 'importExcel') ||
+          checkPermission(authUser, 'finalKaraneh', 'edit');
+        if (!canSubmit) return forbidden(request, env, 'شما مجوز ارسال کارانه به کارانه نهایی را ندارید.');
+        const body: any = await request.json().catch(() => ({}));
+        const period = parseYearMonth(body.period, String(body.period || '').trim());
+        const targetDept = String(body.department || '').trim();
+        if (!period) return jsonRes(request, env, { success: false, message: 'دوره کارانه الزامی است.' }, 400);
+        if (targetDept && !hasFullKaranehScope(authUser) && !isKaranehUnitAllowedForUser(authUser, targetDept)) {
+          return forbidden(request, env, 'شما مجاز به ارسال کارانه سایر واحدها نیستید.');
+        }
+
+        const rows = await getJsonRows(env.DB, 'karaneh', 'period = ?', [period]);
+        const fullScope = hasFullKaranehScope(authUser);
+        const nowTime = faDateTime();
+        const pendingMap = new Map<string, any[]>();
+        let submittedCount = 0;
+
+        for (const r of rows) {
+          if (targetDept && normKey(String(r.department || '')) !== normKey(targetDept)) continue;
+          if (!fullScope && !isKaranehUnitAllowedForUser(authUser, r.department)) continue;
+          const updatedRec = {
+            ...r,
+            status: 'submitted',
+            submittedAt: nowTime,
+            submittedBy: authUser.username,
+            submittedByName: authUser.fullName,
+            updatedAt: faDate(),
+          };
+          pendingMap.set(updatedRec.id, [updatedRec.id, period, String(updatedRec.personnelCode || '').trim(), JSON.stringify(updatedRec)]);
+          submittedCount++;
+        }
+
+        if (submittedCount === 0) {
+          return jsonRes(request, env, { success: false, message: 'رکورد کارانه‌ای برای ارسال در این دوره و واحد یافت نشد.' }, 400);
+        }
+
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'karaneh',
+          ['id', 'period', 'personnel_code', 'data_json'],
+          'id',
+          ['period', 'personnel_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
+        await batchExecuteChunked(env.DB, stmts);
+        await touchLastSaved(env.DB);
+        return jsonRes(request, env, {
+          success: true,
+          submittedCount,
+          message: `کارانه ${submittedCount} نفر در دوره ${period} با موفقیت تأیید و به صفحه «کارانه نهایی ارسالی» ارسال گردید.`,
+        });
+      }
+
+      if (path === '/karaneh/reopen' && method === 'POST') {
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'finalKaraneh', 'edit')) {
+          return forbidden(request, env, 'شما مجوز بازگرداندن کارانه به حالت پیش‌نویس را ندارید.');
+        }
+        const body: any = await request.json().catch(() => ({}));
+        const period = parseYearMonth(body.period, String(body.period || '').trim());
+        const targetDept = String(body.department || '').trim();
+        if (!period) return jsonRes(request, env, { success: false, message: 'دوره کارانه الزامی است.' }, 400);
+
+        const rows = await getJsonRows(env.DB, 'karaneh', 'period = ?', [period]);
+        const pendingMap = new Map<string, any[]>();
+        let reopenedCount = 0;
+
+        for (const r of rows) {
+          if (r.status !== 'submitted') continue;
+          if (targetDept && normKey(String(r.department || '')) !== normKey(targetDept)) continue;
+          const updatedRec = {
+            ...r,
+            status: 'draft',
+            submittedAt: '',
+            submittedBy: '',
+            submittedByName: '',
+            updatedAt: faDate(),
+          };
+          pendingMap.set(updatedRec.id, [updatedRec.id, period, String(updatedRec.personnelCode || '').trim(), JSON.stringify(updatedRec)]);
+          reopenedCount++;
+        }
+
+        if (reopenedCount > 0) {
+          const stmts = buildMultiRowUpsertStmts(
+            env.DB,
+            'karaneh',
+            ['id', 'period', 'personnel_code', 'data_json'],
+            'id',
+            ['period', 'personnel_code', 'data_json'],
+            Array.from(pendingMap.values())
+          );
+          await batchExecuteChunked(env.DB, stmts);
+          await touchLastSaved(env.DB);
+        }
+
+        return jsonRes(request, env, {
+          success: true,
+          reopenedCount,
+          message: `کارانه ${reopenedCount} نفر به حالت پیش‌نویس واحد بازگردانده شد.`,
         });
       }
 
       if (path.startsWith('/karaneh/') && method === 'DELETE') {
-        if (!checkPermission(authUser, 'karaneh', 'delete')) return forbidden(request, env);
+        const canDel = checkPermission(authUser, 'karaneh', 'delete') || checkPermission(authUser, 'finalKaraneh', 'delete');
+        if (!canDel) return forbidden(request, env);
         const id = decodeURIComponent(path.slice('/karaneh/'.length));
+        if (!hasFullKaranehScope(authUser)) {
+          const row = await env.DB.prepare('SELECT data_json FROM karaneh WHERE id = ?').bind(id).first<{ data_json: string }>();
+          if (row) {
+            const parsed = JSON.parse(row.data_json);
+            if (!isKaranehUnitAllowedForUser(authUser, parsed.department)) return forbidden(request, env);
+          }
+        }
         await env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id).run();
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'رکورد کارانه حذف شد.' });
       }
 
       if (path === '/karaneh/batch-delete' && method === 'POST') {
-        if (!checkPermission(authUser, 'karaneh', 'delete')) return forbidden(request, env);
+        const canDel = checkPermission(authUser, 'karaneh', 'delete') || checkPermission(authUser, 'finalKaraneh', 'delete');
+        if (!canDel) return forbidden(request, env);
         const body: any = await request.json().catch(() => ({}));
-        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
-        await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id)));
-        await touchLastSaved(env.DB);
+        let ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        if (!hasFullKaranehScope(authUser) && ids.length > 0) {
+          const allowedIds: string[] = [];
+          for (let i = 0; i < ids.length; i += 75) {
+            const slice = ids.slice(i, i + 75);
+            const ph = slice.map(() => '?').join(',');
+            const { results } = await env.DB.prepare(`SELECT id, data_json FROM karaneh WHERE id IN (${ph})`).bind(...slice).all<any>();
+            for (const r of results || []) {
+              const parsed = JSON.parse(r.data_json);
+              if (isKaranehUnitAllowedForUser(authUser, parsed.department)) allowedIds.push(r.id);
+            }
+          }
+          ids = allowedIds;
+        }
+        if (ids.length > 0) {
+          await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id)));
+          await touchLastSaved(env.DB);
+        }
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} رکورد کارانه حذف شد.` });
       }
 
       if (path === '/karaneh/delete-all' && method === 'POST') {
-        if (!checkPermission(authUser, 'karaneh', 'deleteAll')) return forbidden(request, env);
         const body: any = await request.json().catch(() => ({}));
+        const scope = body.scope === 'submitted' ? 'submitted' : 'all';
+        const hasPerm =
+          scope === 'submitted'
+            ? checkPermission(authUser, 'finalKaraneh', 'deleteAll') || checkPermission(authUser, 'karaneh', 'deleteAll')
+            : checkPermission(authUser, 'karaneh', 'deleteAll');
+        if (!hasPerm) return forbidden(request, env);
+
         let deletedCount = 0;
-        if (body.period) {
+        const fullScope = hasFullKaranehScope(authUser);
+        if (scope === 'submitted' || !fullScope) {
+          const rows = body.period
+            ? await getJsonRows(env.DB, 'karaneh', 'period = ?', [body.period])
+            : await getJsonRows(env.DB, 'karaneh');
+          const idsToDelete = rows
+            .filter((r: any) => {
+              if (scope === 'submitted' && r.status !== 'submitted') return false;
+              if (!fullScope && !isKaranehUnitAllowedForUser(authUser, r.department)) return false;
+              return true;
+            })
+            .map((r: any) => r.id);
+          deletedCount = idsToDelete.length;
+          if (idsToDelete.length > 0) {
+            await batchExecuteChunked(env.DB, idsToDelete.map((id: string) => env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id)));
+          }
+        } else if (body.period) {
           const c = await env.DB.prepare('SELECT COUNT(*) as c FROM karaneh WHERE period = ?').bind(body.period).first<{ c: number }>();
           deletedCount = Number(c?.c || 0);
           await env.DB.prepare('DELETE FROM karaneh WHERE period = ?').bind(body.period).run();
@@ -2298,20 +2729,56 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const { results: existingRows } = await env.DB.prepare(
-          `SELECT id, TRIM(personnel_code) as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications`
-        ).all<any>();
-        const existing = existingRows || [];
+        const incomingCodes = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim())
+              .filter(Boolean)
+          )
+        );
+        const incomingNats = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'nationalId', 'کد ملی', 'كد ملي') || '').trim())
+              .filter(Boolean)
+          )
+        );
+
         const byCode = new Map<string, string>();
         const byNat = new Map<string, string>();
-        for (const r of existing) {
-          const c = toAsciiDigits(r.personnelCode).trim();
-          const n = toAsciiDigits(r.nationalId).trim();
-          if (c) byCode.set(c, r.id);
-          if (n) byNat.set(n, r.id);
+
+        for (let i = 0; i < incomingCodes.length; i += 75) {
+          const slice = incomingCodes.slice(i, i + 75);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT id, TRIM(personnel_code) as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE TRIM(personnel_code) IN (${ph})`
+          )
+            .bind(...slice)
+            .all<any>();
+          for (const r of results || []) {
+            const c = toAsciiDigits(r.personnelCode).trim();
+            const n = toAsciiDigits(r.nationalId).trim();
+            if (c) byCode.set(c, r.id);
+            if (n) byNat.set(n, r.id);
+          }
+        }
+        for (let i = 0; i < incomingNats.length; i += 75) {
+          const slice = incomingNats.slice(i, i + 75);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT id, TRIM(personnel_code) as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE COALESCE(json_extract(data_json, '$.nationalId'), '') IN (${ph})`
+          )
+            .bind(...slice)
+            .all<any>();
+          for (const r of results || []) {
+            const c = toAsciiDigits(r.personnelCode).trim();
+            const n = toAsciiDigits(r.nationalId).trim();
+            if (c) byCode.set(c, r.id);
+            if (n) byNat.set(n, r.id);
+          }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
         const nowStr = faDate();
@@ -2350,19 +2817,24 @@ export default {
           else added++;
           if (code) byCode.set(code, rec.id);
           if (nationalId) byNat.set(nationalId, rec.id);
-          stmts.push(
-            env.DB.prepare('INSERT OR REPLACE INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
-              .bind(rec.id, rec.personnelCode, JSON.stringify(rec))
-          );
+          pendingMap.set(rec.id, [rec.id, rec.personnelCode, JSON.stringify(rec)]);
         }
 
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
             success: false,
             message: 'هیچ ردیف معتبری با کد پرسنلی، کد ملی یا نام خانوادگی در فایل یافت نشد.',
           }, 400);
         }
 
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'job_classifications',
+          ['id', 'personnel_code', 'data_json'],
+          'id',
+          ['personnel_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {
@@ -2455,8 +2927,15 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const persMap = await getPersonnelLookupMap(env.DB);
-        const stmts: D1PreparedStatement[] = [];
+        const incomingCodes = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim())
+              .filter(Boolean)
+          )
+        );
+        const persMap = incomingCodes.length > 0 ? await getPersonnelLookupMap(env.DB, incomingCodes) : new Map<string, any>();
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
 
         for (const row of items) {
@@ -2484,15 +2963,23 @@ export default {
             guarantorName: String(getVal(row, 'guarantorName', 'نام ضامن', 'ضامن') || '-'),
             notes: String(getVal(row, 'notes', 'توضیحات') || ''),
           };
-          stmts.push(env.DB.prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)').bind(rec.id, code, JSON.stringify(rec)));
+          pendingMap.set(rec.id, [rec.id, code, JSON.stringify(rec)]);
           added++;
         }
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
             success: false,
             message: 'هیچ ردیف معتبری با «کد پرسنلی» یا «نام پرسنل» در فایل تعهدات یافت نشد.',
           }, 400);
         }
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'commitments',
+          ['id', 'personnel_code', 'data_json'],
+          'id',
+          ['personnel_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, added, message: `${added} سند تعهد پرسنلی با موفقیت ذخیره شد.` });
@@ -2572,7 +3059,7 @@ export default {
           }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
         const nowStr = faDate();
@@ -2639,19 +3126,24 @@ export default {
           if (prevId) updated++;
           else added++;
           payIdMap.set(key, recordId);
-          stmts.push(
-            env.DB.prepare('INSERT OR REPLACE INTO payroll (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)')
-              .bind(record.id, targetPeriod, code, JSON.stringify(record))
-          );
+          pendingMap.set(record.id, [record.id, targetPeriod, code, JSON.stringify(record)]);
         }
 
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
             success: false,
             message: 'هیچ ردیف معتبری با «كد پرسنلي» در فایل حقوق یافت نشد. لطفاً در مرحله تطبیق ستون‌ها، ستون کد پرسنلی را انتخاب کنید.',
           }, 400);
         }
 
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'payroll',
+          ['id', 'period', 'personnel_code', 'data_json'],
+          'id',
+          ['period', 'personnel_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {

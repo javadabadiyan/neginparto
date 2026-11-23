@@ -15,7 +15,8 @@ import {
   Pickaxe,
   Layers,
   ChevronDown,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Send
 } from 'lucide-react';
 import { downloadKaranehTemplate, downloadPayrollTemplate } from '../utils/excel';
 import { normalizePermissions, getFirstAccessibleTab } from '../utils/permissions';
@@ -53,6 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const canViewJobGroups = isAdmin || Boolean(perms.jobGroups?.view);
   const canViewPayroll = isAdmin || Boolean(perms.payroll?.view);
   const canViewKaraneh = isAdmin || Boolean(perms.karaneh?.view);
+  const canViewFinalKaraneh = isAdmin || Boolean(perms.finalKaraneh?.view);
   const canViewUsers = isAdmin || Boolean(perms.users?.view);
   const canViewBackup = isAdmin || Boolean(perms.system?.backupDatabase) || Boolean(perms.system?.restoreDatabase);
   const defaultTab = getFirstAccessibleTab(perms, isAdmin);
@@ -88,6 +90,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       : []),
     ...(canViewKaraneh
       ? [{ id: 'karaneh', label: 'کارانه', icon: TrendingUp, accent: 'default' as const }]
+      : []),
+    ...(canViewFinalKaraneh
+      ? [{ id: 'final-karaneh', label: 'کارانه نهایی ارسالی', icon: Send, accent: 'default' as const }]
       : []),
     ...(canViewUsers
       ? [{ id: 'users', label: 'کاربران', icon: Shield, accent: 'default' as const }]

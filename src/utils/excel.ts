@@ -186,6 +186,89 @@ export function exportKaranehComparisonToExcel(
 }
 
 /**
+ * Export Final Submitted Consolidated Karaneh (2 sheets: employee details + unit summary & % change)
+ */
+export function exportFinalKaranehToExcel(
+  rows: KaranehComparisonRow[],
+  unitSummaries: Array<{
+    department: string;
+    employeesCount: number;
+    totalPrevious: number;
+    totalCurrent: number;
+    diffAmount: number;
+    diffPercent: number;
+    submittedAt?: string;
+    submittedByName?: string;
+  }>,
+  currentPeriodName: string,
+  previousPeriodName: string,
+  fileName = `کارانه_نهایی_ارسالی_واحدها_${currentPeriodName}.xlsx`
+) {
+  const detailsData = rows.map((r, index) => ({
+    'ردیف': index + 1,
+    'کد پرسنلی': r.personnelCode,
+    'نام و نام خانوادگی': r.fullName,
+    'واحد': r.department || '',
+    'پست': r.position || '',
+    [`کارانه ${previousPeriodName} (ماه قبل)`]: r.previousKaraneh,
+    [`کارانه ${currentPeriodName} (ماه جدید)`]: r.currentKaraneh,
+    'تغییر مبلغ (ریال)': r.diffAmount,
+    'درصد افزایش / تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+    'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+    'تأییدکننده واحد': r.submittedByName || '—',
+    'زمان ارسال': r.submittedAt || '—',
+    'توضیحات': r.notes || '',
+  }));
+
+  const unitData = unitSummaries.map((u, index) => ({
+    'ردیف': index + 1,
+    'نام واحد': u.department,
+    'تعداد پرسنل': u.employeesCount,
+    [`جمع ${previousPeriodName} (ریال)`]: u.totalPrevious,
+    [`جمع ${currentPeriodName} (ریال)`]: u.totalCurrent,
+    'اختلاف مبلغ (ریال)': u.diffAmount,
+    'درصد افزایش / تغییر': `${u.diffPercent.toFixed(1)}%`,
+    'ارسال‌کننده': u.submittedByName || '—',
+    'تاریخ ارسال نهایی': u.submittedAt || '—',
+  }));
+
+  const detailsSheet = XLSX.utils.json_to_sheet(detailsData);
+  detailsSheet['!cols'] = [
+    { wch: 6 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 14 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 25 },
+  ];
+
+  const unitSheet = XLSX.utils.json_to_sheet(unitData);
+  unitSheet['!cols'] = [
+    { wch: 6 },
+    { wch: 26 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 20 },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, detailsSheet, 'کارانه_نهایی_پرسنل');
+  XLSX.utils.book_append_sheet(workbook, unitSheet, 'تحلیل_و_خلاصه_واحدها');
+  XLSX.writeFile(workbook, fileName);
+}
+
+/**
  * Generate sample Excel template for Personnel import (Full exact 28 columns + optional salary/status)
  */
 export function downloadPersonnelTemplate() {
@@ -266,31 +349,32 @@ export function downloadPersonnelTemplate() {
 /**
  * Generate sample Excel template for Karaneh import
  */
-export function downloadKaranehTemplate() {
+export function downloadKaranehTemplate(defaultUnit = '') {
+  const unitName = defaultUnit || 'استخراج و معدن‌کاری';
   const sample = [
     {
       'کد پرسنلی': '10101',
       'نام و نام خانوادگی': 'رضا قاسمی',
-      'پست سازمانی': 'مدیر فناوری اطلاعات',
-      'واحد اداری': 'فناوری اطلاعات',
+      'واحد': unitName,
+      'پست': 'رئیس شیفت استخراج',
       'مبلغ کارانه (ریال)': 55000000,
-      'توضیحات': 'تحویل به موقع پروژه‌ها'
+      'توضیحات': 'عملکرد مطلوب ماهانه'
     },
     {
       'کد پرسنلی': '10102',
       'نام و نام خانوادگی': 'زهرا کریمی',
-      'پست سازمانی': 'رئیس حسابداری و بودجه',
-      'واحد اداری': 'امور مالی و اقتصادی',
+      'واحد': unitName,
+      'پست': 'کارشناس ارشد واحد',
       'مبلغ کارانه (ریال)': 48000000,
-      'توضیحات': 'بستن حساب‌های مالی دوره'
+      'توضیحات': 'تحویل به موقع امور دوره'
     },
     {
       'کد پرسنلی': '10103',
       'نام و نام خانوادگی': 'امیرحسین مرادی',
-      'پست سازمانی': 'کارشناس ارشد شبکه و امنیت',
-      'واحد اداری': 'فناوری اطلاعات',
+      'واحد': unitName,
+      'پست': 'سرپرست شیفت',
       'مبلغ کارانه (ریال)': 42000000,
-      'توضیحات': 'پایداری شبکه و سرورها'
+      'توضیحات': 'پشتیبانی و بهره‌وری'
     }
   ];
 
@@ -299,7 +383,7 @@ export function downloadKaranehTemplate() {
     { wch: 14 },
     { wch: 22 },
     { wch: 24 },
-    { wch: 20 },
+    { wch: 24 },
     { wch: 22 },
     { wch: 25 },
   ];

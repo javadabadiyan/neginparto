@@ -24,7 +24,10 @@ import {
   CheckSquare,
   BarChart3,
   Pickaxe,
-  Layers
+  Layers,
+  Send,
+  FileSpreadsheet,
+  Building2
 } from 'lucide-react';
 import {
   User,
@@ -42,6 +45,7 @@ import {
   getUnitSupervisorPermissions,
   getDispatchingOfficerPermissions,
   getWorkshopOfficerPermissions,
+  getUnitKaranehManagerPermissions,
   normalizePermissions,
   countActivePermissions
 } from '../utils/permissions';
@@ -68,6 +72,7 @@ const ROLE_SUGGESTIONS = [
   { label: 'مدیر عامل شرکت نگین پرتو نصر', preset: 'ceo' },
   { label: 'مسئول دیسپچینگ و کنترل تولید', preset: 'dispatching' },
   { label: 'مسئول تعمیرگاه و ماشین‌آلات سنگین', preset: 'workshop' },
+  { label: 'مدیر کارانه واحد (فقط واحد اختصاصی)', preset: 'unit_karaneh' },
   { label: 'سرپرست واحد عملیاتی معدن', preset: 'unit_supervisor' },
   { label: 'کارشناس کارگزینی و امور کارکنان', preset: 'hr' },
   { label: 'کارشناس ارزیابی عملکرد و کارانه', preset: 'karaneh' },
@@ -76,6 +81,17 @@ const ROLE_SUGGESTIONS = [
   { label: 'حسابدار حقوق و دستمزد', preset: 'karaneh' },
   { label: 'مشاهده‌گر و بازرس', preset: 'viewer' },
 ];
+
+const COMPANY_KARANEH_UNITS: string[] = Array.from(
+  new Set([
+    'فناوری اطلاعات',
+    'امور مالی و اقتصادی',
+    'منابع انسانی',
+    'تولید و عملیات',
+    'مدیریت و پشتیبانی',
+    ...MINING_UNITS_CATALOG.map((u) => u.unitName),
+  ])
+);
 
 export const UsersModule: React.FC<UsersModuleProps> = ({
   users,
@@ -107,6 +123,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
 
   // Excel import modal state
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [customKaranehUnitInput, setCustomKaranehUnitInput] = useState('');
 
   const isUserSelectable = (u: User) => u.username !== 'javadabadiyan' && u.id !== currentUser?.id;
 
@@ -210,7 +227,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   };
 
   // Helper to toggle all in a module
-  const handleSetModuleAll = <M extends 'personnel' | 'karaneh' | 'jobGroups' | 'commitments' | 'payroll' | 'users' | 'system' | 'smartDashboard' | 'ceoDashboard' | 'unitOperations'>(
+  const handleSetModuleAll = <M extends 'personnel' | 'karaneh' | 'finalKaraneh' | 'jobGroups' | 'commitments' | 'payroll' | 'users' | 'system' | 'smartDashboard' | 'ceoDashboard' | 'unitOperations'>(
     module: M,
     value: boolean
   ) => {
@@ -292,9 +309,81 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
     });
   };
 
+  const handleToggleKaranehAllowedUnit = (unitName: string) => {
+    const clean = unitName.trim();
+    if (!clean) return;
+    setFormData(prev => {
+      const k = prev.permissions.karaneh || {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false,
+        deleteAll: false,
+        importExcel: false,
+        exportExcel: false,
+        submit: false,
+        allowedUnits: []
+      };
+      const currentUnits = Array.isArray(k.allowedUnits) ? k.allowedUnits : [];
+      const exists = currentUnits.includes(clean);
+      const nextUnits = exists
+        ? currentUnits.filter(u => u !== clean)
+        : [...currentUnits, clean];
+      return {
+        ...prev,
+        permissions: normalizePermissions({
+          ...prev.permissions,
+          karaneh: {
+            ...k,
+            view: nextUnits.length > 0 ? true : k.view,
+            allowedUnits: nextUnits
+          }
+        })
+      };
+    });
+  };
+
+  const handleClearKaranehAllowedUnits = () => {
+    setFormData(prev => {
+      const k = prev.permissions.karaneh || getEmptyPermissions().karaneh;
+      return {
+        ...prev,
+        permissions: normalizePermissions({
+          ...prev.permissions,
+          karaneh: {
+            ...k,
+            allowedUnits: []
+          }
+        })
+      };
+    });
+  };
+
+  const handleAddCustomKaranehUnit = () => {
+    const clean = customKaranehUnitInput.trim();
+    if (!clean) return;
+    setFormData(prev => {
+      const k = prev.permissions.karaneh || getEmptyPermissions().karaneh;
+      const currentUnits = Array.isArray(k.allowedUnits) ? k.allowedUnits : [];
+      const nextUnits = currentUnits.includes(clean) ? currentUnits : [...currentUnits, clean];
+      return {
+        ...prev,
+        permissions: normalizePermissions({
+          ...prev.permissions,
+          karaneh: {
+            ...k,
+            view: true,
+            allowedUnits: nextUnits
+          }
+        })
+      };
+    });
+    setCustomKaranehUnitInput('');
+  };
+
   // Preset handlers
   const applyPreset = (
-    presetType: 'empty' | 'admin' | 'ceo' | 'hr' | 'karaneh' | 'dispatching' | 'workshop' | 'unit_supervisor' | 'viewer'
+    presetType: 'empty' | 'admin' | 'ceo' | 'hr' | 'karaneh' | 'dispatching' | 'workshop' | 'unit_supervisor' | 'unit_karaneh' | 'viewer'
   ) => {
     let perms: UserPermissions;
     if (presetType === 'empty') perms = getEmptyPermissions();
@@ -305,6 +394,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
     else if (presetType === 'dispatching') perms = getDispatchingOfficerPermissions();
     else if (presetType === 'workshop') perms = getWorkshopOfficerPermissions();
     else if (presetType === 'unit_supervisor') perms = getUnitSupervisorPermissions([]);
+    else if (presetType === 'unit_karaneh') perms = getUnitKaranehManagerPermissions([]);
     else perms = getDefaultViewerPermissions();
 
     setFormData(prev => ({
@@ -602,6 +692,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                 const norm = normalizePermissions(u.permissions);
                 const pCount = countModuleActive(norm.personnel as any);
                 const kCount = countModuleActive(norm.karaneh as any);
+                const fkCount = countModuleActive(norm.finalKaraneh as any);
                 const jCount = countModuleActive(norm.jobGroups as any);
                 const cCount = countModuleActive(norm.commitments as any);
                 const prCount = countModuleActive(norm.payroll as any);
@@ -610,7 +701,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                 const sdCount = countModuleActive(norm.smartDashboard as any);
                 const cdCount = countModuleActive(norm.ceoDashboard as any);
                 const uoCount = countModuleActive(norm.unitOperations as any);
-                const totalActive = pCount.active + kCount.active + jCount.active + cCount.active + prCount.active + uCount.active + sCount.active + sdCount.active + cdCount.active + uoCount.active;
+                const totalActive = pCount.active + kCount.active + fkCount.active + jCount.active + cCount.active + prCount.active + uCount.active + sCount.active + sdCount.active + cdCount.active + uoCount.active;
 
                 const isSuper = u.username === 'javadabadiyan' || u.role === 'super_admin';
                 const selectable = isUserSelectable(u);
@@ -675,8 +766,16 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                           </span>
                         )}
                         {norm.karaneh.view && (
-                          <span className={`px-1.5 py-0.5 rounded ${norm.karaneh.delete ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+                          <span className={`px-1.5 py-0.5 rounded persian-num ${norm.karaneh.delete ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
                             کارانه ({toPersianDigits(kCount.active)})
+                            {norm.karaneh.allowedUnits && norm.karaneh.allowedUnits.length > 0
+                              ? ` · ${toPersianDigits(norm.karaneh.allowedUnits.length)} واحد`
+                              : ''}
+                          </span>
+                        )}
+                        {norm.finalKaraneh?.view && (
+                          <span className="bg-violet-50 text-violet-800 border border-violet-200 px-1.5 py-0.5 rounded font-bold persian-num">
+                            کارانه نهایی ارسالی ({toPersianDigits(fkCount.active)})
                           </span>
                         )}
                         {norm.payroll?.view && (
@@ -975,6 +1074,13 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                     </button>
                     <button
                       type="button"
+                      onClick={() => applyPreset('unit_karaneh')}
+                      className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-800 rounded-lg text-[11px] font-bold transition-colors border border-violet-200"
+                    >
+                      الگوی مدیر کارانه واحد
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => applyPreset('viewer')}
                       className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-medium transition-colors border border-slate-200"
                     >
@@ -1003,6 +1109,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                   if (formData.permissions.jobGroups?.view) visibleTabs.push('رتبه‌های شغلی');
                   if (formData.permissions.payroll?.view) visibleTabs.push('حقوق و دستمزد');
                   if (formData.permissions.karaneh?.view) visibleTabs.push('کارانه');
+                  if (formData.permissions.finalKaraneh?.view) visibleTabs.push('کارانه نهایی ارسالی');
                   if (formData.permissions.users?.view) visibleTabs.push('مدیریت کاربران');
                   if (formData.permissions.system?.backupDatabase || formData.permissions.system?.restoreDatabase) visibleTabs.push('پشتیبان‌گیری');
 
@@ -1117,11 +1224,12 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                       {[
                         { key: 'view', label: 'مشاهده لیست، کارانه و تحلیل ماه قبل/جدید' },
                         { key: 'create', label: 'ثبت دستی کارانه برای پرسنل' },
-                        { key: 'edit', label: 'ویرایش مبالغ پایه، تشویقی و کسورات' },
+                        { key: 'edit', label: 'ویرایش مبالغ کارانه پرسنل' },
                         { key: 'delete', label: 'حذف رکورد کارانه پرسنل' },
                         { key: 'deleteAll', label: 'حذف کامل و پاکسازی کل جدول (Clear Table)' },
                         { key: 'importExcel', label: 'بارگذاری فایل اکسل کارانه ماهانه' },
                         { key: 'exportExcel', label: 'دریافت خروجی اکسل مقایسه‌ای کارانه' },
+                        { key: 'submit', label: 'تأیید و ارسال کارانه واحد به صفحه کارانه نهایی ارسالی' },
                       ].map(item => (
                         <label key={item.key} className="flex items-center gap-2.5 cursor-pointer select-none py-0.5 hover:text-emerald-600">
                           <input
@@ -1133,6 +1241,86 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                           <span className="text-slate-800 text-[11px]">{item.label}</span>
                         </label>
                       ))}
+                    </div>
+
+                    {/* جداسازی کارانه بر اساس واحد سازمانی */}
+                    <div className="pt-3 border-t border-emerald-100 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span className="font-bold text-slate-800 text-[11px]">
+                            واحدهای مجاز کارانه (جداسازی کارانه هر واحد):
+                          </span>
+                        </div>
+                        {(formData.permissions.karaneh?.allowedUnits?.length || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleClearKaranehAllowedUnits}
+                            className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
+                          >
+                            دسترسی به همه واحدها
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 leading-relaxed">
+                        {(formData.permissions.karaneh?.allowedUnits?.length || 0) === 0
+                          ? 'در حالت انتخاب‌نشده، دسترسی کارانه محدود به واحد خاصی نیست. برای ایزوله‌سازی مدیر واحد، واحد(های) او را انتخاب یا تایپ کنید.'
+                          : `${toPersianDigits(formData.permissions.karaneh?.allowedUnits?.length || 0)} واحد انتخاب شده است — این کاربر فقط کارانه همین واحدها را می‌بیند و ثبت می‌کند.`}
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-0.5">
+                        {Array.from(
+                          new Set([
+                            ...COMPANY_KARANEH_UNITS,
+                            ...(formData.permissions.karaneh?.allowedUnits || [])
+                          ])
+                        ).map(unitName => {
+                          const isChecked = Boolean(
+                            formData.permissions.karaneh?.allowedUnits?.includes(unitName)
+                          );
+                          return (
+                            <label
+                              key={unitName}
+                              className={`flex items-center gap-2 px-2 py-1 rounded-lg border text-[10.5px] cursor-pointer select-none transition-colors ${
+                                isChecked
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleKaranehAllowedUnit(unitName)}
+                                className="rounded-sm text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 shrink-0"
+                              />
+                              <span className="truncate">{unitName}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <input
+                          type="text"
+                          value={customKaranehUnitInput}
+                          onChange={(e) => setCustomKaranehUnitInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddCustomKaranehUnit();
+                            }
+                          }}
+                          placeholder="افزودن نام واحد دلخواه (دقیقاً مطابق ستون واحد در اکسل)..."
+                          className="flex-1 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-900"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddCustomKaranehUnit}
+                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shrink-0"
+                        >
+                          افزودن واحد
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1586,6 +1774,57 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                           );
                         })}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* 11. صفحه کارانه نهایی ارسالی واحدها */}
+                  <div className="bg-white p-4 rounded-xl border border-violet-200 shadow-2xs space-y-3 md:col-span-2">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-violet-50 text-violet-700">
+                          <Send className="w-4 h-4" />
+                        </div>
+                        <span className="font-bold text-slate-900 text-xs">
+                          ۱۱. صفحه تجمیعی «کارانه نهایی ارسالی واحدها» (مخصوص کاربر نهایی / مدیریت)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSetModuleAll('finalKaraneh', true)}
+                          className="text-[10px] text-violet-700 hover:underline px-1"
+                        >
+                          همه
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => handleSetModuleAll('finalKaraneh', false)}
+                          className="text-[10px] text-slate-500 hover:underline px-1"
+                        >
+                          هیچ‌کدام
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {[
+                        { key: 'view', label: 'مشاهده تجمیعی کارانه‌های ارسالی تمام واحدها و آنالیز رشد' },
+                        { key: 'edit', label: 'ویرایش مبالغ و بازگرداندن کارانه واحد به پیش‌نویس' },
+                        { key: 'delete', label: 'حذف تکی و گروهی ردیف‌های کارانه نهایی ارسالی' },
+                        { key: 'deleteAll', label: 'پاکسازی کامل کارانه‌های ارسالی دوره یا کل' },
+                        { key: 'exportExcel', label: 'خروجی اکسل جامع تمام واحدها + تحلیل درصد تغییرات' },
+                      ].map(item => (
+                        <label key={item.key} className="flex items-center gap-2.5 cursor-pointer select-none py-0.5 hover:text-violet-700">
+                          <input
+                            type="checkbox"
+                            checked={(formData.permissions.finalKaraneh as any)?.[item.key] || false}
+                            onChange={() => handleToggle('finalKaraneh', item.key as any)}
+                            className="rounded-sm text-violet-600 focus:ring-violet-500 w-4 h-4"
+                          />
+                          <span className="text-slate-800 text-[11px]">{item.label}</span>
+                        </label>
+                      ))}
                     </div>
                   </div>
 

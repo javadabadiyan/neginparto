@@ -106,7 +106,7 @@ export function getPeriodLabel(periodId: string): string {
   return toPersianDigits(periodId);
 }
 
-export const YEARS_LIST = Array.from({ length: 21 }, (_, idx) => String(1400 + idx));
+export const YEARS_LIST = Array.from({ length: 51 }, (_, idx) => String(1400 + idx));
 
 export function parsePeriod(periodId: string): { year: string; monthIndex: number; monthName: string } {
   if (!periodId || !periodId.includes('-')) {
