@@ -358,13 +358,16 @@ async function sendBatchInChunks(
   items: any[],
   chunkSize: number,
   sendChunk: (chunk: any[], chunkIndex: number, totalChunks: number) => Promise<any>,
-  concurrency = 2
+  concurrency = 1
 ): Promise<any> {
-  if (!Array.isArray(items) || items.length === 0) {
+  const nonEmptyItems = Array.isArray(items)
+    ? items.filter((item) => item && typeof item === 'object' && Object.keys(item).length > 0)
+    : [];
+  if (nonEmptyItems.length === 0) {
     return { success: false, message: 'هیچ ردیف معتبری در فایل اکسل برای ثبت وجود ندارد.' };
   }
 
-  const totalChunks = Math.ceil(items.length / chunkSize);
+  const totalChunks = Math.ceil(nonEmptyItems.length / chunkSize);
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
@@ -379,13 +382,25 @@ async function sendBatchInChunks(
     totalChunksCount: number,
     depth = 0
   ): Promise<any> => {
-    const res = await sendChunk(slice, chunkIndex, totalChunksCount);
+    let res = await sendChunk(slice, chunkIndex, totalChunksCount);
     if (res && res.success) return res;
 
-    const isRetryable =
-      Boolean(res?.networkError) || res?.status === 500 || res?.status === 502 || res?.status === 503 || res?.status === 504;
+    const isRetryable = (r: any) =>
+      Boolean(r?.networkError) ||
+      Boolean(r?.timeout) ||
+      r?.status === 429 ||
+      r?.status === 500 ||
+      r?.status === 502 ||
+      r?.status === 503 ||
+      r?.status === 504;
 
-    if (isRetryable && slice.length > 5 && depth < 2) {
+    if (isRetryable(res)) {
+      await new Promise((r) => setTimeout(r, 350));
+      res = await sendChunk(slice, chunkIndex, totalChunksCount);
+      if (res && res.success) return res;
+    }
+
+    if (isRetryable(res) && slice.length > 1 && depth < 5) {
       const mid = Math.ceil(slice.length / 2);
       const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunksCount, depth + 1);
       if (!left?.success) return left;
@@ -409,15 +424,10 @@ async function sendBatchInChunks(
       };
     }
 
-    if (isRetryable && depth === 0) {
-      await new Promise((r) => setTimeout(r, 250));
-      return sendChunk(slice, chunkIndex, totalChunksCount);
-    }
-
     return res;
   };
 
-  const parallelWidth = Math.max(1, Math.min(concurrency, 4));
+  const parallelWidth = Math.max(1, Math.min(concurrency, 3));
   for (let start = 0; start < totalChunks; start += parallelWidth) {
     const waveIndices: number[] = [];
     for (let offset = 0; offset < parallelWidth && start + offset < totalChunks; offset++) {
@@ -426,7 +436,7 @@ async function sendBatchInChunks(
 
     const waveResults = await Promise.all(
       waveIndices.map((idx) => {
-        const slice = items.slice(idx * chunkSize, (idx + 1) * chunkSize);
+        const slice = nonEmptyItems.slice(idx * chunkSize, (idx + 1) * chunkSize);
         return sendAdaptiveSlice(slice, idx, totalChunks).then((res) => ({ idx, res }));
       })
     );
@@ -434,8 +444,10 @@ async function sendBatchInChunks(
     for (const { idx, res } of waveResults) {
       if (!res || !res.success) {
         const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
+        const savedSoFar = totalInserted + totalUpdated;
+        const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
         const progressNote =
-          totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks})` : '';
+          totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks}${savedNote})` : '';
         return {
           success: false,
           message: `${baseMsg}${progressNote}`,
@@ -458,7 +470,7 @@ async function sendBatchInChunks(
       success: true,
       message: lastMessage,
       data: {
-        totalProcessed: items.length,
+        totalProcessed: nonEmptyItems.length,
         inserted: totalInserted,
         updated: totalUpdated,
         skipped: totalSkipped,
@@ -478,13 +490,13 @@ async function sendBatchInChunks(
   const summaryMsg =
     parts.length > 0
       ? `بارگذاری اکسل با موفقیت انجام شد (${parts.join('، ')}).`
-      : lastMessage || `تعداد ${items.length} ردیف با موفقیت در پایگاه داده ثبت شد.`;
+      : lastMessage || `تعداد ${nonEmptyItems.length} ردیف با موفقیت در پایگاه داده ثبت شد.`;
 
   return {
     success: true,
     message: summaryMsg,
     data: {
-      totalProcessed: items.length,
+      totalProcessed: nonEmptyItems.length,
       inserted: totalInserted,
       updated: totalUpdated,
       skipped: totalSkipped,
@@ -602,8 +614,11 @@ export const api = {
   async batchImportUsers(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportUsers(items);
-    return sendBatchInChunks(items, 15, (chunk) =>
-      callBackend('/users/batch-import', { method: 'POST', body: { items: chunk } })
+    return sendBatchInChunks(
+      items,
+      10,
+      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -655,9 +670,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      120,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
-      2
+      40,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -676,11 +691,12 @@ export const api = {
   async batchImportRelatives(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportRelatives(items);
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
-      items,
-      50,
-      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk } }),
-      2
+      compacted,
+      30,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -744,9 +760,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      150,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 45000 }),
-      2
+      50,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -854,9 +870,11 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportJobClassifications(items);
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
-    return sendBatchInChunks(compacted, 120, (chunk) =>
-      callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
-      2
+    return sendBatchInChunks(
+      compacted,
+      40,
+      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -902,9 +920,11 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportCommitments(items);
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
-    return sendBatchInChunks(compacted, 120, (chunk) =>
-      callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 45000 }),
-      2
+    return sendBatchInChunks(
+      compacted,
+      40,
+      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -938,9 +958,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      30,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 45000 }),
-      2
+      15,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -986,8 +1006,12 @@ export const api = {
   async batchImportMiningVolumes(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportMiningVolumes(items);
-    return sendBatchInChunks(items, 40, (chunk) =>
-      callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk } })
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
+    return sendBatchInChunks(
+      compacted,
+      30,
+      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -1025,8 +1049,12 @@ export const api = {
   async batchImportMiningMachinery(items: any[]) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportMiningMachinery(items);
-    return sendBatchInChunks(items, 40, (chunk) =>
-      callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk } })
+    const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
+    return sendBatchInChunks(
+      compacted,
+      30,
+      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      1
     );
   },
 
@@ -1070,12 +1098,17 @@ export const api = {
   async batchImportUnitReports(payload: { unitName?: string; period?: string; reportCategory?: string; items: any[] }) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.batchImportUnitReports(payload);
-    const items = Array.isArray(payload?.items) ? payload.items : [];
-    return sendBatchInChunks(items, 25, (chunk) =>
-      callBackend('/unit-reports/batch-import', {
-        method: 'POST',
-        body: { ...payload, items: chunk },
-      })
+    const items = Array.isArray(payload?.items) ? payload.items.map(compactRowForUpload) : [];
+    return sendBatchInChunks(
+      items,
+      20,
+      (chunk) =>
+        callBackend('/unit-reports/batch-import', {
+          method: 'POST',
+          body: { ...payload, items: chunk },
+          timeoutMs: 35000,
+        }),
+      1
     );
   },
 

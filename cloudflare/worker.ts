@@ -445,7 +445,8 @@ function toAsciiDigits(val: any): string {
 }
 
 const normKeyCache = new Map<string, string>();
-const normRowCache = new WeakMap<object, Map<string, any>>();
+const normRowCache = new WeakMap<object, Map<string, any> | null>();
+const ASCII_KEY_RE = /^[a-zA-Z0-9_]+$/;
 
 function normKey(key: string): string {
   const cached = normKeyCache.get(key);
@@ -467,13 +468,29 @@ function normKey(key: string): string {
 
 function getVal(row: Record<string, any>, ...keys: string[]): any {
   if (!row || typeof row !== 'object') return undefined;
-  for (const k of keys) {
-    if (row[k] !== undefined && row[k] !== null && row[k] !== '') return row[k];
+  for (let i = 0; i < keys.length; i++) {
+    const v = row[keys[i]];
+    if (v !== undefined && v !== null && v !== '') return v;
   }
   let map = normRowCache.get(row);
-  if (!map) {
+  if (map === undefined) {
+    let hasNonAsciiKey = false;
+    const rowKeys = Object.keys(row);
+    for (let i = 0; i < rowKeys.length; i++) {
+      if (!ASCII_KEY_RE.test(rowKeys[i])) {
+        hasNonAsciiKey = true;
+        break;
+      }
+    }
+    if (!hasNonAsciiKey) {
+      // Cache null sentinel so canonical mapper rows skip regex normalization on missing optional fields
+      normRowCache.set(row, null);
+      return undefined;
+    }
     map = new Map<string, any>();
-    for (const [rk, rv] of Object.entries(row)) {
+    for (let i = 0; i < rowKeys.length; i++) {
+      const rk = rowKeys[i];
+      const rv = row[rk];
       if (rv !== undefined && rv !== null && rv !== '') {
         const nk = normKey(rk);
         if (!map.has(nk)) map.set(nk, rv);
@@ -481,14 +498,15 @@ function getVal(row: Record<string, any>, ...keys: string[]): any {
     }
     normRowCache.set(row, map);
   }
-  for (const k of keys) {
-    const found = map.get(normKey(k));
+  if (map === null) return undefined;
+  for (let i = 0; i < keys.length; i++) {
+    const found = map.get(normKey(keys[i]));
     if (found !== undefined) return found;
   }
   return undefined;
 }
 
-function compactRawRow(row: Record<string, any>, maxKeys = 260): Record<string, any> {
+function compactRawRow(row: Record<string, any>, maxKeys = 150): Record<string, any> {
   const out: Record<string, any> = {};
   if (!row || typeof row !== 'object') return out;
   let count = 0;
@@ -821,7 +839,7 @@ async function getPersonnelLookupMap(
 }
 
 async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  const CHUNK = 25;
+  const CHUNK = 15;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
   }
@@ -837,20 +855,46 @@ function buildMultiRowUpsertStmts(
 ): D1PreparedStatement[] {
   if (rows.length === 0) return [];
   const maxRowsPerStmt = Math.max(1, Math.floor(80 / columns.length));
+  const MAX_STMT_CHARS = 180_000;
   const colList = columns.join(', ');
   const rowPlaceholder = `(${columns.map(() => '?').join(',')})`;
   const updateSql = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
   const stmts: D1PreparedStatement[] = [];
-  for (let i = 0; i < rows.length; i += maxRowsPerStmt) {
-    const slice = rows.slice(i, i + maxRowsPerStmt);
-    const valuesSql = slice.map(() => rowPlaceholder).join(',');
+
+  let currentSlice: any[][] = [];
+  let currentChars = 0;
+
+  const flushSlice = () => {
+    if (currentSlice.length === 0) return;
+    const valuesSql = currentSlice.map(() => rowPlaceholder).join(',');
     const sql = `INSERT INTO ${table} (${colList}) VALUES ${valuesSql} ON CONFLICT(${conflictCol}) DO UPDATE SET ${updateSql}`;
     const binds: any[] = [];
-    for (const r of slice) {
-      for (const v of r) binds.push(v);
+    for (let i = 0; i < currentSlice.length; i++) {
+      const r = currentSlice[i];
+      for (let j = 0; j < r.length; j++) binds.push(r[j]);
     }
     stmts.push(db.prepare(sql).bind(...binds));
+    currentSlice = [];
+    currentChars = 0;
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let rowChars = 0;
+    for (let j = 0; j < r.length; j++) {
+      if (typeof r[j] === 'string') rowChars += r[j].length;
+      else rowChars += 16;
+    }
+    if (
+      currentSlice.length > 0 &&
+      (currentSlice.length >= maxRowsPerStmt || currentChars + rowChars > MAX_STMT_CHARS)
+    ) {
+      flushSlice();
+    }
+    currentSlice.push(r);
+    currentChars += rowChars;
   }
+  flushSlice();
   return stmts;
 }
 

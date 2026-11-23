@@ -310,7 +310,7 @@ export default function App() {
         setSyncError(null);
       }
 
-      const useLiteFirst = !silent && activeTab !== 'payroll' && activeTab !== 'ceo-dashboard';
+      const useLiteFirst = activeTab !== 'payroll' && activeTab !== 'ceo-dashboard';
       const bundle = await api.getBootstrapData({ lite: useLiteFirst });
       if (loadedForUserIdRef.current !== activeUserId) return;
 
