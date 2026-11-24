@@ -43,6 +43,7 @@ import {
   downloadKaranehTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface KaranehModuleProps {
@@ -140,6 +141,8 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const [filterTrend, setFilterTrend] = useState<string>('all');
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -297,6 +300,17 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
     return matchesSearch && matchesTrend && matchesDept && matchesDup;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterTrend, filterDepartment, onlyDuplicates, currentPeriod, previousPeriod]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedRows = useMemo(
+    () => filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredRows, safePage, pageSize]
+  );
 
   // Handle open Add Modal (ثبت دستی کارانه)
   const handleOpenAdd = () => {
@@ -953,7 +967,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((row, idx) => {
+                paginatedRows.map((row, idx) => {
                   const rowRecordId = row.id || currentRecords.find(k => k.personnelCode === row.personnelCode)?.id;
                   const isSelected = !!rowRecordId && selectedIds.includes(rowRecordId);
                   const dupReasons = duplicateIndex.getRowDuplicateReasons(row);
@@ -983,7 +997,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                       </td>
                     )}
                     <td className="py-3.5 px-3 text-center text-slate-600 persian-num">
-                      {toPersianDigits(idx + 1)}
+                      {toPersianDigits((safePage - 1) * pageSize + idx + 1)}
                     </td>
                     <td className="py-3.5 px-3 font-bold text-slate-800 persian-num">
                       <div>{toPersianDigits(row.personnelCode)}</div>
@@ -1127,15 +1141,18 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
           </table>
         </div>
 
-        {/* Footer info bar */}
-        <div className="px-5 py-3 bg-slate-50/90 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-600 gap-2">
-          <span>
-            نمایش <b className="persian-num">{toPersianDigits(filteredRows.length)}</b> رکورد کارانه پرسنل برای دوره <b>{getPeriodLabel(currentPeriod)}</b> در مقایسه با <b>{getPeriodLabel(previousPeriod)}</b>
-          </span>
-          <span className="text-slate-600">
-            مبالغ و تحلیل مقایسه‌ای به صورت بلادرنگ در فایل پایگاه داده ذخیره می‌شود
-          </span>
-        </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filteredRows.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          extraRight={
+            <span className="text-slate-500">
+              دوره <b>{getPeriodLabel(currentPeriod)}</b> در مقایسه با <b>{getPeriodLabel(previousPeriod)}</b>
+            </span>
+          }
+        />
       </div>
 
       {/* Manual Entry Modal (ثبت دستی کارانه منطبق بر ستون‌های جدول) */}

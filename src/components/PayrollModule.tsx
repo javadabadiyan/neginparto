@@ -73,6 +73,7 @@ import {
   downloadPayrollComparisonHtml
 } from '../utils/payrollAnalytics';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface PayrollSliceInfo {
@@ -135,6 +136,8 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
   const [filterWorkLocation, setFilterWorkLocation] = useState<string>('all');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   // Analytics tab
   const [analyticsTab, setAnalyticsTab] = useState<'roles' | 'operators' | 'departments' | 'locations' | 'movers'>('roles');
@@ -335,6 +338,17 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
       return matchesSearch && matchesTrend && matchesRole && matchesDept && matchesLoc && matchesDup;
     });
   }, [comparisonRows, searchTerm, filterTrend, filterRoleTier, filterDepartment, filterWorkLocation, metricBasis, onlyDuplicates, duplicateIndex]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterTrend, filterRoleTier, filterDepartment, filterWorkLocation, metricBasis, onlyDuplicates, currentPeriod, previousPeriod]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedRows = useMemo(
+    () => filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredRows, safePage, pageSize]
+  );
 
   // Multi-Dimensional Comparative Analytics (Role Tier, Operators, Departments, Work Locations)
   const roleTierStats = useMemo(
@@ -1766,7 +1780,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((row, idx) => {
+                paginatedRows.map((row, idx) => {
                   const isSelected = selectedIds.includes(row.recordId);
                   const roleTier = classifyPayrollRoleTier(row.position, row.jobTitle);
                   const m = getRowMetricValues(row, metricBasis);
@@ -1793,7 +1807,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
                           />
                         </td>
                       )}
-                      <td className="py-3 px-2.5 text-center text-slate-600 persian-num">{toPersianDigits(idx + 1)}</td>
+                      <td className="py-3 px-2.5 text-center text-slate-600 persian-num">{toPersianDigits((safePage - 1) * pageSize + idx + 1)}</td>
                       <td className="py-3 px-3 font-bold text-slate-800 persian-num">
                         <div>{toPersianDigits(row.personnelCode)}</div>
                         {dupReasons.includes('personnelCode') && (
@@ -1902,6 +1916,18 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filteredRows.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          extraRight={
+            <span className="text-slate-500">
+              مقایسه <b>{getPeriodLabel(currentPeriod)}</b> با <b>{getPeriodLabel(previousPeriod)}</b>
+            </span>
+          }
+        />
       </div>
 
       {/* Detailed 226-Column Comparison & Payslip Modal */}
@@ -2379,35 +2405,44 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
                         </td>
                       </tr>
                     ) : (
-                      drilldownFilteredRows.map((r, i) => {
-                        const m = getRowMetricValues(r, metricBasis);
-                        return (
-                          <tr
-                            key={r.recordId}
-                            onClick={() => { setSelectedRow(r); setDetailTab('summary'); setPrintFallbackHint(false); }}
-                            className="hover:bg-indigo-50/40 cursor-pointer"
-                          >
-                            <td className="p-2.5 text-slate-500">{toPersianDigits(i + 1)}</td>
-                            <td className="p-2.5 font-bold text-slate-800">{toPersianDigits(r.personnelCode)}</td>
-                            <td className="p-2.5 font-bold text-slate-900">{r.fullName}</td>
-                            <td className="p-2.5 text-slate-600">{r.department || '—'} / {r.workLocation || '—'}</td>
-                            <td className="p-2.5 text-slate-700">{r.position || r.jobTitle || '—'}</td>
-                            <td className="p-2.5 text-center">
-                              {toPersianDigits(r.prevEffectiveDays)} → <b>{toPersianDigits(r.effectiveDays)}</b>
-                            </td>
-                            <td className="p-2.5 text-slate-600">{r.previousRecord ? formatRial(m.prev) : '—'}</td>
-                            <td className="p-2.5 font-bold text-indigo-900">{formatRial(m.curr)}</td>
-                            <td className={`p-2.5 font-bold ${m.diff > 0 ? 'text-emerald-700' : m.diff < 0 ? 'text-rose-700' : 'text-slate-500'}`}>
-                              {m.diff > 0 ? `+${formatRial(m.diff)}` : formatRial(m.diff)} ({m.trend === 'new' ? 'جدید' : formatPercent(m.diffPercent)})
-                            </td>
-                            <td className="p-2.5 text-center">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">
-                                <Eye className="w-3.5 h-3.5" /> فیش
-                              </span>
+                      <>
+                        {drilldownFilteredRows.slice(0, 200).map((r, i) => {
+                          const m = getRowMetricValues(r, metricBasis);
+                          return (
+                            <tr
+                              key={r.recordId}
+                              onClick={() => { setSelectedRow(r); setDetailTab('summary'); setPrintFallbackHint(false); }}
+                              className="hover:bg-indigo-50/40 cursor-pointer"
+                            >
+                              <td className="p-2.5 text-slate-500">{toPersianDigits(i + 1)}</td>
+                              <td className="p-2.5 font-bold text-slate-800">{toPersianDigits(r.personnelCode)}</td>
+                              <td className="p-2.5 font-bold text-slate-900">{r.fullName}</td>
+                              <td className="p-2.5 text-slate-600">{r.department || '—'} / {r.workLocation || '—'}</td>
+                              <td className="p-2.5 text-slate-700">{r.position || r.jobTitle || '—'}</td>
+                              <td className="p-2.5 text-center">
+                                {toPersianDigits(r.prevEffectiveDays)} → <b>{toPersianDigits(r.effectiveDays)}</b>
+                              </td>
+                              <td className="p-2.5 text-slate-600">{r.previousRecord ? formatRial(m.prev) : '—'}</td>
+                              <td className="p-2.5 font-bold text-indigo-900">{formatRial(m.curr)}</td>
+                              <td className={`p-2.5 font-bold ${m.diff > 0 ? 'text-emerald-700' : m.diff < 0 ? 'text-rose-700' : 'text-slate-500'}`}>
+                                {m.diff > 0 ? `+${formatRial(m.diff)}` : formatRial(m.diff)} ({m.trend === 'new' ? 'جدید' : formatPercent(m.diffPercent)})
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">
+                                  <Eye className="w-3.5 h-3.5" /> فیش
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {drilldownFilteredRows.length > 200 && (
+                          <tr>
+                            <td colSpan={10} className="py-3 px-4 text-center bg-amber-50 text-amber-800 text-xs font-bold">
+                              نمایش ۲۰۰ ردیف اول از مجموع {toPersianDigits(drilldownFilteredRows.length)} ردیف برای حفظ سرعت — برای مشاهده همه یا فیلتر دقیق‌تر از جستجو یا خروجی اکسل استفاده کنید.
                             </td>
                           </tr>
-                        );
-                      })
+                        )}
+                      </>
                     )}
                   </tbody>
                 </table>

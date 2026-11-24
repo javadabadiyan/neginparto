@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   HeartHandshake,
   Search,
@@ -22,6 +22,7 @@ import {
   downloadPersonnelRelativesTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface PersonnelRelativesTabProps {
@@ -59,6 +60,8 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
   const [relationFilter, setRelationFilter] = useState('all');
   const [onlyDependent, setOnlyDependent] = useState(false);
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const [selectedCompositeIds, setSelectedCompositeIds] = useState<string[]>([]);
   const [confirmBatchDeleteOpen, setConfirmBatchDeleteOpen] = useState(false);
@@ -163,6 +166,17 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
       return matchesSearch && matchesRelation && matchesDependent && matchesDup;
     });
   }, [allRelatives, searchTerm, relationFilter, onlyDependent, onlyDuplicates, relativeDupIndex, personnelNationalIds]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, relationFilter, onlyDependent, onlyDuplicates]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRelatives.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedRelatives = useMemo(
+    () => filteredRelatives.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredRelatives, safePage, pageSize]
+  );
 
   const getCompositeKey = (r: { personnelId: string; id: string }) => `${r.personnelId}::${r.id}`;
   const filteredKeys = filteredRelatives.map(getCompositeKey);
@@ -561,7 +575,7 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRelatives.map((r, idx) => {
+                paginatedRelatives.map((r, idx) => {
                   const compositeKey = getCompositeKey(r);
                   const isSelected = selectedCompositeIds.includes(compositeKey);
                   const isDupRel = relativeDupIndex.isDuplicateRow(r);
@@ -590,7 +604,7 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
                         </td>
                       )}
                       <td className="py-3 px-3 text-center text-slate-500 persian-num">
-                        {toPersianDigits(idx + 1)}
+                        {toPersianDigits((safePage - 1) * pageSize + idx + 1)}
                       </td>
                       <td className="py-3 px-3 font-bold text-indigo-700 persian-num">
                         {toPersianDigits(r.personnelCode || '')}
@@ -667,6 +681,13 @@ export const PersonnelRelativesTab: React.FC<PersonnelRelativesTabProps> = ({
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filteredRelatives.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* Add / Edit Relative Modal */}

@@ -29,6 +29,7 @@ import {
   downloadJobClassificationsTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex } from '../utils/duplicates';
 
 interface JobGroupsModuleProps {
@@ -100,6 +101,8 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterGroup, setFilterGroup] = useState('all');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   // Job Group modal
   const [isGroupFormOpen, setIsGroupFormOpen] = useState(false);
@@ -175,6 +178,17 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
     const matchesDup = !onlyDuplicates || duplicateIndex.isDuplicateRow(c);
     return matchesSearch && matchesGroup && matchesDup;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterGroup, onlyDuplicates, subTab]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredClassifications.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedClassifications = React.useMemo(
+    () => filteredClassifications.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredClassifications, safePage, pageSize]
+  );
 
   // Group CRUD handlers
   const handleOpenAddGroup = () => {
@@ -642,7 +656,7 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
                     </td>
                   </tr>
                 ) : (
-                  filteredClassifications.map((c, idx) => {
+                  paginatedClassifications.map((c, idx) => {
                     const isSelected = selectedClassIds.includes(c.id);
                     const dupReasons = duplicateIndex.getRowDuplicateReasons(c);
                     const isDup = dupReasons.length > 0;
@@ -667,7 +681,7 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
                           />
                         </td>
                       )}
-                      <td className="py-3 px-2.5 text-center text-slate-500">{toPersianDigits(idx + 1)}</td>
+                      <td className="py-3 px-2.5 text-center text-slate-500">{toPersianDigits((safePage - 1) * pageSize + idx + 1)}</td>
                       <td className="py-3 px-2.5 font-bold text-indigo-700">
                         <div>{toPersianDigits(c.personnelCode)}</div>
                         {dupReasons.includes('personnelCode') && (
@@ -731,6 +745,13 @@ export const JobGroupsModule: React.FC<JobGroupsModuleProps> = ({
               </tbody>
             </table>
           </div>
+          <TablePagination
+            currentPage={safePage}
+            totalItems={filteredClassifications.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
         </div>
       )}

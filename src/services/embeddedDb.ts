@@ -865,11 +865,18 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'users', 'importExcel') && !hasPerm(auth, 'users', 'create')) {
       return { success: false, message: 'شما مجوز بارگذاری اکسل کاربران را ندارید.' };
     }
+    const uIdxMap = new Map<string, number>();
+    db.users.forEach((u, i) => {
+      const k = String(u.username || '').trim().toLowerCase();
+      if (k && !uIdxMap.has(k)) uIdxMap.set(k, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const username = String(row.username || row['نام کاربری'] || '').trim();
       const fullName = String(row.fullName || row['نام و نام خانوادگی'] || '').trim();
-      if (!username || !fullName || username.toLowerCase() === 'javadabadiyan') continue;
+      const unameKey = username.toLowerCase();
+      if (!username || !fullName || unameKey === 'javadabadiyan') continue;
       const role = String(row.role || row['نقش سازمانی'] || 'کارشناس اداری').trim();
       if (role === 'super_admin' && !isSuperAdmin(auth)) continue;
       const department = String(row.department || row['واحد اداری'] || '').trim();
@@ -877,7 +884,7 @@ export const embeddedDb = {
       const isActive = rawActive !== 'غیرفعال' && rawActive !== 'مسدود' && rawActive !== 'false' && rawActive !== '0';
       const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'دسترسی صفر').trim();
       const rawPass = String(row.password || row['رمز عبور'] || '').trim();
-      const idx = db.users.findIndex((u) => u.username.toLowerCase() === username.toLowerCase());
+      const idx = uIdxMap.get(unameKey) ?? -1;
       if (idx >= 0) {
         const existing = db.users[idx];
         if (isSuperAdmin(existing) && !isSuperAdmin(auth)) continue;
@@ -890,17 +897,19 @@ export const embeddedDb = {
         };
         updated++;
       } else {
+        const newIdx = db.users.length;
         db.users.push({
           id: `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           username, password: hashPasswordClient(rawPass || '12345678'), fullName, role, department, isActive,
           permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissions(buildPresetPermissions(presetLabel)) : getEmptyPermissions(),
-          createdAt: new Date().toLocaleDateString('fa-IR'),
+          createdAt: todayFa,
         });
+        uIdxMap.set(unameKey, newIdx);
         added++;
       }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `بارگذاری کاربران از اکسل انجام شد (${added} کاربر جدید، ${updated} کاربر به‌روزرسانی شد).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `بارگذاری کاربران از اکسل انجام شد (${added} کاربر جدید، ${updated} کاربر به‌روزرسانی شد).` };
   },
 
   async batchDeleteUsers(ids: string[]) {
@@ -995,11 +1004,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'personnel', 'importExcel')) return { success: false, message: 'عدم دسترسی ورود اکسل.' };
+    const pIdxMap = new Map<string, number>();
+    db.personnel.forEach((p, i) => {
+      const k = String(p.personnelCode || '').trim();
+      if (k && !pIdxMap.has(k)) pIdxMap.set(k, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(getPayrollVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
       if (!code) continue;
-      const idx = db.personnel.findIndex((p) => String(p.personnelCode).trim() === code);
+      const idx = pIdxMap.get(code) ?? -1;
       const existing = idx >= 0 ? db.personnel[idx] : undefined;
       const firstName = String(getPayrollVal(row, 'firstName', 'نام') || '').trim();
       const lastName = String(getPayrollVal(row, 'lastName', 'نام خانوادگي', 'نام خانوادگی') || '').trim();
@@ -1039,13 +1054,18 @@ export const embeddedDb = {
         status: String(getPayrollVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
         baseSalary: Number(getPayrollVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
         notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
       if (idx >= 0) { db.personnel[idx] = { ...db.personnel[idx], ...itemData }; updated++; }
-      else { db.personnel.push({ id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...itemData, relatives: [], createdAt: new Date().toLocaleDateString('fa-IR') }); added++; }
+      else {
+        const newIdx = db.personnel.length;
+        db.personnel.push({ id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...itemData, relatives: [], createdAt: todayFa });
+        pIdxMap.set(code, newIdx);
+        added++;
+      }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `ورود اطلاعات انجام شد: ${added} نفر جدید اضافه شدند و ${updated} پرونده به‌روزرسانی گردید.` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `ورود اطلاعات انجام شد: ${added} نفر جدید اضافه شدند و ${updated} پرونده به‌روزرسانی گردید.` };
   },
 
   async batchDeletePersonnel(ids: string[]) {
@@ -1074,18 +1094,32 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'personnel', 'importExcel')) return { success: false, message: 'عدم دسترسی ورود اکسل.' };
+    const byCode = new Map<string, any>();
+    const byEmpId = new Map<string, any>();
+    const byNatId = new Map<string, any>();
+    const byName = new Map<string, any>();
+    for (const p of db.personnel) {
+      const c = String(p.personnelCode || '').trim();
+      const eid = String(p.employeeId || '').trim();
+      const nid = String(p.nationalId || '').trim();
+      const fn = normPayrollKey(String(p.fullName || ''));
+      if (c && !byCode.has(c)) byCode.set(c, p);
+      if (eid && !byEmpId.has(eid)) byEmpId.set(eid, p);
+      if (nid && !byNatId.has(nid)) byNatId.set(nid, p);
+      if (fn && !byName.has(fn)) byName.set(fn, p);
+    }
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0; let unmatched = 0;
     for (const row of items || []) {
       const pCode = String(getPayrollVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
       const pEmpId = String(getPayrollVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') || '').trim();
       const pNatId = String(getPayrollVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
       const pName = normPayrollKey(String(getPayrollVal(row, 'personnelName', 'نام کارمند', 'نام پرسنل', 'نام و نام خانوادگی کارمند') || ''));
-      const parent = db.personnel.find((p) =>
-        (pCode && String(p.personnelCode).trim() === pCode) ||
-        (pEmpId && String(p.employeeId || '').trim() === pEmpId) ||
-        (pNatId && String(p.nationalId || '').trim() === pNatId) ||
-        (pName && normPayrollKey(String(p.fullName || '')) === pName)
-      );
+      const parent =
+        (pCode ? byCode.get(pCode) : undefined) ||
+        (pEmpId ? byEmpId.get(pEmpId) : undefined) ||
+        (pNatId ? byNatId.get(pNatId) : undefined) ||
+        (pName ? byName.get(pName) : undefined);
       if (!parent) { unmatched++; continue; }
       const relFullName = String(getPayrollVal(row, 'fullName', 'نام و نام خانوادگی بستگان', 'نام بستگان', 'نام و نام خانوادگی') || '').trim();
       if (!relFullName) continue;
@@ -1096,7 +1130,7 @@ export const embeddedDb = {
       const isDependent = rawDep === '' ? true : !['خیر', 'نه', 'false', '0', 'ندارد'].includes(rawDep);
       const insuranceCovered = rawIns === '' ? isDependent : !['خیر', 'نه', 'false', '0', 'ندارد'].includes(rawIns);
       if (!Array.isArray(parent.relatives)) parent.relatives = [];
-      const existingIdx = parent.relatives.findIndex((r) =>
+      const existingIdx = parent.relatives.findIndex((r: any) =>
         (relNationalId && String(r.nationalId || '').trim() === relNationalId) ||
         (normPayrollKey(String(r.fullName || '')) === normPayrollKey(relFullName) && normPayrollKey(String(r.relation || '')) === normPayrollKey(relation))
       );
@@ -1117,8 +1151,8 @@ export const embeddedDb = {
         isDependent,
         insuranceCovered,
         notes: String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
-        createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
+        createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : todayFa,
       };
       if (existingIdx >= 0) {
         parent.relatives[existingIdx] = { ...parent.relatives[existingIdx], ...relPayload };
@@ -1127,7 +1161,7 @@ export const embeddedDb = {
         parent.relatives.push(relPayload);
         added++;
       }
-      parent.updatedAt = new Date().toLocaleDateString('fa-IR');
+      parent.updatedAt = todayFa;
     }
     await saveEmbeddedDb(db);
     return {
@@ -1135,6 +1169,7 @@ export const embeddedDb = {
       added,
       updated,
       unmatched,
+      data: { inserted: added, updated, addedRelatives: added, unmatched },
       message: `اطلاعات بستگان با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی${unmatched > 0 ? `، ${unmatched} ردیف بدون تطابق` : ''}).`,
     };
   },
@@ -1294,11 +1329,24 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'karaneh', 'importExcel')) return { success: false, message: 'عدم دسترسی ورود اکسل کارانه.' };
     const fullScope = hasFullKaranehScopeEmb(auth);
     const allowedUnits = getKaranehAllowedUnitsEmb(auth);
-    let count = 0;
+    const pMap = new Map<string, Personnel>();
+    for (const p of db.personnel) {
+      const k = String(p.personnelCode || '').trim();
+      if (k && !pMap.has(k)) pMap.set(k, p);
+    }
+    const kIdxMap = new Map<string, number>();
+    db.karaneh.forEach((k, i) => {
+      if (k.period === period) {
+        const c = String(k.personnelCode || '').trim();
+        if (c && !kIdxMap.has(c)) kIdxMap.set(c, i);
+      }
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
+    let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
       if (!code) continue;
-      const mp = db.personnel.find((p) => String(p.personnelCode).trim() === code);
+      const mp = pMap.get(code);
       const dept = String(
         row.department || row['واحد اداری'] || row['واحد سازمانی'] || row['واحد'] || (mp ? mp.department : (allowedUnits[0] || 'عمومی'))
       ).trim();
@@ -1313,7 +1361,7 @@ export const embeddedDb = {
       const deductions = Number(row.deductions || row['کسورات (ریال)'] || row['کسورات'] || 0);
       const explicitFinal = row.finalKaraneh ?? row['مبلغ کارانه (ریال)'] ?? row['مبلغ کارانه'] ?? row['کارانه خالص نهایی (ریال)'] ?? row['کارانه خالص'] ?? row['کارانه'] ?? row['مبلغ'] ?? row.amount;
       const finalKaraneh = explicitFinal !== undefined ? Number(explicitFinal) : (baseKaraneh + overtimeBonus - deductions);
-      const idx = db.karaneh.findIndex((k) => String(k.personnelCode).trim() === code && k.period === period);
+      const idx = kIdxMap.get(code) ?? -1;
       const existing = idx >= 0 ? db.karaneh[idx] : null;
       const rec: any = {
         id: existing ? existing.id : `k-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1332,13 +1380,14 @@ export const embeddedDb = {
         submittedAt: existing?.submittedAt,
         submittedBy: existing?.submittedBy,
         submittedByName: existing?.submittedByName,
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
-      if (idx >= 0) db.karaneh[idx] = rec; else db.karaneh.push(rec);
-      count++;
+      if (idx >= 0) { db.karaneh[idx] = rec; updated++; }
+      else { const newIdx = db.karaneh.length; db.karaneh.push(rec); kIdxMap.set(code, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت گردید).` };
+    const count = added + updated;
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت گردید).` };
   },
 
   async submitKaraneh(period: string, department?: string) {
@@ -1583,6 +1632,12 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'jobGroups', 'importExcel')) return { success: false, message: 'عدم دسترسی.' };
+    const jcIdxMap = new Map<string, number>();
+    db.jobClassifications.forEach((item, i) => {
+      const k = String(item.personnelCode || '').trim();
+      if (k && !jcIdxMap.has(k)) jcIdxMap.set(k, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode ?? row['کد پرسنلی'] ?? '').trim();
@@ -1603,14 +1658,14 @@ export const embeddedDb = {
         groupGapFrom1405: String(row.groupGapFrom1405 ?? row['فاصله گروه از 1405 به بعد'] ?? row['فاصله گروه از ۱۴۰۵ به بعد'] ?? ''),
         nextGroupGap: String(row.nextGroupGap ?? row['فاصله گروه بعدی'] ?? ''),
         jobTitle: String(row.jobTitle ?? row['شغل'] ?? ''), position: String(row.position ?? row['پست'] ?? row['پست سازمانی'] ?? ''),
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
-      const idx = db.jobClassifications.findIndex((i) => String(i.personnelCode).trim() === code);
+      const idx = jcIdxMap.get(code) ?? -1;
       if (idx >= 0) { db.jobClassifications[idx] = { ...db.jobClassifications[idx], ...mapped }; updated++; }
-      else { db.jobClassifications.push({ id: `jc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...mapped }); added++; }
+      else { const newIdx = db.jobClassifications.length; db.jobClassifications.push({ id: `jc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...mapped }); jcIdxMap.set(code, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `جدول طبقه‌بندی بارگذاری شد (${added} جدید، ${updated} به‌روزرسانی).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `جدول طبقه‌بندی بارگذاری شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
 
   async batchDeleteJobClassifications(ids: string[]) {
@@ -1701,11 +1756,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'commitments', 'importExcel')) return { success: false, message: 'عدم دسترسی.' };
+    const pMap = new Map<string, Personnel>();
+    for (const p of db.personnel) {
+      const k = String(p.personnelCode || '').trim();
+      if (k && !pMap.has(k)) pMap.set(k, p);
+    }
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
       if (!code) continue;
-      const mp = db.personnel.find((p) => String(p.personnelCode).trim() === code);
+      const mp = pMap.get(code);
       const archVal = String(row['بایگانی'] || row['وضعیت بایگانی'] || '').trim();
       const isArchived = archVal === 'بله' || archVal === 'بایگانی شده' || row.isArchived === true;
       db.commitments.push({
@@ -1719,7 +1780,7 @@ export const embeddedDb = {
         startDate: String(row.startDate || row['تاریخ شروع'] || '1403/01/01'),
         endDate: String(row.endDate || row['تاریخ سررسید'] || '1405/01/01'),
         status: row.status || row['وضعیت'] || 'جاری و معتبر',
-        isArchived, archivedAt: isArchived ? new Date().toLocaleDateString('fa-IR') : undefined,
+        isArchived, archivedAt: isArchived ? todayFa : undefined,
         archiveCode: isArchived ? `ARC-${Date.now().toString().slice(-5)}` : undefined,
         guarantorName: row.guarantorName || row['نام ضامن'] || '',
         notes: row.notes || row['توضیحات'] || '',
@@ -1727,7 +1788,7 @@ export const embeddedDb = {
       added++;
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `${added} فقره تعهد پرسنلی با موفقیت از اکسل ثبت گردید.` };
+    return { success: true, added, data: { inserted: added, updated: 0 }, message: `${added} فقره تعهد پرسنلی با موفقیت از اکسل ثبت گردید.` };
   },
 
   async batchDeleteCommitments(ids: string[]) {
@@ -1763,6 +1824,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'payroll', 'importExcel')) return { success: false, message: 'عدم دسترسی.' };
+    const pMap = new Map<string, Personnel>();
+    for (const p of db.personnel) {
+      const k = String(p.personnelCode || '').trim();
+      if (k && !pMap.has(k)) pMap.set(k, p);
+    }
+    const payIdxMap = new Map<string, number>();
+    db.payroll.forEach((r, i) => {
+      const key = `${String(r.personnelCode || '').trim()}::${r.period}`;
+      if (!payIdxMap.has(key)) payIdxMap.set(key, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(getPayrollVal(row, 'كد پرسنلي', 'کد پرسنلی', 'personnelCode') || '').trim();
@@ -1772,7 +1844,7 @@ export const embeddedDb = {
       const firstName = String(getPayrollVal(row, 'نام', 'firstName') || '').trim();
       const lastName = String(getPayrollVal(row, 'نام خانوادگي', 'نام خانوادگی', 'lastName') || '').trim();
       const fullNameRaw = String(getPayrollVal(row, 'نام و نام خانوادگي', 'نام و نام خانوادگی', 'fullName') || '').trim();
-      const mp = db.personnel.find((p) => String(p.personnelCode).trim() === code);
+      const mp = pMap.get(code);
       const fullName = fullNameRaw || `${firstName} ${lastName}`.trim() || (mp ? mp.fullName : 'پرسنل');
       const rec: any = {
         period: targetPeriod, yearMonthLabel: String(rawYm || targetPeriod.replace('-', '/')),
@@ -1811,14 +1883,15 @@ export const embeddedDb = {
         projectTitle: String(getPayrollVal(row, 'پروژه(عنوان تفصيل)', 'پروژه(عنوان تفصیل)') || ''),
         bankName: String(getPayrollVal(row, 'نام بانک') || ''),
         bankAccount: String(getPayrollVal(row, 'شماره حساب') || ''),
-        rawFields: row, updatedAt: new Date().toLocaleDateString('fa-IR'),
+        rawFields: row, updatedAt: todayFa,
       };
-      const idx = db.payroll.findIndex((r) => String(r.personnelCode).trim() === code && r.period === targetPeriod);
+      const payKey = `${code}::${targetPeriod}`;
+      const idx = payIdxMap.get(payKey) ?? -1;
       if (idx >= 0) { db.payroll[idx] = { ...db.payroll[idx], ...rec }; updated++; }
-      else { db.payroll.push({ id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...rec }); added++; }
+      else { const newIdx = db.payroll.length; db.payroll.push({ id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...rec }); payIdxMap.set(payKey, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `فایل حقوق در پایگاه داده داخلی ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `فایل حقوق در پایگاه داده داخلی ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
 
   async deletePayrollRecord(id: string) {
@@ -1916,6 +1989,12 @@ export const embeddedDb = {
       return { success: false, message: 'عدم دسترسی ورود اکسل آمار حجم عملیات.' };
     }
     if (!Array.isArray(db.miningVolumes)) db.miningVolumes = [];
+    const mvIdxMap = new Map<string, number>();
+    db.miningVolumes.forEach((v, i) => {
+      const key = `${v.period}::${normPayrollKey(v.unitName)}::${normPayrollKey(v.metricTitle)}`;
+      if (!mvIdxMap.has(key)) mvIdxMap.set(key, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
@@ -1930,17 +2009,18 @@ export const embeddedDb = {
       const unitLabel = String(getPayrollVal(row, 'unitLabel', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'تن').trim();
       const status = String(getPayrollVal(row, 'status', 'وضعیت تحقق', 'وضعیت') || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim();
       const notes = String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim();
-      const idx = db.miningVolumes.findIndex((v) => v.period === period && normPayrollKey(v.unitName) === normPayrollKey(unitName) && normPayrollKey(v.metricTitle) === normPayrollKey(metricTitle));
+      const mvKey = `${period}::${normPayrollKey(unitName)}::${normPayrollKey(metricTitle)}`;
+      const idx = mvIdxMap.get(mvKey) ?? -1;
       const rec: MiningVolumeRecord = {
         id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes,
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
       if (idx >= 0) { db.miningVolumes[idx] = rec; updated++; }
-      else { db.miningVolumes.push(rec); added++; }
+      else { const newIdx = db.miningVolumes.length; db.miningVolumes.push(rec); mvIdxMap.set(mvKey, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
 
   async deleteMiningVolume(id: string) {
@@ -2043,6 +2123,12 @@ export const embeddedDb = {
       return { success: false, message: 'عدم دسترسی ورود اکسل ماشین‌آلات.' };
     }
     if (!Array.isArray(db.miningMachinery)) db.miningMachinery = [];
+    const mmIdxMap = new Map<string, number>();
+    db.miningMachinery.forEach((m, i) => {
+      const k = String(m.machineCode || '').trim();
+      if (k && !mmIdxMap.has(k)) mmIdxMap.set(k, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const machineCode = String(getPayrollVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'کد تجهیز', 'پلاک تجهیز') || '').trim();
@@ -2059,7 +2145,7 @@ export const embeddedDb = {
           : rawStatus.includes('سرویس')
           ? 'سرویس دوره‌ای'
           : 'آماده به کار';
-      const idx = db.miningMachinery.findIndex((m) => String(m.machineCode).trim() === machineCode);
+      const idx = mmIdxMap.get(machineCode) ?? -1;
       const rec: MiningMachineryRecord = {
         id: idx >= 0 ? db.miningMachinery[idx].id : `mm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         machineCode,
@@ -2072,13 +2158,13 @@ export const embeddedDb = {
         estimatedReadyDate: String(getPayrollVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تاریخ آماده به کار') || '').trim(),
         operatorName: String(getPayrollVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'اپراتور') || '').trim(),
         notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') || '').trim(),
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
       if (idx >= 0) { db.miningMachinery[idx] = rec; updated++; }
-      else { db.miningMachinery.push(rec); added++; }
+      else { const newIdx = db.miningMachinery.length; db.miningMachinery.push(rec); mmIdxMap.set(machineCode, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
 
   async deleteMiningMachinery(id: string) {
@@ -2168,6 +2254,12 @@ export const embeddedDb = {
     const canUnit = hasPerm(auth, 'unitOperations', 'importExcel') || hasPerm(auth, 'unitOperations', 'create');
     if (!canCeo && !canUnit) return { success: false, message: 'عدم دسترسی ورود اکسل گزارش واحدها.' };
     if (!Array.isArray(db.unitReports)) db.unitReports = [];
+    const urIdxMap = new Map<string, number>();
+    db.unitReports.forEach((r, i) => {
+      const key = `${r.period}::${normPayrollKey(r.unitName)}::${normPayrollKey(r.metricName)}`;
+      if (!urIdxMap.has(key)) urIdxMap.set(key, i);
+    });
+    const todayFa = new Date().toLocaleDateString('fa-IR');
     let added = 0; let updated = 0;
     for (const row of payload.items || []) {
       const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'نام واحد', 'واحد', 'بخش') || payload.unitName || '').trim();
@@ -2176,12 +2268,17 @@ export const embeddedDb = {
       const metricName = String(getPayrollVal(row, 'metricName', 'عنوان شاخص / فعالیت', 'شرح شاخص', 'فعالیت', 'عنوان', 'موضوع') || '').trim();
       if (!unitName || !metricName) continue;
       if (!canCeo && !isUnitAllowedEmb(auth, unitName)) continue;
-      const idx = db.unitReports.findIndex((r) => r.period === period && normPayrollKey(r.unitName) === normPayrollKey(unitName) && normPayrollKey(r.metricName) === normPayrollKey(metricName));
+      const urKey = `${period}::${normPayrollKey(unitName)}::${normPayrollKey(metricName)}`;
+      const idx = urIdxMap.get(urKey) ?? -1;
       const rawFields: Record<string, string | number> = {};
       const srcRaw = row.rawFields && typeof row.rawFields === 'object' ? row.rawFields : row;
-      for (const [k, v] of Object.entries(srcRaw).slice(0, 100)) {
+      let rawCount = 0;
+      for (const [k, v] of Object.entries(srcRaw)) {
+        if (rawCount >= 100) break;
+        if (k.startsWith('ستون_')) continue;
         if (v !== undefined && v !== null && String(v).trim() !== '') {
           rawFields[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
+          rawCount++;
         }
       }
       const rec: UnitOperationalReport = {
@@ -2198,12 +2295,13 @@ export const embeddedDb = {
         submittedBy: String(getPayrollVal(row, 'submittedBy', 'ثبت‌کننده / مسئول واحد', 'مسئول واحد', 'ثبت‌کننده') || auth?.fullName || '').trim(),
         notes: String(getPayrollVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim(),
         rawFields,
-        updatedAt: new Date().toLocaleDateString('fa-IR'),
+        updatedAt: todayFa,
       };
-      if (idx >= 0) { db.unitReports[idx] = rec; updated++; } else { db.unitReports.push(rec); added++; }
+      if (idx >= 0) { db.unitReports[idx] = rec; updated++; }
+      else { const newIdx = db.unitReports.length; db.unitReports.push(rec); urIdxMap.set(urKey, newIdx); added++; }
     }
     await saveEmbeddedDb(db);
-    return { success: true, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` };
+    return { success: true, added, updated, data: { inserted: added, updated }, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
 
   async deleteUnitReport(id: string) {

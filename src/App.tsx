@@ -19,7 +19,7 @@ const LocalHostDatabaseModule = lazy(() => import('./components/LocalHostDatabas
 const SmartPersonnelDashboard = lazy(() => import('./components/SmartPersonnelDashboard').then((m) => ({ default: m.SmartPersonnelDashboard })));
 const CeoDashboardModule = lazy(() => import('./components/CeoDashboardModule').then((m) => ({ default: m.CeoDashboardModule })));
 const UnitOperationsModule = lazy(() => import('./components/UnitOperationsModule').then((m) => ({ default: m.UnitOperationsModule })));
-import { api } from './services/api';
+import { api, isBatchImportActive } from './services/api';
 import {
   User,
   Personnel,
@@ -120,14 +120,22 @@ export default function App() {
       if (domain === 'all') {
         await loadAllData({ silent: false, force: true });
       } else if (domain === 'personnel') {
-        const liteList = await api.getPersonnel({ lite: true });
+        const [liteList, latestStatus] = await Promise.all([
+          api.getPersonnel({ lite: true }),
+          api.getDatabaseStatus().catch(() => null),
+        ]);
         setPersonnelList(Array.isArray(liteList) ? liteList : []);
-        refreshDbStatusAsync();
+        if (latestStatus) {
+          setDbStatus(latestStatus);
+          const sv = (latestStatus as any)?.syncVersion;
+          if (sv) lastSyncVersionRef.current = String(sv);
+        }
         const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
         const perms = currentUser
           ? (isAdmin ? getFullAdminPermissions() : normalizePermissions(currentUser.permissions))
           : null;
-        if (isAdmin || perms?.personnel?.documents) {
+        const docsCount = Number((latestStatus as any)?.totalPersonnelWithDocs ?? (dbStatus as any)?.totalPersonnelWithDocs ?? 0);
+        if (docsCount > 0 && (isAdmin || perms?.personnel?.documents)) {
           api.getPersonnel({ lite: false }).then((fullList) => {
             if (Array.isArray(fullList) && fullList.length > 0) {
               setPersonnelList(fullList);
@@ -597,7 +605,7 @@ export default function App() {
     let checking = false;
 
     const checkCloudChanges = async () => {
-      if (disposed || checking || isReloadingDataRef.current) return;
+      if (disposed || checking || isReloadingDataRef.current || isBatchImportActive()) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       checking = true;
       try {

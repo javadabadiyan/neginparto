@@ -539,10 +539,15 @@ export function transformMappedRows(
 
     // برای حقوق و دستمزد یا گزارش واحدها، ستون‌های تکمیلی نگاشت‌نشده را نیز حفظ می‌کنیم تا داده‌ای از بین نرود
     if (moduleType === 'payroll' || moduleType === 'unitReports') {
+      let extraCount = 0;
       for (const [k, v] of Object.entries(rawRow)) {
-        if (!reverseMappedSourceHeaders.has(k) && out[k] === undefined && v !== '') {
-          out[k] = v;
-        }
+        if (extraCount >= 120) break;
+        if (k.startsWith('ستون_')) continue;
+        if (reverseMappedSourceHeaders.has(k) || out[k] !== undefined) continue;
+        if (v === undefined || v === null) continue;
+        if (typeof v === 'string' && v.trim() === '') continue;
+        out[k] = typeof v === 'string' ? v.trim() : v;
+        extraCount++;
       }
     }
 

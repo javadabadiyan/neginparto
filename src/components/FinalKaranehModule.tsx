@@ -35,6 +35,7 @@ import {
   numberToPersianWords
 } from '../utils/persian';
 import { exportFinalKaranehToExcel } from '../utils/excel';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface FinalKaranehModuleProps {
@@ -120,6 +121,8 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
   const [filterTrend, setFilterTrend] = useState<string>('all');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   // Selection & Modals
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -301,6 +304,17 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
       return matchesSearch && matchesDept && matchesTrend && matchesDup;
     });
   }, [comparisonRows, searchTerm, filterDepartment, filterTrend, onlyDuplicates, duplicateIndex, personnelNationalIdByCode]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterDepartment, filterTrend, onlyDuplicates, currentPeriod, previousPeriod]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedRows = useMemo(
+    () => filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredRows, safePage, pageSize]
+  );
 
   const filteredRecordIds = useMemo(
     () => filteredRows.map((r) => r.id).filter((id): id is string => Boolean(id)),
@@ -893,7 +907,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((row, idx) => {
+                paginatedRows.map((row, idx) => {
                   const isSelected = Boolean(row.id) && selectedIds.includes(row.id!);
                   const orig = currentSubmittedRecords.find((k) => k.id === row.id || k.personnelCode === row.personnelCode);
                   const dupReasons = duplicateIndex.getRowDuplicateReasons(row);
@@ -922,7 +936,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
                           )}
                         </td>
                       )}
-                      <td className="py-3 px-3 text-center text-slate-500 persian-num">{toPersianDigits(idx + 1)}</td>
+                      <td className="py-3 px-3 text-center text-slate-500 persian-num">{toPersianDigits((safePage - 1) * pageSize + idx + 1)}</td>
                       <td className="py-3 px-3 font-bold text-slate-800 persian-num">
                         <div>{toPersianDigits(row.personnelCode)}</div>
                         {dupReasons.includes('personnelCode') && (
@@ -1017,6 +1031,13 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filteredRows.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* Edit Submitted Record Modal */}

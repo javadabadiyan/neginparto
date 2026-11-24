@@ -16,6 +16,90 @@ import { embeddedDb } from './embeddedDb';
 
 export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
 
+export interface BatchImportProgress {
+  active: boolean;
+  processedRows: number;
+  totalRows: number;
+  completedChunks: number;
+  totalChunks: number;
+  savedRows: number;
+  failedRows: number;
+}
+
+const DEFAULT_BATCH_PROGRESS: BatchImportProgress = {
+  active: false,
+  processedRows: 0,
+  totalRows: 0,
+  completedChunks: 0,
+  totalChunks: 0,
+  savedRows: 0,
+  failedRows: 0,
+};
+
+let activeBatchImportCount = 0;
+let batchImportProgressState: BatchImportProgress = { ...DEFAULT_BATCH_PROGRESS };
+const batchProgressListeners = new Set<(p: BatchImportProgress) => void>();
+
+function emitBatchImportProgress(next: BatchImportProgress): void {
+  batchImportProgressState = next;
+  for (const listener of batchProgressListeners) {
+    try {
+      listener(next);
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
+export function subscribeBatchImportProgress(listener: (p: BatchImportProgress) => void): () => void {
+  batchProgressListeners.add(listener);
+  try {
+    listener(batchImportProgressState);
+  } catch {
+    // ignore
+  }
+  return () => {
+    batchProgressListeners.delete(listener);
+  };
+}
+
+export function isBatchImportActive(): boolean {
+  return activeBatchImportCount > 0 || batchImportProgressState.active;
+}
+
+async function runEmbeddedBatchWithProgress<T>(items: any[], fn: () => Promise<T>): Promise<T> {
+  const total = Array.isArray(items) ? items.length : 0;
+  activeBatchImportCount++;
+  emitBatchImportProgress({
+    active: true,
+    processedRows: 0,
+    totalRows: total,
+    completedChunks: 0,
+    totalChunks: 1,
+    savedRows: 0,
+    failedRows: 0,
+  });
+  try {
+    const res: any = await fn();
+    const saved = Number(res?.data?.inserted ?? res?.added ?? 0) + Number(res?.data?.updated ?? res?.updated ?? 0);
+    emitBatchImportProgress({
+      active: false,
+      processedRows: total,
+      totalRows: total,
+      completedChunks: 1,
+      totalChunks: 1,
+      savedRows: saved || (res?.success ? total : 0),
+      failedRows: res?.success ? 0 : total,
+    });
+    return res;
+  } finally {
+    activeBatchImportCount = Math.max(0, activeBatchImportCount - 1);
+    if (batchImportProgressState.active) {
+      emitBatchImportProgress({ ...batchImportProgressState, active: false });
+    }
+  }
+}
+
 const LS_CLOUDFLARE_API_URL_KEY = 'npn_cloudflare_api_url_v1';
 const LS_CLOUDFLARE_UNIFIED_FLAG = 'npn_cf_url_unified_v2';
 
@@ -334,6 +418,7 @@ function compactRowForUpload(row: any): any {
   if (!row || typeof row !== 'object') return row;
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(row)) {
+    if (k.startsWith('ستون_')) continue;
     if (v === undefined || v === null) continue;
     if (typeof v === 'string') {
       const t = v.trim();
@@ -367,14 +452,28 @@ async function sendBatchInChunks(
     return { success: false, message: 'هیچ ردیف معتبری در فایل اکسل برای ثبت وجود ندارد.' };
   }
 
-  const totalChunks = Math.ceil(nonEmptyItems.length / chunkSize);
+  const totalRows = nonEmptyItems.length;
+  const totalChunks = Math.ceil(totalRows / chunkSize);
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
+  let totalSkippedUnit = 0;
   let totalMatched = 0;
   let totalUnmatched = 0;
   let totalAddedRelatives = 0;
+  let processedRows = 0;
+  let completedChunks = 0;
+  let failedRows = 0;
   let lastMessage = '';
+  let lastFailureMessage = '';
+
+  const isAuthErr = (r: any) => r?.status === 401 || r?.status === 403;
+  const isRetryable = (r: any) =>
+    !isAuthErr(r) &&
+    (Boolean(r?.networkError) ||
+      Boolean(r?.timeout) ||
+      r?.status === 429 ||
+      (typeof r?.status === 'number' && r.status >= 500 && r.status <= 504));
 
   const sendAdaptiveSlice = async (
     slice: any[],
@@ -384,15 +483,7 @@ async function sendBatchInChunks(
   ): Promise<any> => {
     let res = await sendChunk(slice, chunkIndex, totalChunksCount);
     if (res && res.success) return res;
-
-    const isRetryable = (r: any) =>
-      Boolean(r?.networkError) ||
-      Boolean(r?.timeout) ||
-      r?.status === 429 ||
-      r?.status === 500 ||
-      r?.status === 502 ||
-      r?.status === 503 ||
-      r?.status === 504;
+    if (isAuthErr(res)) return res;
 
     if (isRetryable(res)) {
       await new Promise((r) => setTimeout(r, 350));
@@ -400,26 +491,34 @@ async function sendBatchInChunks(
       if (res && res.success) return res;
     }
 
-    if (isRetryable(res) && slice.length > 1 && depth < 5) {
+    if (isRetryable(res) && slice.length > 1 && depth < 6) {
       const mid = Math.ceil(slice.length / 2);
       const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunksCount, depth + 1);
-      if (!left?.success) return left;
+      if (isAuthErr(left)) return left;
       const right = await sendAdaptiveSlice(slice.slice(mid), chunkIndex, totalChunksCount, depth + 1);
-      if (!right?.success) return right;
-      const ld = left.data || {};
-      const rd = right.data || {};
+      if (isAuthErr(right)) return right;
+
+      const leftOk = Boolean(left?.success);
+      const rightOk = Boolean(right?.success);
+      if (!leftOk && !rightOk) return left || right;
+
+      const ld = leftOk ? (left.data || {}) : {};
+      const rd = rightOk ? (right.data || {}) : {};
+      const partialFail = (!leftOk ? mid : 0) + (!rightOk ? slice.length - mid : 0);
       return {
         success: true,
-        message: right.message || left.message,
-        added: Number(left.added || 0) + Number(right.added || 0),
-        updated: Number(left.updated || 0) + Number(right.updated || 0),
+        message: (rightOk ? right.message : left.message) || '',
+        added: (leftOk ? Number(left.added || 0) : 0) + (rightOk ? Number(right.added || 0) : 0),
+        updated: (leftOk ? Number(left.updated || 0) : 0) + (rightOk ? Number(right.updated || 0) : 0),
         data: {
-          inserted: Number(ld.inserted ?? left.added ?? 0) + Number(rd.inserted ?? right.added ?? 0),
-          updated: Number(ld.updated ?? left.updated ?? 0) + Number(rd.updated ?? right.updated ?? 0),
-          skipped: Number(ld.skipped || 0) + Number(rd.skipped || 0),
-          matched: Number(ld.matched || 0) + Number(rd.matched || 0),
-          unmatched: Number(ld.unmatched || 0) + Number(rd.unmatched || 0),
-          addedRelatives: Number(ld.addedRelatives || 0) + Number(rd.addedRelatives || 0),
+          inserted: (leftOk ? Number(ld.inserted ?? left.added ?? 0) : 0) + (rightOk ? Number(rd.inserted ?? right.added ?? 0) : 0),
+          updated: (leftOk ? Number(ld.updated ?? left.updated ?? 0) : 0) + (rightOk ? Number(rd.updated ?? right.updated ?? 0) : 0),
+          skipped: (leftOk ? Number(ld.skipped || 0) : 0) + (rightOk ? Number(rd.skipped || 0) : 0),
+          skippedUnit: (leftOk ? Number(ld.skippedUnit ?? left.skippedUnit ?? 0) : 0) + (rightOk ? Number(rd.skippedUnit ?? right.skippedUnit ?? 0) : 0),
+          matched: (leftOk ? Number(ld.matched || 0) : 0) + (rightOk ? Number(rd.matched || 0) : 0),
+          unmatched: (leftOk ? Number(ld.unmatched || 0) : 0) + (rightOk ? Number(rd.unmatched || 0) : 0),
+          addedRelatives: (leftOk ? Number(ld.addedRelatives || 0) : 0) + (rightOk ? Number(rd.addedRelatives || 0) : 0),
+          failedSliceRows: Number(ld.failedSliceRows || 0) + Number(rd.failedSliceRows || 0) + partialFail,
         },
       };
     }
@@ -427,84 +526,176 @@ async function sendBatchInChunks(
     return res;
   };
 
-  const parallelWidth = Math.max(1, Math.min(concurrency, 3));
-  for (let start = 0; start < totalChunks; start += parallelWidth) {
-    const waveIndices: number[] = [];
-    for (let offset = 0; offset < parallelWidth && start + offset < totalChunks; offset++) {
-      waveIndices.push(start + offset);
-    }
+  activeBatchImportCount++;
+  emitBatchImportProgress({
+    active: true,
+    processedRows: 0,
+    totalRows,
+    completedChunks: 0,
+    totalChunks,
+    savedRows: 0,
+    failedRows: 0,
+  });
 
-    const waveResults = await Promise.all(
-      waveIndices.map((idx) => {
-        const slice = nonEmptyItems.slice(idx * chunkSize, (idx + 1) * chunkSize);
-        return sendAdaptiveSlice(slice, idx, totalChunks).then((res) => ({ idx, res }));
-      })
-    );
+  try {
+    const parallelWidth = Math.max(1, Math.min(concurrency, 3));
+    let consecutiveFailedWaves = 0;
 
-    for (const { idx, res } of waveResults) {
-      if (!res || !res.success) {
-        const baseMsg = res?.message || 'خطا در ثبت اطلاعات در پایگاه داده.';
-        const savedSoFar = totalInserted + totalUpdated;
-        const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
-        const progressNote =
-          totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks}${savedNote})` : '';
-        return {
-          success: false,
-          message: `${baseMsg}${progressNote}`,
-          data: res?.data,
-        };
+    for (let start = 0; start < totalChunks; start += parallelWidth) {
+      const waveIndices: number[] = [];
+      for (let offset = 0; offset < parallelWidth && start + offset < totalChunks; offset++) {
+        waveIndices.push(start + offset);
       }
-      const d = res.data || {};
-      totalInserted += Number(d.inserted ?? res.added ?? 0);
-      totalUpdated += Number(d.updated ?? res.updated ?? 0);
-      totalSkipped += Number(d.skipped || 0);
-      totalMatched += Number(d.matched || 0);
-      totalUnmatched += Number(d.unmatched || 0);
-      totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
-      if (res.message) lastMessage = res.message;
-    }
-  }
 
-  if (totalChunks === 1 && lastMessage) {
+      const waveResults = await Promise.all(
+        waveIndices.map((idx) => {
+          const slice = nonEmptyItems.slice(idx * chunkSize, (idx + 1) * chunkSize);
+          return sendAdaptiveSlice(slice, idx, totalChunks).then((res) => {
+            processedRows = Math.min(totalRows, processedRows + slice.length);
+            completedChunks = Math.min(totalChunks, completedChunks + 1);
+            if (res && res.success) {
+              const d = res.data || {};
+              const ins = Number(d.inserted ?? res.added ?? 0);
+              const upd = Number(d.updated ?? res.updated ?? 0);
+              const sliceFail = Number(d.failedSliceRows || 0);
+              emitBatchImportProgress({
+                active: true,
+                processedRows,
+                totalRows,
+                completedChunks,
+                totalChunks,
+                savedRows: totalInserted + totalUpdated + ins + upd,
+                failedRows: failedRows + sliceFail,
+              });
+            } else {
+              emitBatchImportProgress({
+                active: true,
+                processedRows,
+                totalRows,
+                completedChunks,
+                totalChunks,
+                savedRows: totalInserted + totalUpdated,
+                failedRows: failedRows + slice.length,
+              });
+            }
+            return { idx, sliceLen: slice.length, res };
+          });
+        })
+      );
+
+      let waveAllFailed = true;
+      for (const { idx, sliceLen, res } of waveResults) {
+        if (isAuthErr(res)) {
+          const baseMsg = res?.message || 'دسترسی یا نشست کاربری معتبر نیست.';
+          const savedSoFar = totalInserted + totalUpdated;
+          const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
+          const progressNote = totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks}${savedNote})` : '';
+          return { success: false, message: `${baseMsg}${progressNote}`, data: res?.data };
+        }
+
+        if (!res || !res.success) {
+          failedRows += sliceLen;
+          if (res?.message) lastFailureMessage = res.message;
+          continue;
+        }
+
+        waveAllFailed = false;
+        const d = res.data || {};
+        totalInserted += Number(d.inserted ?? res.added ?? 0);
+        totalUpdated += Number(d.updated ?? res.updated ?? 0);
+        totalSkipped += Number(d.skipped || 0);
+        totalSkippedUnit += Number(d.skippedUnit ?? res.skippedUnit ?? 0);
+        totalMatched += Number(d.matched || 0);
+        totalUnmatched += Number(d.unmatched || 0);
+        totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
+        failedRows += Number(d.failedSliceRows || 0);
+        if (res.message) lastMessage = res.message;
+      }
+
+      if (waveAllFailed) {
+        consecutiveFailedWaves++;
+        if (consecutiveFailedWaves >= 3 || (totalChunks === 1)) {
+          const failedChunkNum = waveIndices[0] + 1;
+          const baseMsg = lastFailureMessage || 'خطای ارتباط با سرور پایگاه داده.';
+          const savedSoFar = totalInserted + totalUpdated;
+          const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
+          const progressNote = totalChunks > 1 ? ` (توقف در دسته ${failedChunkNum} از ${totalChunks}${savedNote})` : '';
+          return {
+            success: false,
+            message: `${baseMsg}${progressNote}`,
+          };
+        }
+      } else {
+        consecutiveFailedWaves = 0;
+      }
+    }
+
+    const totalSaved = totalInserted + totalUpdated + totalMatched;
+    if (totalSaved === 0 && (failedRows > 0 || totalSkippedUnit > 0)) {
+      return {
+        success: false,
+        message:
+          totalSkippedUnit > 0
+            ? `هیچ ردیفی ثبت نشد؛ ${totalSkippedUnit} ردیف متعلق به واحد سازمانی غیرمجاز بود.`
+            : lastFailureMessage || 'هیچ ردیفی در پایگاه داده ثبت نشد.',
+      };
+    }
+
+    if (totalChunks === 1 && lastMessage && failedRows === 0) {
+      return {
+        success: true,
+        message: lastMessage,
+        data: {
+          totalProcessed: totalRows,
+          inserted: totalInserted,
+          updated: totalUpdated,
+          skipped: totalSkipped,
+          matched: totalMatched,
+          unmatched: totalUnmatched,
+          addedRelatives: totalAddedRelatives,
+          failedRows,
+        },
+      };
+    }
+
+    const parts: string[] = [];
+    if (totalInserted > 0) parts.push(`${totalInserted} ردیف جدید`);
+    if (totalUpdated > 0) parts.push(`${totalUpdated} ردیف به‌روزرسانی`);
+    if (totalAddedRelatives > 0) parts.push(`${totalAddedRelatives} بستگان`);
+    if (totalMatched > 0) parts.push(`${totalMatched} ردیف منطبق`);
+    if (totalSkipped > 0) parts.push(`${totalSkipped} ردیف ردشده`);
+    if (failedRows > 0) parts.push(`${failedRows} ردیف ناموفق`);
+    const summaryMsg =
+      parts.length > 0
+        ? `بارگذاری اکسل انجام شد (${parts.join('، ')}).`
+        : lastMessage || `تعداد ${totalRows} ردیف با موفقیت در پایگاه داده ثبت شد.`;
+
     return {
       success: true,
-      message: lastMessage,
+      message: summaryMsg,
       data: {
-        totalProcessed: nonEmptyItems.length,
+        totalProcessed: totalRows,
         inserted: totalInserted,
         updated: totalUpdated,
         skipped: totalSkipped,
         matched: totalMatched,
         unmatched: totalUnmatched,
         addedRelatives: totalAddedRelatives,
+        failedRows,
       },
     };
+  } finally {
+    activeBatchImportCount = Math.max(0, activeBatchImportCount - 1);
+    emitBatchImportProgress({
+      active: false,
+      processedRows,
+      totalRows,
+      completedChunks,
+      totalChunks,
+      savedRows: totalInserted + totalUpdated,
+      failedRows,
+    });
   }
-
-  const parts: string[] = [];
-  if (totalInserted > 0) parts.push(`${totalInserted} ردیف جدید`);
-  if (totalUpdated > 0) parts.push(`${totalUpdated} ردیف به‌روزرسانی`);
-  if (totalAddedRelatives > 0) parts.push(`${totalAddedRelatives} بستگان`);
-  if (totalMatched > 0) parts.push(`${totalMatched} ردیف منطبق`);
-  if (totalSkipped > 0) parts.push(`${totalSkipped} ردیف ردشده`);
-  const summaryMsg =
-    parts.length > 0
-      ? `بارگذاری اکسل با موفقیت انجام شد (${parts.join('، ')}).`
-      : lastMessage || `تعداد ${nonEmptyItems.length} ردیف با موفقیت در پایگاه داده ثبت شد.`;
-
-  return {
-    success: true,
-    message: summaryMsg,
-    data: {
-      totalProcessed: nonEmptyItems.length,
-      inserted: totalInserted,
-      updated: totalUpdated,
-      skipped: totalSkipped,
-      matched: totalMatched,
-      unmatched: totalUnmatched,
-      addedRelatives: totalAddedRelatives,
-    },
-  };
 }
 
 function unwrapArrayResponse<T>(json: any, fallbackError: string): T[] {
@@ -613,12 +804,12 @@ export const api = {
 
   async batchImportUsers(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportUsers(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportUsers(items));
     return sendBatchInChunks(
       items,
-      10,
-      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      3,
+      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      2
     );
   },
 
@@ -666,13 +857,13 @@ export const api = {
 
   async batchImportPersonnel(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportPersonnel(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportPersonnel(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      20,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -690,13 +881,13 @@ export const api = {
 
   async batchImportRelatives(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportRelatives(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportRelatives(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      30,
-      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      20,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      2
     );
   },
 
@@ -756,13 +947,13 @@ export const api = {
 
   async batchImportKaraneh(period: string, items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportKaraneh(period, items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportKaraneh(period, items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      50,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 35000 }),
-      1
+      30,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -868,13 +1059,13 @@ export const api = {
 
   async batchImportJobClassifications(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportJobClassifications(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportJobClassifications(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      25,
+      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -918,13 +1109,13 @@ export const api = {
 
   async batchImportCommitments(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportCommitments(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportCommitments(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      30,
+      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -954,13 +1145,13 @@ export const api = {
 
   async batchImportPayroll(period: string, items: any[], useRowYearMonth = true) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportPayroll(period, items, useRowYearMonth);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportPayroll(period, items, useRowYearMonth));
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
       15,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 35000 }),
-      1
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -1005,13 +1196,13 @@ export const api = {
 
   async batchImportMiningVolumes(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportMiningVolumes(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportMiningVolumes(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      30,
-      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      25,
+      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -1048,13 +1239,13 @@ export const api = {
 
   async batchImportMiningMachinery(items: any[]) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportMiningMachinery(items);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportMiningMachinery(items));
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      30,
-      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
-      1
+      25,
+      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
+      3
     );
   },
 
@@ -1097,18 +1288,18 @@ export const api = {
 
   async batchImportUnitReports(payload: { unitName?: string; period?: string; reportCategory?: string; items: any[] }) {
     const engine = await detectStorageEngine();
-    if (engine === 'indexeddb') return embeddedDb.batchImportUnitReports(payload);
+    if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(payload?.items || [], () => embeddedDb.batchImportUnitReports(payload));
     const items = Array.isArray(payload?.items) ? payload.items.map(compactRowForUpload) : [];
     return sendBatchInChunks(
       items,
-      20,
+      25,
       (chunk) =>
         callBackend('/unit-reports/batch-import', {
           method: 'POST',
           body: { ...payload, items: chunk },
-          timeoutMs: 35000,
+          timeoutMs: 25000,
         }),
-      1
+      3
     );
   },
 

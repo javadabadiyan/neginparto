@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   FileSpreadsheet,
   Upload,
@@ -22,6 +22,7 @@ import {
   transformMappedRows,
 } from '../utils/smartExcel';
 import { toPersianDigits } from '../utils/persian';
+import { BatchImportProgress, subscribeBatchImportProgress } from '../services/api';
 
 interface SmartExcelImportMapperProps {
   moduleType: SmartImportModuleType;
@@ -59,6 +60,13 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
   const [loadingFile, setLoadingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [importProgress, setImportProgress] = useState<BatchImportProgress | null>(null);
+
+  useEffect(() => {
+    return subscribeBatchImportProgress((next) => {
+      setImportProgress(next);
+    });
+  }, []);
 
   const targetFields = useMemo(() => getSmartModuleFields(moduleType), [moduleType]);
 
@@ -477,12 +485,44 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
             </div>
           )}
 
+          {submitting && importProgress?.active && importProgress.totalRows > 0 && (() => {
+            const pct = Math.min(100, Math.round((importProgress.processedRows / importProgress.totalRows) * 100));
+            return (
+              <div className="bg-indigo-50/80 border border-indigo-200 rounded-xl p-3.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-indigo-900">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+                    <span>
+                      در حال ثبت در پایگاه داده... {toPersianDigits(importProgress.processedRows)} از {toPersianDigits(importProgress.totalRows)} ردیف ({toPersianDigits(pct)}٪)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] font-medium text-indigo-700">
+                    <span>دسته {toPersianDigits(importProgress.completedChunks)} از {toPersianDigits(importProgress.totalChunks)}</span>
+                    {importProgress.savedRows > 0 && (
+                      <span className="text-emerald-700 font-bold">{toPersianDigits(importProgress.savedRows)} ثبت‌شده</span>
+                    )}
+                    {importProgress.failedRows > 0 && (
+                      <span className="text-rose-600 font-bold">{toPersianDigits(importProgress.failedRows)} ناموفق</span>
+                    )}
+                  </div>
+                </div>
+                <div className="w-full h-2.5 bg-white border border-indigo-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-l from-indigo-600 to-emerald-500 transition-all duration-300"
+                    style={{ width: `${Math.max(4, pct)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
             {onCancel && (
               <button
                 type="button"
+                disabled={submitting}
                 onClick={onCancel}
-                className="px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 cursor-pointer"
+                className="px-4 py-2.5 min-h-[42px] rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
               >
                 انصراف
               </button>
@@ -496,7 +536,9 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
               {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               <span>
                 {submitting
-                  ? 'در حال ثبت اطلاعات...'
+                  ? importProgress?.active && importProgress.totalRows > 0
+                    ? `در حال ثبت اطلاعات (${toPersianDigits(Math.min(100, Math.round((importProgress.processedRows / importProgress.totalRows) * 100)))}٪)...`
+                    : 'در حال ثبت اطلاعات...'
                   : `${confirmLabel} (${toPersianDigits(extracted.rows.length)} ردیف)`}
               </span>
             </button>

@@ -55,9 +55,33 @@ function jsonRes(
   });
 }
 
+const FA_DATE_FMT = (() => {
+  try {
+    return new Intl.DateTimeFormat('fa-IR');
+  } catch {
+    return null;
+  }
+})();
+
+const FA_DATETIME_FMT = (() => {
+  try {
+    return new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+})();
+
 function faDate(): string {
   try {
-    return new Date().toLocaleDateString('fa-IR');
+    return FA_DATE_FMT ? FA_DATE_FMT.format(new Date()) : new Date().toLocaleDateString('fa-IR');
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
@@ -65,7 +89,7 @@ function faDate(): string {
 
 function faDateTime(): string {
   try {
-    return new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
+    return FA_DATETIME_FMT ? FA_DATETIME_FMT.format(new Date()) : new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
   } catch {
     return new Date().toISOString();
   }
@@ -438,8 +462,13 @@ function checkPermission(user: any, section: string, action: string): boolean {
   return Boolean(perms?.[section]?.[action] === true);
 }
 
+const NON_ASCII_RE = /[^\x00-\x7F]/;
+
 function toAsciiDigits(val: any): string {
-  return String(val ?? '')
+  if (val === undefined || val === null || val === '') return '';
+  const s = typeof val === 'string' ? val : String(val);
+  if (!NON_ASCII_RE.test(s)) return s;
+  return s
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
     .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 }
@@ -506,13 +535,14 @@ function getVal(row: Record<string, any>, ...keys: string[]): any {
   return undefined;
 }
 
-function compactRawRow(row: Record<string, any>, maxKeys = 150): Record<string, any> {
+function compactRawRow(row: Record<string, any>, maxKeys = 120): Record<string, any> {
   const out: Record<string, any> = {};
   if (!row || typeof row !== 'object') return out;
   let count = 0;
   for (const [k, v] of Object.entries(row)) {
     if (v === undefined || v === null) continue;
     if (typeof v === 'string' && v.trim() === '') continue;
+    if (k.startsWith('ستون_')) continue;
     out[k] = v;
     count++;
     if (count >= maxKeys) break;
@@ -885,6 +915,11 @@ async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[])
   }
 }
 
+function utf8ByteLength(str: string): number {
+  if (!NON_ASCII_RE.test(str)) return str.length;
+  return textEncoder.encode(str).length;
+}
+
 function buildMultiRowUpsertStmts(
   db: D1Database,
   table: string,
@@ -895,14 +930,16 @@ function buildMultiRowUpsertStmts(
 ): D1PreparedStatement[] {
   if (rows.length === 0) return [];
   const maxRowsPerStmt = Math.max(1, Math.floor(80 / columns.length));
-  const MAX_STMT_CHARS = 180_000;
+  // D1 limits bound SQL statements to ~100KB UTF-8 bytes; stay well below to prevent SQLITE_TOOBIG with Persian JSON
+  const MAX_STMT_BYTES = 55_000;
   const colList = columns.join(', ');
   const rowPlaceholder = `(${columns.map(() => '?').join(',')})`;
   const updateSql = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
+  const baseSqlBytes = utf8ByteLength(table) + utf8ByteLength(colList) + utf8ByteLength(updateSql) + 64;
   const stmts: D1PreparedStatement[] = [];
 
   let currentSlice: any[][] = [];
-  let currentChars = 0;
+  let currentBytes = baseSqlBytes;
 
   const flushSlice = () => {
     if (currentSlice.length === 0) return;
@@ -915,24 +952,24 @@ function buildMultiRowUpsertStmts(
     }
     stmts.push(db.prepare(sql).bind(...binds));
     currentSlice = [];
-    currentChars = 0;
+    currentBytes = baseSqlBytes;
   };
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    let rowChars = 0;
+    let rowBytes = rowPlaceholder.length + 2;
     for (let j = 0; j < r.length; j++) {
-      if (typeof r[j] === 'string') rowChars += r[j].length;
-      else rowChars += 16;
+      if (typeof r[j] === 'string') rowBytes += utf8ByteLength(r[j]) + 4;
+      else rowBytes += 16;
     }
     if (
       currentSlice.length > 0 &&
-      (currentSlice.length >= maxRowsPerStmt || currentChars + rowChars > MAX_STMT_CHARS)
+      (currentSlice.length >= maxRowsPerStmt || currentBytes + rowBytes > MAX_STMT_BYTES)
     ) {
       flushSlice();
     }
     currentSlice.push(r);
-    currentChars += rowChars;
+    currentBytes += rowBytes;
   }
   flushSlice();
   return stmts;
@@ -940,10 +977,10 @@ function buildMultiRowUpsertStmts(
 
 async function touchLastSaved(db: D1Database): Promise<string> {
   const version = String(Date.now());
-  await db.batch([
-    db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('last_saved', faDateTime()),
-    db.prepare('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)').bind('sync_version', version),
-  ]);
+  await db
+    .prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('last_saved', ?), ('sync_version', ?)")
+    .bind(faDateTime(), version)
+    .run();
   return version;
 }
 
@@ -1704,12 +1741,46 @@ export default {
         }
         const body: any = await request.json().catch(() => ({}));
         const items = Array.isArray(body.items) ? body.items : [];
+        if (items.length === 0) {
+          return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
+        }
+
+        const incomingUsernames = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => String(getVal(row, 'username', 'نام کاربری', 'کاربر') || '').trim().toLowerCase())
+              .filter(Boolean)
+          )
+        );
+        const existingMap = new Map<string, any>();
+        for (let i = 0; i < incomingUsernames.length; i += 50) {
+          const slice = incomingUsernames.slice(i, i + 50);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT * FROM users WHERE LOWER(username) IN (${ph})`
+          )
+            .bind(...slice)
+            .all<any>();
+          for (const r of results || []) {
+            const u = rowToUser(r);
+            existingMap.set(String(u.username || '').trim().toLowerCase(), u);
+          }
+        }
+
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skipped = 0;
+        const todayStr = faDate();
+
         for (const row of items) {
           const username = String(getVal(row, 'username', 'نام کاربری', 'کاربر') || '').trim();
-          if (!username) continue;
-          const existing = await getUserByUsername(env.DB, username);
+          if (!username) {
+            skipped++;
+            continue;
+          }
+          const unameLower = username.toLowerCase();
+          const existing = existingMap.get(unameLower);
           const fullName = String(getVal(row, 'fullName', 'نام و نام خانوادگی', 'نام کامل', 'نام') || username).trim();
           const role = String(getVal(row, 'role', 'نقش سازمانی', 'نقش', 'سمت') || existing?.role || 'viewer').trim();
           const presetLabel = String(getVal(row, 'preset', 'الگوی دسترسی') || '').trim();
@@ -1718,51 +1789,92 @@ export default {
           const rawActive = String(getVal(row, 'isActive', 'وضعیت حساب', 'وضعیت', 'فعال') || '').trim();
           const isActive = rawActive ? !['غیرفعال', 'مسدود', 'false', '0', 'خیر'].includes(rawActive) : existing ? existing.isActive : true;
           const isTargetSuper = role === 'super_admin' || existing?.username === 'javadabadiyan';
-          if (isTargetSuper && !isSuperAdminUser(authUser)) continue;
-
-          if (existing) {
-            const nextUser = {
-              ...existing,
-              fullName,
-              role: existing.username === 'javadabadiyan' ? 'super_admin' : role,
-              department,
-              isActive: existing.username === 'javadabadiyan' ? true : isActive,
-              password: rawPass ? await hashPassword(rawPass) : existing.password,
-              permissions:
-                existing.username === 'javadabadiyan'
-                  ? getFullAdminPermissions()
-                  : presetLabel
-                  ? buildPresetPermissions(presetLabel)
-                  : normalizePermissions(existing.permissions),
-            };
-            await upsertUser(env.DB, nextUser);
-            updated++;
-          } else {
-            const newUser = {
-              id: genId('u'),
-              username,
-              password: await hashPassword(rawPass || '12345678'),
-              fullName,
-              role,
-              department,
-              email: '',
-              uid: '',
-              permissions:
-                role === 'super_admin'
-                  ? getFullAdminPermissions()
-                  : presetLabel
-                  ? buildPresetPermissions(presetLabel)
-                  : buildPresetPermissions(role),
-              isActive,
-              createdAt: faDate(),
-              lastLogin: '',
-            };
-            await upsertUser(env.DB, newUser);
-            added++;
+          if (isTargetSuper && !isSuperAdminUser(authUser)) {
+            skipped++;
+            continue;
           }
+
+          const nextUser = existing
+            ? {
+                ...existing,
+                fullName,
+                role: existing.username === 'javadabadiyan' ? 'super_admin' : role,
+                department,
+                isActive: existing.username === 'javadabadiyan' ? true : isActive,
+                password: rawPass ? await hashPassword(rawPass) : existing.password,
+                permissions:
+                  existing.username === 'javadabadiyan'
+                    ? getFullAdminPermissions()
+                    : presetLabel
+                    ? buildPresetPermissions(presetLabel)
+                    : normalizePermissions(existing.permissions),
+              }
+            : {
+                id: genId('u'),
+                username,
+                password: await hashPassword(rawPass || '12345678'),
+                fullName,
+                role,
+                department,
+                email: '',
+                uid: '',
+                permissions:
+                  role === 'super_admin'
+                    ? getFullAdminPermissions()
+                    : presetLabel
+                    ? buildPresetPermissions(presetLabel)
+                    : buildPresetPermissions(role),
+                isActive,
+                createdAt: todayStr,
+                lastLogin: '',
+              };
+
+          if (existing) updated++;
+          else added++;
+          existingMap.set(unameLower, nextUser);
+          pendingMap.set(nextUser.id, [
+            nextUser.id,
+            nextUser.username,
+            nextUser.password || '',
+            nextUser.fullName || '',
+            nextUser.role || 'کاربر سفارشی',
+            nextUser.department || '',
+            nextUser.email || '',
+            nextUser.uid || '',
+            JSON.stringify(nextUser.permissions || {}),
+            nextUser.isActive === false ? 0 : 1,
+            nextUser.createdAt || '',
+            nextUser.lastLogin || '',
+          ]);
         }
+
+        if (pendingMap.size === 0) {
+          return jsonRes(request, env, {
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped,
+            message: 'هیچ ردیف معتبری با «نام کاربری» در این دسته یافت نشد.',
+          });
+        }
+
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'users',
+          ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+          'id',
+          ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+          Array.from(pendingMap.values())
+        );
+        await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, message: `لیست کاربران با موفقیت وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+        return jsonRes(request, env, {
+          success: true,
+          added,
+          updated,
+          skipped,
+          message: `لیست کاربران با موفقیت وارد شد (${added} جدید، ${updated} به‌روزرسانی).`,
+        });
       }
 
       if (path === '/users/batch-delete' && method === 'POST') {
@@ -1896,11 +2008,11 @@ export default {
         );
 
         const byCode = new Map<string, any>();
-        for (let i = 0; i < incomingCodes.length; i += 75) {
-          const slice = incomingCodes.slice(i, i + 75);
+        for (let i = 0; i < incomingCodes.length; i += 50) {
+          const slice = incomingCodes.slice(i, i + 50);
           const placeholders = slice.map(() => '?').join(',');
           const { results } = await env.DB.prepare(
-            `SELECT personnel_code, data_json FROM personnel WHERE personnel_code IN (${placeholders})`
+            `SELECT personnel_code, data_json FROM personnel WHERE TRIM(personnel_code) IN (${placeholders})`
           )
             .bind(...slice)
             .all<{ personnel_code: string; data_json: string }>();
@@ -1918,11 +2030,15 @@ export default {
         const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skipped = 0;
         const nowStr = faDate();
 
         for (const row of items) {
           const code = toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی') || '').trim();
-          if (!code) continue;
+          if (!code) {
+            skipped++;
+            continue;
+          }
           const existing = byCode.get(code);
           const firstName = String(getVal(row, 'firstName', 'نام') || '').trim();
           const lastName = String(getVal(row, 'lastName', 'نام خانوادگي', 'نام خانوادگی') || '').trim();
@@ -1986,9 +2102,12 @@ export default {
 
         if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل اکسل یافت نشد. لطفاً ستون کد پرسنلی را در نگاشت اکسل مشخص کنید.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped,
+            message: 'هیچ ردیف معتبری با «کد پرسنلی» در این دسته یافت نشد.',
+          });
         }
 
         const stmts = buildMultiRowUpsertStmts(
@@ -2005,6 +2124,7 @@ export default {
           success: true,
           added,
           updated,
+          skipped,
           message: `ورود اطلاعات با موفقیت انجام شد: ${added} نفر جدید اضافه شدند و ${updated} پرونده به‌روزرسانی گردید.`,
         });
       }
@@ -2033,18 +2153,84 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const persIndex = await getPersonnelLookupMap(env.DB);
-        const persIndexValues = Array.from(persIndex.values());
-        const loadedParents = new Map<string, any>();
+        const incomingCodes = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim())
+              .filter(Boolean)
+          )
+        );
+        const parentByCode = new Map<string, any>();
+        const parentByEmpId = new Map<string, any>();
+        const parentByNatId = new Map<string, any>();
+        const parentByName = new Map<string, any>();
 
-        const fetchFullParent = async (id: string) => {
-          if (loadedParents.has(id)) return loadedParents.get(id);
-          const row = await env.DB.prepare('SELECT data_json FROM personnel WHERE id = ?').bind(id).first<{ data_json: string }>();
-          if (!row) return null;
-          const parsed = JSON.parse(row.data_json);
-          loadedParents.set(id, parsed);
-          return parsed;
+        const indexParent = (parsed: any) => {
+          if (!parsed || !parsed.id) return;
+          const c = toAsciiDigits(parsed.personnelCode || '').trim();
+          const e = toAsciiDigits(parsed.employeeId || '').trim();
+          const n = toAsciiDigits(parsed.nationalId || '').trim();
+          const nm = normKey(String(parsed.fullName || ''));
+          if (c) parentByCode.set(c, parsed);
+          if (e) parentByEmpId.set(e, parsed);
+          if (n) parentByNatId.set(n, parsed);
+          if (nm) parentByName.set(nm, parsed);
         };
+
+        for (let i = 0; i < incomingCodes.length; i += 50) {
+          const slice = incomingCodes.slice(i, i + 50);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT data_json FROM personnel WHERE TRIM(personnel_code) IN (${ph})`
+          )
+            .bind(...slice)
+            .all<{ data_json: string }>();
+          for (const r of results || []) {
+            try {
+              indexParent(JSON.parse(r.data_json));
+            } catch {
+              // skip malformed row
+            }
+          }
+        }
+
+        // Targeted fallback ONLY for rows not yet matched by personnelCode
+        const fallbackEmpIds: string[] = [];
+        const fallbackNatIds: string[] = [];
+        for (const row of items) {
+          const pCode = toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
+          if (pCode && parentByCode.has(pCode)) continue;
+          const pEmpId = toAsciiDigits(getVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') || '').trim();
+          const pNatId = toAsciiDigits(getVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
+          if (pEmpId && !parentByEmpId.has(pEmpId)) fallbackEmpIds.push(pEmpId);
+          if (pNatId && !parentByNatId.has(pNatId)) fallbackNatIds.push(pNatId);
+        }
+        const uniqFallbackNats = Array.from(new Set(fallbackNatIds));
+        for (let i = 0; i < uniqFallbackNats.length; i += 50) {
+          const slice = uniqFallbackNats.slice(i, i + 50);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT data_json FROM personnel WHERE json_extract(data_json, '$.nationalId') IN (${ph})`
+          )
+            .bind(...slice)
+            .all<{ data_json: string }>();
+          for (const r of results || []) {
+            try { indexParent(JSON.parse(r.data_json)); } catch {}
+          }
+        }
+        const uniqFallbackEmps = Array.from(new Set(fallbackEmpIds));
+        for (let i = 0; i < uniqFallbackEmps.length; i += 50) {
+          const slice = uniqFallbackEmps.slice(i, i + 50);
+          const ph = slice.map(() => '?').join(',');
+          const { results } = await env.DB.prepare(
+            `SELECT data_json FROM personnel WHERE json_extract(data_json, '$.employeeId') IN (${ph})`
+          )
+            .bind(...slice)
+            .all<{ data_json: string }>();
+          for (const r of results || []) {
+            try { indexParent(JSON.parse(r.data_json)); } catch {}
+          }
+        }
 
         let added = 0;
         let updated = 0;
@@ -2058,23 +2244,17 @@ export default {
           const pNatId = toAsciiDigits(getVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
           const pName = normKey(String(getVal(row, 'personnelName', 'نام کارمند', 'نام پرسنل', 'نام و نام خانوادگی کارمند') || ''));
 
-          const meta =
-            (pCode ? persIndex.get(pCode) : undefined) ||
-            persIndexValues.find(
-              (p) =>
-                (pEmpId && toAsciiDigits(p.employeeId).trim() === pEmpId) ||
-                (pNatId && toAsciiDigits(p.nationalId).trim() === pNatId) ||
-                (pName && normKey(p.fullName) === pName)
-            );
-          if (!meta) {
-            unmatched++;
-            continue;
-          }
-          const parent = await fetchFullParent(meta.id);
+          const parent =
+            (pCode ? parentByCode.get(pCode) : undefined) ||
+            (pEmpId ? parentByEmpId.get(pEmpId) : undefined) ||
+            (pNatId ? parentByNatId.get(pNatId) : undefined) ||
+            (pName ? parentByName.get(pName) : undefined);
+
           if (!parent) {
             unmatched++;
             continue;
           }
+
           const relFullName = String(getVal(row, 'fullName', 'نام و نام خانوادگی بستگان', 'نام بستگان', 'نام و نام خانوادگی') || '').trim();
           if (!relFullName) continue;
           const relation = String(getVal(row, 'relation', 'نسبت', 'نسبت با کارمند') || 'سایر').trim();
@@ -2123,11 +2303,25 @@ export default {
           touchedParents.set(parent.id, parent);
         }
 
-        const stmts = Array.from(touchedParents.values()).map((p) =>
-          env.DB.prepare('UPDATE personnel SET data_json = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(p), p.updatedAt, p.id)
-        );
-        if (stmts.length > 0) await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        if (touchedParents.size > 0) {
+          const rowsToSave = Array.from(touchedParents.values()).map((p) => [
+            p.id,
+            String(p.personnelCode || ''),
+            JSON.stringify(p),
+            p.updatedAt,
+          ]);
+          const stmts = buildMultiRowUpsertStmts(
+            env.DB,
+            'personnel',
+            ['id', 'personnel_code', 'data_json', 'updated_at'],
+            'id',
+            ['personnel_code', 'data_json', 'updated_at'],
+            rowsToSave
+          );
+          await batchExecuteChunked(env.DB, stmts);
+          await touchLastSaved(env.DB);
+        }
+
         return jsonRes(request, env, {
           success: true,
           added,
@@ -2401,7 +2595,13 @@ export default {
           )
         );
         if (incomingCodes.length === 0) {
-          return jsonRes(request, env, { success: false, message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل کارانه یافت نشد.' }, 400);
+          return jsonRes(request, env, {
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped: items.length,
+            message: 'هیچ ردیف معتبری با «کد پرسنلی» در این دسته کارانه یافت نشد.',
+          });
         }
 
         const byCode = new Map<string, any>();
@@ -2478,13 +2678,17 @@ export default {
         }
 
         if (pendingMap.size === 0) {
-          if (skippedUnit > 0) {
-            return forbidden(request, env, `هیچ‌یک از ردیف‌های اکسل متعلق به واحد مجاز شما (${allowedUnits.join('، ')}) نبود.`);
-          }
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «کد پرسنلی» در فایل کارانه یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped: items.length,
+            skippedUnit,
+            message:
+              skippedUnit > 0
+                ? `ردیف‌های این دسته متعلق به واحد مجاز شما (${allowedUnits.join('، ')}) نبود.`
+                : 'هیچ ردیف معتبری با «کد پرسنلی» در این دسته کارانه یافت نشد.',
+          });
         }
 
         const stmts = buildMultiRowUpsertStmts(
@@ -2912,9 +3116,12 @@ export default {
 
         if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با کد پرسنلی، کد ملی یا نام خانوادگی در فایل یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped: items.length,
+            message: 'هیچ ردیف معتبری با کد پرسنلی، کد ملی یا نام خانوادگی در این دسته یافت نشد.',
+          });
         }
 
         const stmts = buildMultiRowUpsertStmts(
@@ -3058,9 +3265,12 @@ export default {
         }
         if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «کد پرسنلی» یا «نام پرسنل» در فایل تعهدات یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped: items.length,
+            message: 'هیچ ردیف معتبری با «کد پرسنلی» یا «نام پرسنل» در این دسته تعهدات یافت نشد.',
+          });
         }
         const stmts = buildMultiRowUpsertStmts(
           env.DB,
@@ -3221,9 +3431,12 @@ export default {
 
         if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «كد پرسنلي» در فایل حقوق یافت نشد. لطفاً در مرحله تطبیق ستون‌ها، ستون کد پرسنلی را انتخاب کنید.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped: items.length,
+            message: 'هیچ ردیف معتبری با «كد پرسنلي» در این دسته حقوق یافت نشد.',
+          });
         }
 
         const stmts = buildMultiRowUpsertStmts(
@@ -3327,24 +3540,40 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const { results: existingRows } = await env.DB.prepare(
-          `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricTitle'), '') as metricTitle FROM mining_volumes`
-        ).all<any>();
+        const chunkPeriods = Array.from(
+          new Set<string>(
+            items.map((row: any) =>
+              parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه'), '1403-08')
+            )
+          )
+        ).filter(Boolean);
         const existingMap = new Map<string, string>();
-        for (const v of existingRows || []) {
-          existingMap.set(`${toAsciiDigits(v.period).trim()}__${normKey(v.unitName)}__${normKey(v.metricTitle)}`, v.id);
+        for (let i = 0; i < chunkPeriods.length; i += 40) {
+          const slice = chunkPeriods.slice(i, i + 40);
+          const ph = slice.map(() => '?').join(',');
+          const { results: existingRows } = await env.DB.prepare(
+            `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricTitle'), '') as metricTitle FROM mining_volumes WHERE period IN (${ph})`
+          )
+            .bind(...slice)
+            .all<any>();
+          for (const v of existingRows || []) {
+            existingMap.set(`${toAsciiDigits(v.period).trim()}__${normKey(v.unitName)}__${normKey(v.metricTitle)}`, v.id);
+          }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skipped = 0;
         const nowStr = faDate();
 
         for (const row of items) {
           const unitName = String(getVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
           const period = parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه'), '1403-08');
-          if (!unitName) continue;
-          if (!canCeo && !isDispatchingOrUnitAllowed(authUser, unitName)) continue;
+          if (!unitName || (!canCeo && !isDispatchingOrUnitAllowed(authUser, unitName))) {
+            skipped++;
+            continue;
+          }
           const activityType = String(getVal(row, 'activityType', 'نوع عملیات / فعالیت', 'نوع عملیات', 'عملیات') || 'عملیات معدنی').trim();
           const metricTitle = String(getVal(row, 'metricTitle', 'عنوان شاخص حجم', 'عنوان شاخص', 'شرح عملیات') || activityType).trim();
           const volumeValue = parseNum(getVal(row, 'volumeValue', 'حجم محقق‌شده ماه', 'حجم محقق شده', 'حجم', 'مقدار'));
@@ -3358,17 +3587,28 @@ export default {
           if (prevId) updated++;
           else added++;
           existingMap.set(k, rec.id);
-          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(rec.id, period, unitName, JSON.stringify(rec)));
+          pendingMap.set(rec.id, [rec.id, period, unitName, JSON.stringify(rec)]);
         }
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «نام واحد عملیاتی» و مجاز برای دسترسی شما در فایل یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped,
+            message: 'هیچ ردیف معتبری با «نام واحد عملیاتی» و مجاز در این دسته یافت نشد.',
+          });
         }
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'mining_volumes',
+          ['id', 'period', 'unit_name', 'data_json'],
+          'id',
+          ['period', 'unit_name', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, added, updated, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+        return jsonRes(request, env, { success: true, added, updated, skipped, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
       if (path.startsWith('/mining-volumes/') && method === 'DELETE') {
@@ -3479,26 +3719,46 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const { results: existingRows } = await env.DB.prepare(
-          'SELECT id, TRIM(machine_code) as machineCode FROM mining_machinery'
-        ).all<{ id: string; machineCode: string }>();
+        const incomingMachineCodes = Array.from(
+          new Set<string>(
+            items
+              .map((row: any) => toAsciiDigits(getVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'پلاک تجهیزات', 'کد') || '').trim())
+              .filter(Boolean)
+          )
+        );
         const existingMap = new Map<string, string>();
-        for (const m of existingRows || []) {
-          const mc = toAsciiDigits(m.machineCode).trim();
-          if (mc) existingMap.set(mc, m.id);
+        for (let i = 0; i < incomingMachineCodes.length; i += 50) {
+          const slice = incomingMachineCodes.slice(i, i + 50);
+          const ph = slice.map(() => '?').join(',');
+          const { results: existingRows } = await env.DB.prepare(
+            `SELECT id, TRIM(machine_code) as machineCode FROM mining_machinery WHERE TRIM(machine_code) IN (${ph})`
+          )
+            .bind(...slice)
+            .all<{ id: string; machineCode: string }>();
+          for (const m of existingRows || []) {
+            const mc = toAsciiDigits(m.machineCode).trim();
+            if (mc) existingMap.set(mc, m.id);
+          }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skipped = 0;
         const nowStr = faDate();
 
         for (const row of items) {
           const machineCode = toAsciiDigits(getVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'پلاک تجهیزات', 'کد') || '').trim();
           const machineName = String(getVal(row, 'machineName', 'نام و مدل دستگاه', 'نام دستگاه', 'مدل') || '').trim();
-          if (!machineCode || !machineName) continue;
+          if (!machineCode || !machineName) {
+            skipped++;
+            continue;
+          }
           const unitName = String(getVal(row, 'unitName', 'واحد مستقر / بهره‌بردار', 'واحد مستقر', 'واحد معدن', 'واحد') || 'تعمیرگاه و ماشین‌آلات سنگین').trim();
-          if (!canCeo && !isWorkshopOrUnitAllowed(authUser, unitName)) continue;
+          if (!canCeo && !isWorkshopOrUnitAllowed(authUser, unitName)) {
+            skipped++;
+            continue;
+          }
           const rawStatus = String(getVal(row, 'status', 'وضعیت دستگاه', 'وضعیت عملیاتی', 'وضعیت') || 'آماده به کار').trim();
           const status =
             rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
@@ -3526,17 +3786,28 @@ export default {
           if (prevId) updated++;
           else added++;
           existingMap.set(machineCode, rec.id);
-          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)').bind(rec.id, machineCode, JSON.stringify(rec)));
+          pendingMap.set(rec.id, [rec.id, machineCode, JSON.stringify(rec)]);
         }
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «کد دستگاه» و «نام دستگاه» در فایل یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped,
+            message: 'هیچ ردیف معتبری با «کد دستگاه» و «نام دستگاه» در این دسته یافت نشد.',
+          });
         }
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'mining_machinery',
+          ['id', 'machine_code', 'data_json'],
+          'id',
+          ['machine_code', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, added, updated, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+        return jsonRes(request, env, { success: true, added, updated, skipped, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
       if (path.startsWith('/mining-machinery/') && method === 'DELETE') {
@@ -3653,17 +3924,33 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const { results: existingRows } = await env.DB.prepare(
-          `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricName'), '') as metricName FROM unit_reports`
-        ).all<any>();
+        const chunkPeriods = Array.from(
+          new Set<string>(
+            items
+              .filter((row: any) => row && typeof row === 'object')
+              .map((row: any) =>
+                parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه') || body.period || '1403-08', '1403-08')
+              )
+          )
+        ).filter(Boolean);
         const existingMap = new Map<string, string>();
-        for (const r of existingRows || []) {
-          existingMap.set(`${toAsciiDigits(r.period).trim()}__${normKey(r.unitName)}__${normKey(r.metricName)}`, r.id);
+        for (let i = 0; i < chunkPeriods.length; i += 40) {
+          const slice = chunkPeriods.slice(i, i + 40);
+          const ph = slice.map(() => '?').join(',');
+          const { results: existingRows } = await env.DB.prepare(
+            `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricName'), '') as metricName FROM unit_reports WHERE period IN (${ph})`
+          )
+            .bind(...slice)
+            .all<any>();
+          for (const r of existingRows || []) {
+            existingMap.set(`${toAsciiDigits(r.period).trim()}__${normKey(r.unitName)}__${normKey(r.metricName)}`, r.id);
+          }
         }
 
-        const stmts: D1PreparedStatement[] = [];
+        const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
+        let skipped = 0;
         const nowStr = faDate();
 
         for (const row of items) {
@@ -3671,8 +3958,10 @@ export default {
           const unitName = String(getVal(row, 'unitName', 'نام واحد عملیاتی', 'واحد عملیاتی معدن', 'نام واحد', 'واحد', 'بخش') || body.unitName || '').trim();
           const period = parseYearMonth(getVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه') || body.period || '1403-08', '1403-08');
           const metricName = String(getVal(row, 'metricName', 'عنوان شاخص / موضوع فعالیت', 'عنوان شاخص / فعالیت', 'شرح شاخص', 'فعالیت', 'عنوان', 'موضوع') || '').trim();
-          if (!unitName || !metricName) continue;
-          if (!canCeo && !isUnitAllowedForUser(authUser, unitName)) continue;
+          if (!unitName || !metricName || (!canCeo && !isUnitAllowedForUser(authUser, unitName))) {
+            skipped++;
+            continue;
+          }
 
           const reportCategory = String(getVal(row, 'reportCategory', 'دسته‌بندی / نوع گزارش', 'دسته‌بندی گزارش', 'نوع گزارش', 'گروه فعالیت') || body.reportCategory || 'گزارش عملیاتی واحد').trim();
           const actualValue = parseNum(getVal(row, 'actualValue', 'مقدار محقق‌شده ماه', 'مقدار محقق‌شده', 'عملکرد ماه جاری', 'عملکرد', 'مقدار', 'مقدار فعلی'));
@@ -3684,10 +3973,14 @@ export default {
           const notes = String(getVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim();
           const rawFields: Record<string, string | number> = {};
           const incomingRaw = row.rawFields && typeof row.rawFields === 'object' ? row.rawFields : row;
-          for (const [k, v] of Object.entries(incomingRaw).slice(0, 100)) {
-            if (v !== undefined && v !== null && String(v).trim() !== '') {
-              rawFields[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
-            }
+          let rawCount = 0;
+          for (const [k, v] of Object.entries(incomingRaw)) {
+            if (v === undefined || v === null) continue;
+            if (typeof v === 'string' && v.trim() === '') continue;
+            if (k.startsWith('ستون_')) continue;
+            rawFields[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
+            rawCount++;
+            if (rawCount >= 100) break;
           }
           const mapKey = `${period}__${normKey(unitName)}__${normKey(metricName)}`;
           const prevId = existingMap.get(mapKey);
@@ -3695,17 +3988,28 @@ export default {
           if (prevId) updated++;
           else added++;
           existingMap.set(mapKey, rec.id);
-          stmts.push(env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)').bind(rec.id, period, unitName, JSON.stringify(rec)));
+          pendingMap.set(rec.id, [rec.id, period, unitName, JSON.stringify(rec)]);
         }
-        if (stmts.length === 0) {
+        if (pendingMap.size === 0) {
           return jsonRes(request, env, {
-            success: false,
-            message: 'هیچ ردیف معتبری با «نام واحد» و «عنوان شاخص» مجاز در فایل گزارش یافت نشد.',
-          }, 400);
+            success: true,
+            added: 0,
+            updated: 0,
+            skipped,
+            message: 'هیچ ردیف معتبری با «نام واحد» و «عنوان شاخص» مجاز در این دسته یافت نشد.',
+          });
         }
+        const stmts = buildMultiRowUpsertStmts(
+          env.DB,
+          'unit_reports',
+          ['id', 'period', 'unit_name', 'data_json'],
+          'id',
+          ['period', 'unit_name', 'data_json'],
+          Array.from(pendingMap.values())
+        );
         await batchExecuteChunked(env.DB, stmts);
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, added, updated, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
+        return jsonRes(request, env, { success: true, added, updated, skipped, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
       if (path.startsWith('/unit-reports/') && method === 'DELETE') {

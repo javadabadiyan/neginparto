@@ -35,6 +35,7 @@ import {
   downloadCommitmentsTemplate
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
 interface CommitmentsModuleProps {
@@ -78,6 +79,8 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
   const [filterStatus, setFilterStatus] = useState('all');
   const [archiveTab, setArchiveTab] = useState<'active' | 'archived' | 'all'>('active');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingCommitment, setEditingCommitment] = useState<PersonnelCommitment | null>(null);
@@ -174,6 +177,17 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
 
     return matchesSearch && matchesType && matchesStatus && matchesArchive && matchesDup;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterType, filterStatus, archiveTab, onlyDuplicates]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedCommitments = React.useMemo(
+    () => filtered.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filtered, safePage, pageSize]
+  );
 
   const handleOpenAdd = () => {
     setEditingCommitment(null);
@@ -618,7 +632,7 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
                   </td>
                 </tr>
               ) : (
-                filtered.map((c, idx) => {
+                paginatedCommitments.map((c, idx) => {
                   const remaining = computeRemaining(c);
                   const isSelected = selectedIds.includes(c.id);
                   const dupReasons = duplicateIndex.getRowDuplicateReasons(c);
@@ -646,7 +660,7 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
                         </td>
                       )}
                       <td className="py-3.5 px-3 text-center text-slate-600 persian-num">
-                        {toPersianDigits(idx + 1)}
+                        {toPersianDigits((safePage - 1) * pageSize + idx + 1)}
                       </td>
                       <td className="py-3.5 px-3 font-bold text-indigo-700 persian-num">
                         <div>{toPersianDigits(c.personnelCode)}</div>
@@ -761,6 +775,13 @@ export const CommitmentsModule: React.FC<CommitmentsModuleProps> = ({
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filtered.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* Add / Edit Commitment Modal */}

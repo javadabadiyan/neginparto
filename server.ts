@@ -1544,13 +1544,21 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
     return res.status(400).json({ success: false, message: 'فایل اکسل کاربران خالی است.' });
   }
 
+  const userIdxMap = new Map<string, number>();
+  (db.users || []).forEach((u: any, i: number) => {
+    const k = String(u.username || '').trim().toLowerCase();
+    if (k && !userIdxMap.has(k)) userIdxMap.set(k, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
+
   let added = 0;
   let updated = 0;
   for (const row of items) {
     const username = String(row.username || row['نام کاربری'] || '').trim();
     const fullName = String(row.fullName || row['نام و نام خانوادگی'] || '').trim();
     if (!username || !fullName) continue;
-    if (username.toLowerCase() === 'javadabadiyan') continue; // never overwrite super admin via Excel
+    const unameKey = username.toLowerCase();
+    if (unameKey === 'javadabadiyan') continue; // never overwrite super admin via Excel
 
     const role = String(row.role || row['نقش سازمانی'] || 'کارشناس اداری').trim();
     if (role === 'super_admin' && !isSuperAdminUser(req.authUser)) continue;
@@ -1560,7 +1568,7 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
     const presetLabel = String(row.preset || row['الگوی دسترسی'] || 'دسترسی صفر').trim();
     const rawPass = String(row.password || row['رمز عبور'] || '').trim();
 
-    const idx = db.users.findIndex((u: any) => u.username.toLowerCase() === username.toLowerCase());
+    const idx = userIdxMap.get(unameKey) ?? -1;
     if (idx >= 0) {
       const existing = db.users[idx];
       if (isSuperAdminUser(existing) && !isSuperAdminUser(req.authUser)) continue;
@@ -1578,6 +1586,7 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
       updated++;
     } else {
       const initialPass = rawPass || '12345678';
+      const newIdx = db.users.length;
       db.users.push({
         id: `u-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         username,
@@ -1587,8 +1596,9 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
         department,
         isActive,
         permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissionsServer(buildPresetPermissionsServer(presetLabel)) : getEmptyPermissionsServer(),
-        createdAt: new Date().toLocaleDateString('fa-IR'),
+        createdAt: todayFa,
       });
+      userIdxMap.set(unameKey, newIdx);
       added++;
     }
   }
@@ -1597,6 +1607,9 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
     await persistDatabase(db);
     return res.json({
       success: true,
+      added,
+      updated,
+      data: { inserted: added, updated },
       message: `بارگذاری کاربران از اکسل با موفقیت انجام شد (${added} کاربر جدید، ${updated} کاربر به‌روزرسانی شد).`
     });
   } catch (err) {
@@ -1756,17 +1769,25 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
   const { items } = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' });
+    return res.json({ success: true, added: 0, updated: 0, data: { inserted: 0, updated: 0, skipped: 0 }, message: 'رکوردی در این دسته وجود نداشت.' });
   }
+
+  const pIdxMap = new Map<string, number>();
+  (db.personnel || []).forEach((p: any, i: number) => {
+    const k = String(p.personnelCode || '').trim();
+    if (k && !pIdxMap.has(k)) pIdxMap.set(k, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
 
   let addedCount = 0;
   let updatedCount = 0;
+  let skippedCount = 0;
 
   for (const row of items) {
     const code = String(getPayrollVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
-    if (!code) continue;
+    if (!code) { skippedCount++; continue; }
 
-    const existingIndex = db.personnel.findIndex((p: any) => String(p.personnelCode).trim() === code);
+    const existingIndex = pIdxMap.get(code) ?? -1;
     const firstName = String(getPayrollVal(row, 'firstName', 'نام') || '').trim();
     const lastName = String(getPayrollVal(row, 'lastName', 'نام خانوادگي', 'نام خانوادگی') || '').trim();
     const fullNameRaw = String(getPayrollVal(row, 'fullName', 'نام و نام خانوادگي', 'نام و نام خانوادگی') || '').trim();
@@ -1807,7 +1828,7 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
       status: String(getPayrollVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
       baseSalary: Number(getPayrollVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
       notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
 
     if (existingIndex >= 0) {
@@ -1817,12 +1838,14 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
       };
       updatedCount++;
     } else {
+      const newIdx = db.personnel.length;
       db.personnel.push({
         id: `p-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         ...itemData,
         relatives: [],
-        createdAt: new Date().toLocaleDateString('fa-IR'),
+        createdAt: todayFa,
       });
+      pIdxMap.set(code, newIdx);
       addedCount++;
     }
   }
@@ -1831,6 +1854,9 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
     await persistDatabase(db);
     return res.json({
       success: true,
+      added: addedCount,
+      updated: updatedCount,
+      data: { inserted: addedCount, updated: updatedCount, skipped: skippedCount },
       message: `ورود اطلاعات با موفقیت انجام شد: ${addedCount} نفر جدید اضافه شدند و ${updatedCount} پرونده به‌روزرسانی گردید.`
     });
   } catch (err) {
@@ -1876,8 +1902,24 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
   const db = loadDatabase();
   const { items } = req.body;
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'لیست بستگان جهت بارگذاری خالی است.' });
+    return res.json({ success: true, added: 0, updated: 0, unmatched: 0, data: { inserted: 0, updated: 0, unmatched: 0 }, message: 'رکوردی در این دسته وجود نداشت.' });
   }
+
+  const byCode = new Map<string, any>();
+  const byEmpId = new Map<string, any>();
+  const byNatId = new Map<string, any>();
+  const byName = new Map<string, any>();
+  for (const p of db.personnel || []) {
+    const c = String(p.personnelCode || '').trim();
+    const eid = String(p.employeeId || '').trim();
+    const nid = String(p.nationalId || '').trim();
+    const fn = normPayrollKey(String(p.fullName || ''));
+    if (c && !byCode.has(c)) byCode.set(c, p);
+    if (eid && !byEmpId.has(eid)) byEmpId.set(eid, p);
+    if (nid && !byNatId.has(nid)) byNatId.set(nid, p);
+    if (fn && !byName.has(fn)) byName.set(fn, p);
+  }
+  const todayFa = new Date().toLocaleDateString('fa-IR');
 
   let added = 0;
   let updated = 0;
@@ -1889,12 +1931,11 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
     const pNatId = String(getPayrollVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
     const pName = normPayrollKey(String(getPayrollVal(row, 'personnelName', 'نام کارمند', 'نام پرسنل', 'نام و نام خانوادگی کارمند') || ''));
 
-    const parent = (db.personnel || []).find((p: any) =>
-      (pCode && String(p.personnelCode).trim() === pCode) ||
-      (pEmpId && String(p.employeeId || '').trim() === pEmpId) ||
-      (pNatId && String(p.nationalId || '').trim() === pNatId) ||
-      (pName && normPayrollKey(String(p.fullName || '')) === pName)
-    );
+    const parent =
+      (pCode ? byCode.get(pCode) : undefined) ||
+      (pEmpId ? byEmpId.get(pEmpId) : undefined) ||
+      (pNatId ? byNatId.get(pNatId) : undefined) ||
+      (pName ? byName.get(pName) : undefined);
 
     if (!parent) {
       unmatched++;
@@ -1936,8 +1977,8 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
       isDependent,
       insuranceCovered,
       notes: String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
-      createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
+      createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : todayFa,
     };
 
     if (existingIdx >= 0) {
@@ -1947,7 +1988,7 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
       parent.relatives.push(relPayload);
       added++;
     }
-    parent.updatedAt = new Date().toLocaleDateString('fa-IR');
+    parent.updatedAt = todayFa;
   }
 
   try {
@@ -1957,6 +1998,7 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
       added,
       updated,
       unmatched,
+      data: { inserted: added, updated, addedRelatives: added, unmatched },
       message: `اطلاعات بستگان با موفقیت ذخیره شد (${added} جدید، ${updated} به‌روزرسانی${unmatched > 0 ? `، ${unmatched} ردیف بدون تطابق کد پرسنلی` : ''}).`,
     });
   } catch (err) {
@@ -2235,16 +2277,28 @@ app.post('/api/karaneh/batch-import', requireAuth, requirePerm('karaneh', 'impor
   const allowedUnits = getKaranehAllowedUnitsForUser(req.authUser);
   const defaultUnit = !fullScope && allowedUnits.length > 0 ? allowedUnits[0] : 'عمومی';
 
-  let count = 0;
+  const pMap = new Map<string, any>();
+  for (const p of db.personnel || []) {
+    const c = String(p.personnelCode || '').trim();
+    if (c && !pMap.has(c)) pMap.set(c, p);
+  }
+  const kIdxMap = new Map<string, number>();
+  (db.karaneh || []).forEach((k: any, i: number) => {
+    const key = `${String(k.personnelCode || '').trim()}::${k.period}`;
+    if (!kIdxMap.has(key)) kIdxMap.set(key, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
+
+  let added = 0;
+  let updated = 0;
   let skippedUnit = 0;
   for (const row of items) {
     const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
     if (!code) continue;
 
-    const matchingPersonnel = db.personnel.find((p: any) => String(p.personnelCode).trim() === code);
-    const existingIndex = db.karaneh.findIndex(
-      (k: any) => String(k.personnelCode).trim() === code && k.period === period
-    );
+    const matchingPersonnel = pMap.get(code);
+    const kKey = `${code}::${period}`;
+    const existingIndex = kIdxMap.get(kKey) ?? -1;
     const existing = existingIndex >= 0 ? db.karaneh[existingIndex] : null;
 
     let department = String(
@@ -2284,29 +2338,34 @@ app.post('/api/karaneh/batch-import', requireAuth, requirePerm('karaneh', 'impor
       submittedAt: existing?.status === 'submitted' && fullScope ? (existing.submittedAt || '') : '',
       submittedBy: existing?.status === 'submitted' && fullScope ? (existing.submittedBy || '') : '',
       submittedByName: existing?.status === 'submitted' && fullScope ? (existing.submittedByName || '') : '',
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
 
     if (existingIndex >= 0) {
       db.karaneh[existingIndex] = record;
+      updated++;
     } else {
+      const newIdx = db.karaneh.length;
       db.karaneh.push(record);
+      kIdxMap.set(kKey, newIdx);
+      added++;
     }
-    count++;
   }
 
-  if (count === 0 && skippedUnit > 0) {
-    return res.status(403).json({
-      success: false,
-      message: `هیچ‌یک از ردیف‌های اکسل متعلق به واحد مجاز شما (${allowedUnits.join('، ')}) نبود.`,
-    });
-  }
-
+  const count = added + updated;
   try {
-    await persistDatabase(db);
+    if (count > 0) await persistDatabase(db);
     return res.json({
       success: true,
-      message: `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت و محاسبه گردید${skippedUnit > 0 ? `، ${skippedUnit} ردیف سایر واحدها نادیده گرفته شد` : ''}).`,
+      added,
+      updated,
+      skippedUnit,
+      data: { inserted: added, updated, skipped: skippedUnit, skippedUnit },
+      message: count > 0
+        ? `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت و محاسبه گردید${skippedUnit > 0 ? `، ${skippedUnit} ردیف سایر واحدها نادیده گرفته شد` : ''}).`
+        : skippedUnit > 0
+        ? `هیچ‌یک از ردیف‌های این دسته متعلق به واحد مجاز شما (${allowedUnits.join('، ')}) نبود.`
+        : 'رکورد معتبری در این دسته وجود نداشت.',
     });
   } catch (err) {
     console.error('Failed to batch import karaneh:', err);
@@ -2678,8 +2737,15 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
   const { items } = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'فایل اکسل طبقه‌بندی خالی است.' });
+    return res.json({ success: true, added: 0, updated: 0, data: { inserted: 0, updated: 0 }, message: 'رکوردی در این دسته وجود نداشت.' });
   }
+
+  const jcIdxMap = new Map<string, number>();
+  (db.jobClassifications || []).forEach((item: any, i: number) => {
+    const k = String(item.personnelCode || '').trim();
+    if (k && !jcIdxMap.has(k)) jcIdxMap.set(k, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
 
   let added = 0;
   let updated = 0;
@@ -2707,18 +2773,20 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
       nextGroupGap: String(row.nextGroupGap ?? row['فاصله گروه بعدی'] ?? ''),
       jobTitle: String(row.jobTitle ?? row['شغل'] ?? ''),
       position: String(row.position ?? row['پست'] ?? row['پست سازمانی'] ?? ''),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
 
-    const idx = db.jobClassifications.findIndex((item: any) => String(item.personnelCode).trim() === code);
+    const idx = jcIdxMap.get(code) ?? -1;
     if (idx >= 0) {
       db.jobClassifications[idx] = { ...db.jobClassifications[idx], ...mapped };
       updated++;
     } else {
+      const newIdx = db.jobClassifications.length;
       db.jobClassifications.push({
         id: `jc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         ...mapped,
       });
+      jcIdxMap.set(code, newIdx);
       added++;
     }
   }
@@ -2727,6 +2795,9 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
     await persistDatabase(db);
     return res.json({
       success: true,
+      added,
+      updated,
+      data: { inserted: added, updated },
       message: `جدول طبقه‌بندی با موفقیت بارگذاری شد (${added} رکورد جدید و ${updated} رکورد به‌روزرسانی گردید).`
     });
   } catch (err) {
@@ -2870,15 +2941,22 @@ app.post('/api/commitments/batch-import', requireAuth, requirePerm('commitments'
   const { items } = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'لیست تعهدات جهت بارگذاری خالی است.' });
+    return res.json({ success: true, added: 0, data: { inserted: 0, updated: 0 }, message: 'رکوردی در این دسته وجود نداشت.' });
   }
+
+  const pMap = new Map<string, any>();
+  for (const p of db.personnel || []) {
+    const c = String(p.personnelCode || '').trim();
+    if (c && !pMap.has(c)) pMap.set(c, p);
+  }
+  const todayFa = new Date().toLocaleDateString('fa-IR');
 
   let added = 0;
   for (const row of items) {
     const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
     if (!code) continue;
 
-    const matchingP = db.personnel.find((p: any) => String(p.personnelCode).trim() === code);
+    const matchingP = pMap.get(code);
     const archivedVal = String(row['بایگانی'] || row['وضعیت بایگانی'] || '').trim();
     const isArchived = archivedVal === 'بله' || archivedVal === 'بایگانی شده' || row.isArchived === true;
 
@@ -2895,7 +2973,7 @@ app.post('/api/commitments/batch-import', requireAuth, requirePerm('commitments'
       endDate: String(row.endDate || row['تاریخ سررسید'] || '1405/01/01'),
       status: row.status || row['وضعیت'] || 'جاری و معتبر',
       isArchived,
-      archivedAt: isArchived ? new Date().toLocaleDateString('fa-IR') : undefined,
+      archivedAt: isArchived ? todayFa : undefined,
       archiveCode: isArchived ? `ARC-${Date.now().toString().slice(-5)}` : undefined,
       guarantorName: row.guarantorName || row['نام ضامن'] || '',
       notes: row.notes || row['توضیحات'] || '',
@@ -2907,7 +2985,7 @@ app.post('/api/commitments/batch-import', requireAuth, requirePerm('commitments'
 
   try {
     await persistDatabase(db);
-    return res.json({ success: true, message: `${added} فقره تعهد پرسنلی با موفقیت از اکسل ثبت گردید.` });
+    return res.json({ success: true, added, data: { inserted: added, updated: 0 }, message: `${added} فقره تعهد پرسنلی با موفقیت از اکسل ثبت گردید.` });
   } catch (err) {
     console.error('Failed to batch import commitments:', err);
     return res.status(500).json({ success: false, message: 'خطا در ثبت گروهی تعهدات در پایگاه داده.' });
@@ -3024,8 +3102,20 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
   const { period, useRowYearMonth, items } = req.body;
 
   if (!period || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'دوره و لیست ردیف‌های حقوق الزامی است.' });
+    return res.json({ success: true, added: 0, updated: 0, data: { inserted: 0, updated: 0 }, message: 'رکوردی در این دسته وجود نداشت.' });
   }
+
+  const pMap = new Map<string, any>();
+  for (const p of db.personnel || []) {
+    const c = String(p.personnelCode || '').trim();
+    if (c && !pMap.has(c)) pMap.set(c, p);
+  }
+  const payIdxMap = new Map<string, number>();
+  (db.payroll || []).forEach((r: any, i: number) => {
+    const key = `${String(r.personnelCode || '').trim()}::${r.period}`;
+    if (!payIdxMap.has(key)) payIdxMap.set(key, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
 
   let added = 0;
   let updated = 0;
@@ -3040,7 +3130,7 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
     const firstName = String(getPayrollVal(row, 'نام', 'firstName') || '').trim();
     const lastName = String(getPayrollVal(row, 'نام خانوادگي', 'نام خانوادگی', 'lastName') || '').trim();
     const fullNameRaw = String(getPayrollVal(row, 'نام و نام خانوادگي', 'نام و نام خانوادگی', 'fullName') || '').trim();
-    const matchingP = db.personnel.find((p: any) => String(p.personnelCode).trim() === code);
+    const matchingP = pMap.get(code);
     const fullName = fullNameRaw || `${firstName} ${lastName}`.trim() || (matchingP ? matchingP.fullName : 'پرسنل');
 
     const record = {
@@ -3085,21 +3175,22 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
       bankName: String(getPayrollVal(row, 'نام بانک') || ''),
       bankAccount: String(getPayrollVal(row, 'شماره حساب') || ''),
       rawFields: row,
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
 
-    const existingIdx = db.payroll.findIndex(
-      (r: any) => String(r.personnelCode).trim() === code && r.period === targetPeriod
-    );
+    const payKey = `${code}::${targetPeriod}`;
+    const existingIdx = payIdxMap.get(payKey) ?? -1;
 
     if (existingIdx >= 0) {
       db.payroll[existingIdx] = { ...db.payroll[existingIdx], ...record };
       updated++;
     } else {
+      const newIdx = db.payroll.length;
       db.payroll.push({
         id: `pay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         ...record,
       });
+      payIdxMap.set(payKey, newIdx);
       added++;
     }
   }
@@ -3108,6 +3199,9 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
     await persistDatabase(db);
     return res.json({
       success: true,
+      added,
+      updated,
+      data: { inserted: added, updated },
       message: `فایل حقوق با موفقیت در دیتابیس ذخیره شد (${added} رکورد جدید، ${updated} رکورد به‌روزرسانی گردید).`
     });
   } catch (err) {
@@ -3233,6 +3327,12 @@ app.post('/api/mining-volumes/batch-import', requireAuth, async (req: Authentica
   const db = loadDatabase();
   if (!Array.isArray(db.miningVolumes)) db.miningVolumes = [];
   const { items } = req.body;
+  const mvIdxMap = new Map<string, number>();
+  db.miningVolumes.forEach((v: any, i: number) => {
+    const key = `${v.period}::${normPayrollKey(v.unitName)}::${normPayrollKey(v.metricTitle)}`;
+    if (!mvIdxMap.has(key)) mvIdxMap.set(key, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
   let added = 0; let updated = 0;
   for (const row of items || []) {
     const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
@@ -3247,17 +3347,18 @@ app.post('/api/mining-volumes/batch-import', requireAuth, async (req: Authentica
     const unitLabel = String(getPayrollVal(row, 'unitLabel', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'تن').trim();
     const status = String(getPayrollVal(row, 'status', 'وضعیت تحقق', 'وضعیت') || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim();
     const notes = String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim();
-    const idx = db.miningVolumes.findIndex((v: any) => v.period === period && normPayrollKey(v.unitName) === normPayrollKey(unitName) && normPayrollKey(v.metricTitle) === normPayrollKey(metricTitle));
+    const mvKey = `${period}::${normPayrollKey(unitName)}::${normPayrollKey(metricTitle)}`;
+    const idx = mvIdxMap.get(mvKey) ?? -1;
     const rec = {
       id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes,
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
     if (idx >= 0) { db.miningVolumes[idx] = rec; updated++; }
-    else { db.miningVolumes.push(rec); added++; }
+    else { const newIdx = db.miningVolumes.length; db.miningVolumes.push(rec); mvIdxMap.set(mvKey, newIdx); added++; }
   }
   await persistDatabase(db);
-  return res.json({ success: true, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+  return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
 });
 
 app.delete('/api/mining-volumes/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -3371,6 +3472,12 @@ app.post('/api/mining-machinery/batch-import', requireAuth, async (req: Authenti
   const db = loadDatabase();
   if (!Array.isArray(db.miningMachinery)) db.miningMachinery = [];
   const { items } = req.body;
+  const mmIdxMap = new Map<string, number>();
+  db.miningMachinery.forEach((m: any, i: number) => {
+    const k = String(m.machineCode || '').trim();
+    if (k && !mmIdxMap.has(k)) mmIdxMap.set(k, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
   let added = 0; let updated = 0;
   for (const row of items || []) {
     const machineCode = String(getPayrollVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'کد تجهیز', 'پلاک تجهیز') || '').trim();
@@ -3386,7 +3493,7 @@ app.post('/api/mining-machinery/batch-import', requireAuth, async (req: Authenti
       : rawStatus.includes('سرویس')
       ? 'سرویس دوره‌ای'
       : 'آماده به کار';
-    const idx = db.miningMachinery.findIndex((m: any) => String(m.machineCode).trim() === machineCode);
+    const idx = mmIdxMap.get(machineCode) ?? -1;
     const rec = {
       id: idx >= 0 ? db.miningMachinery[idx].id : `mm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       machineCode, machineName,
@@ -3398,13 +3505,13 @@ app.post('/api/mining-machinery/batch-import', requireAuth, async (req: Authenti
       estimatedReadyDate: String(getPayrollVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تاریخ آماده به کار') || '').trim(),
       operatorName: String(getPayrollVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'اپراتور') || '').trim(),
       notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') || '').trim(),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
     if (idx >= 0) { db.miningMachinery[idx] = rec; updated++; }
-    else { db.miningMachinery.push(rec); added++; }
+    else { const newIdx = db.miningMachinery.length; db.miningMachinery.push(rec); mmIdxMap.set(machineCode, newIdx); added++; }
   }
   await persistDatabase(db);
-  return res.json({ success: true, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
+  return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
 });
 
 app.delete('/api/mining-machinery/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -3525,6 +3632,12 @@ app.post('/api/unit-reports/batch-import', requireAuth, async (req: Authenticate
   const db = loadDatabase();
   if (!Array.isArray(db.unitReports)) db.unitReports = [];
   const { items, unitName: defaultUnitName, period: defaultPeriod, reportCategory: defaultCategory } = req.body || {};
+  const urIdxMap = new Map<string, number>();
+  db.unitReports.forEach((r: any, i: number) => {
+    const key = `${r.period}::${normPayrollKey(r.unitName)}::${normPayrollKey(r.metricName)}`;
+    if (!urIdxMap.has(key)) urIdxMap.set(key, i);
+  });
+  const todayFa = new Date().toLocaleDateString('fa-IR');
   let added = 0; let updated = 0;
   for (const row of items || []) {
     if (!row || typeof row !== 'object') continue;
@@ -3546,25 +3659,28 @@ app.post('/api/unit-reports/batch-import', requireAuth, async (req: Authenticate
 
     const rawFields: Record<string, string | number> = {};
     const incomingRaw = (row.rawFields && typeof row.rawFields === 'object') ? row.rawFields : row;
-    for (const [k, v] of Object.entries(incomingRaw).slice(0, 100)) {
+    let rawCount = 0;
+    for (const [k, v] of Object.entries(incomingRaw)) {
+      if (rawCount >= 100) break;
+      if (k.startsWith('ستون_')) continue;
       if (v !== undefined && v !== null && String(v).trim() !== '') {
         rawFields[String(k).slice(0, 120)] = typeof v === 'number' ? (Number.isFinite(v) ? v : 0) : String(v).slice(0, 300);
+        rawCount++;
       }
     }
 
-    const idx = db.unitReports.findIndex(
-      (r: any) => r.period === period && normPayrollKey(r.unitName) === normPayrollKey(unitName) && normPayrollKey(r.metricName) === normPayrollKey(metricName)
-    );
+    const urKey = `${period}::${normPayrollKey(unitName)}::${normPayrollKey(metricName)}`;
+    const idx = urIdxMap.get(urKey) ?? -1;
     const rec = {
       id: idx >= 0 ? db.unitReports[idx].id : `ur-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       period, unitName, reportCategory, metricName, actualValue, previousValue, targetValue, unitLabel, status, submittedBy, notes, rawFields,
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      updatedAt: todayFa,
     };
     if (idx >= 0) { db.unitReports[idx] = rec; updated++; }
-    else { db.unitReports.push(rec); added++; }
+    else { const newIdx = db.unitReports.length; db.unitReports.push(rec); urIdxMap.set(urKey, newIdx); added++; }
   }
   await persistDatabase(db);
-  return res.json({ success: true, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
+  return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
 });
 
 app.delete('/api/unit-reports/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {

@@ -40,6 +40,7 @@ import {
 import { readAndCompressDocument } from '../utils/image';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
 import { PersonnelRelativesTab } from './PersonnelRelativesTab';
+import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex } from '../utils/duplicates';
 
 interface PersonnelModuleProps {
@@ -102,6 +103,8 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
   const [filterDepartment, setFilterDepartment] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [onlyDuplicates, setOnlyDuplicates] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingPersonnel, setEditingPersonnel] = useState<Personnel | null>(null);
@@ -194,6 +197,17 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
 
     return matchesSearch && matchesDept && matchesStatus && matchesDup;
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterDepartment, filterStatus, onlyDuplicates, activeSubTab]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredList.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedList = useMemo(
+    () => filteredList.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredList, safePage, pageSize]
+  );
 
   const handleOpenAdd = () => {
     setEditingPersonnel(null);
@@ -831,7 +845,7 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredList.map((p, idx) => {
+                paginatedList.map((p, idx) => {
                   const docCount = countDocs(p);
                   const relCount = Array.isArray(p.relatives) ? p.relatives.length : 0;
                   const isSelected = selectedIds.includes(p.id);
@@ -861,7 +875,7 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
                         </td>
                       )}
                       <td className="py-3.5 px-3 text-center text-slate-600 persian-num">
-                        {toPersianDigits(idx + 1)}
+                        {toPersianDigits((safePage - 1) * pageSize + idx + 1)}
                       </td>
                       {tableViewMode === 'full28' ? (
                         <>
@@ -1026,14 +1040,18 @@ export const PersonnelModule: React.FC<PersonnelModuleProps> = ({
           </table>
         </div>
 
-        <div className="px-5 py-3 bg-slate-50/90 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600">
-          <span className="persian-num">
-            نمایش <b>{toPersianDigits(filteredList.length)}</b> پرونده از مجموع <b>{toPersianDigits(personnelList.length)}</b> پرسنل
-          </span>
-          <span className="text-slate-500">
-            پشتیبانی کامل ۲۸ ستون استاندارد کارگزینی + مدیریت بستگان + فونت استاندارد فارسی
-          </span>
-        </div>
+        <TablePagination
+          currentPage={safePage}
+          totalItems={filteredList.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          extraRight={
+            <span className="text-slate-500 persian-num">
+              (مجموع کل پرسنل: <b>{toPersianDigits(personnelList.length)}</b> نفر)
+            </span>
+          }
+        />
       </div>
 
       {/* Add / Edit Personnel Modal */}
