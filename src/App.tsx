@@ -416,6 +416,7 @@ export default function App() {
     const silent = Boolean(options?.silent);
     const force = Boolean(options?.force);
     const retryAttempt = Number(options?.retryAttempt || 0);
+    if (isBatchImportActive() && !force) return;
     if (isReloadingDataRef.current && silent && !force) return;
     isReloadingDataRef.current = true;
     const activeUserId = loadedForUserIdRef.current;
@@ -427,7 +428,7 @@ export default function App() {
 
       const useLiteFirst = true;
       const bundle = await api.getBootstrapData({ lite: useLiteFirst });
-      if (loadedForUserIdRef.current !== activeUserId) return;
+      if (loadedForUserIdRef.current !== activeUserId || (isBatchImportActive() && !force)) return;
 
       applyBundleToState(bundle, useLiteFirst && payrollList.length > 0);
       setSyncError(null);
@@ -435,8 +436,8 @@ export default function App() {
         setSyncingData(false);
       }
 
-      // Phase 2: Hydrate ONLY skipped heavy slices (payroll / scanned docs) in background without re-downloading all tables
-      if (bundle.isLite) {
+      // Phase 2: Hydrate ONLY skipped heavy slices (payroll / scanned docs) in background without colliding with active Excel uploads
+      if (bundle.isLite && !isBatchImportActive()) {
         const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
         const perms = currentUser
           ? isAdmin
@@ -454,11 +455,12 @@ export default function App() {
             needDocs ? api.getPersonnel({ lite: false }) : Promise.resolve(null),
           ])
             .then(([payData, fullPersData]) => {
-              if (loadedForUserIdRef.current !== activeUserId) return;
+              if (loadedForUserIdRef.current !== activeUserId || isBatchImportActive()) return;
               if (Array.isArray(payData)) setPayrollList(payData);
               if (Array.isArray(fullPersData) && fullPersData.length > 0) setPersonnelList(fullPersData);
             })
             .catch((err: any) => {
+              if (isBatchImportActive()) return;
               if (activeTab === 'payroll' || activeTab === 'ceo-dashboard') {
                 const msg = err?.message || 'خطا در دریافت اطلاعات حقوق از پایگاه داده';
                 setSyncError(msg);
@@ -469,10 +471,10 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Error loading data:', err);
-      if (!silent) {
+      if (!silent && !isBatchImportActive()) {
         if (retryAttempt < 1 && loadedForUserIdRef.current === activeUserId) {
           setTimeout(() => {
-            if (loadedForUserIdRef.current === activeUserId) {
+            if (loadedForUserIdRef.current === activeUserId && !isBatchImportActive()) {
               void loadAllData({ silent: false, retryAttempt: retryAttempt + 1 });
             }
           }, 2500);
@@ -531,7 +533,7 @@ export default function App() {
 
   // Lazy-load full payroll slice if user navigates to payroll or ceo-dashboard and payrollList is still empty
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || isBatchImportActive()) return;
     if (activeTab !== 'payroll' && activeTab !== 'ceo-dashboard') return;
     if (payrollList.length > 0) return;
     if (Number(dbStatus?.totalPayrollRecords || 0) <= 0) return;
@@ -540,9 +542,10 @@ export default function App() {
     if (!isAdmin && !perms.payroll?.view && !perms.ceoDashboard?.view) return;
     api.getPayroll()
       .then((payData) => {
-        if (Array.isArray(payData)) setPayrollList(payData);
+        if (!isBatchImportActive() && Array.isArray(payData)) setPayrollList(payData);
       })
       .catch((err: any) => {
+        if (isBatchImportActive()) return;
         const msg = err?.message || 'خطا در دریافت جدول حقوق از سرور';
         setSyncError(msg);
         showNotification(msg, 'error');
@@ -659,7 +662,7 @@ export default function App() {
     let triggeredReload = false;
 
     const checkBuildVersion = async () => {
-      if (disposed || triggeredReload) return;
+      if (disposed || triggeredReload || isBatchImportActive()) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       try {
         const res = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });

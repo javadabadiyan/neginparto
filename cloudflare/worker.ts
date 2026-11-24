@@ -875,7 +875,7 @@ async function getPersonnelLookupMap(
 ): Promise<Map<string, { id: string; personnelCode: string; fullName: string; nationalId: string; department: string; position: string; employeeId: string }>> {
   const map = new Map<string, any>();
   const baseSelect = `SELECT id,
-              TRIM(personnel_code) as personnelCode,
+              personnel_code as personnelCode,
               COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
               COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId,
               COALESCE(json_extract(data_json, '$.department'), '') as department,
@@ -889,7 +889,7 @@ async function getPersonnelLookupMap(
       const slice = cleanCodes.slice(i, i + 75);
       const placeholders = slice.map(() => '?').join(',');
       const { results } = await db
-        .prepare(`${baseSelect} WHERE TRIM(personnel_code) IN (${placeholders})`)
+        .prepare(`${baseSelect} WHERE personnel_code IN (${placeholders})`)
         .bind(...slice)
         .all<any>();
       for (const r of results || []) {
@@ -912,6 +912,25 @@ async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[])
   const CHUNK = 15;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
+  }
+}
+
+async function batchExecuteAndTouch(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
+  const version = String(Date.now());
+  const metaStmt = db
+    .prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('last_saved', ?), ('sync_version', ?)")
+    .bind(faDateTime(), version);
+  if (stmts.length === 0) {
+    await metaStmt.run();
+    return;
+  }
+  const CHUNK = 15;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    const slice = stmts.slice(i, i + CHUNK);
+    if (i + CHUNK >= stmts.length) {
+      slice.push(metaStmt);
+    }
+    await db.batch(slice);
   }
 }
 
@@ -1316,12 +1335,17 @@ let isBootstrappedInIsolate = false;
 async function ensureBootstrapped(db: D1Database): Promise<void> {
   if (isBootstrappedInIsolate) return;
 
+  let seededFlag = false;
+  let indexesV6Flag = false;
   try {
-    const fastCheck = await db
-      .prepare('SELECT value FROM app_meta WHERE key = ?')
-      .bind('seeded_v1')
-      .first<{ value: string }>();
-    if (fastCheck?.value === 'true') {
+    const { results } = await db
+      .prepare("SELECT key, value FROM app_meta WHERE key IN ('seeded_v1', 'schema_v6_indexes')")
+      .all<{ key: string; value: string }>();
+    for (const r of results || []) {
+      if (r.key === 'seeded_v1' && r.value === 'true') seededFlag = true;
+      if (r.key === 'schema_v6_indexes' && r.value === 'true') indexesV6Flag = true;
+    }
+    if (seededFlag && indexesV6Flag) {
       isBootstrappedInIsolate = true;
       return;
     }
@@ -1345,20 +1369,37 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_personnel_code ON personnel(personnel_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS job_groups (id TEXT PRIMARY KEY, data_json TEXT NOT NULL)'),
     db.prepare('CREATE TABLE IF NOT EXISTS job_classifications (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_job_classifications_code ON job_classifications(personnel_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS karaneh (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_karaneh_period ON karaneh(period)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_karaneh_period_code ON karaneh(period, personnel_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS commitments (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_commitments_code ON commitments(personnel_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS payroll (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(period)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_period_code ON payroll(period, personnel_code)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_payroll_code ON payroll(personnel_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS mining_volumes (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_volumes_period ON mining_volumes(period)'),
     db.prepare('CREATE TABLE IF NOT EXISTS mining_machinery (id TEXT PRIMARY KEY, machine_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_machinery_code ON mining_machinery(machine_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS unit_reports (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_unit_reports_period_unit ON unit_reports(period, unit_name)'),
   ]);
 
-  const seeded = await db.prepare('SELECT value FROM app_meta WHERE key = ?').bind('seeded_v1').first<{ value: string }>();
-  if (!seeded) {
+  if (!indexesV6Flag) {
+    await db.batch([
+      db.prepare('UPDATE personnel SET personnel_code = TRIM(personnel_code) WHERE personnel_code != TRIM(personnel_code)'),
+      db.prepare('UPDATE karaneh SET personnel_code = TRIM(personnel_code) WHERE personnel_code != TRIM(personnel_code)'),
+      db.prepare('UPDATE job_classifications SET personnel_code = TRIM(personnel_code) WHERE personnel_code != TRIM(personnel_code)'),
+      db.prepare('UPDATE commitments SET personnel_code = TRIM(personnel_code) WHERE personnel_code != TRIM(personnel_code)'),
+      db.prepare('UPDATE payroll SET personnel_code = TRIM(personnel_code) WHERE personnel_code != TRIM(personnel_code)'),
+      db.prepare('UPDATE mining_machinery SET machine_code = TRIM(machine_code) WHERE machine_code != TRIM(machine_code)'),
+      db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('schema_v6_indexes', 'true')"),
+    ]);
+  }
+
+  if (!seededFlag) {
     const counts = await Promise.all([
       db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>(),
       db.prepare('SELECT COUNT(*) as cnt FROM personnel').first<{ cnt: number }>(),
@@ -1939,8 +1980,9 @@ export default {
         if (!body.personnelCode || (!body.fullName && !body.firstName)) {
           return jsonRes(request, env, { success: false, message: 'کد پرسنلی و نام پرسنل الزامی است.' }, 400);
         }
-        const existing = await env.DB.prepare('SELECT id FROM personnel WHERE LOWER(personnel_code) = LOWER(?)')
-          .bind(String(body.personnelCode).trim())
+        const cleanPersCode = toAsciiDigits(body.personnelCode).trim();
+        const existing = await env.DB.prepare('SELECT id FROM personnel WHERE personnel_code = ?')
+          .bind(cleanPersCode)
           .first();
         if (existing) {
           return jsonRes(request, env, { success: false, message: 'پرسنلی با این کد پرسنلی قبلاً ثبت شده است.' }, 400);
@@ -1949,7 +1991,7 @@ export default {
         const item = {
           id: genId('p'),
           ...body,
-          personnelCode: String(body.personnelCode).trim(),
+          personnelCode: cleanPersCode,
           fullName,
           firstName: body.firstName || fullName.split(' ')[0] || '',
           lastName: body.lastName || fullName.split(' ').slice(1).join(' ') || '',
@@ -1972,15 +2014,17 @@ export default {
           if (!row) return jsonRes(request, env, { success: false, message: 'پرسنل یافت نشد.' }, 404);
           const existing = JSON.parse(row.data_json);
           const body: any = await request.json().catch(() => ({}));
+          const cleanCode = toAsciiDigits(body.personnelCode ?? existing.personnelCode ?? '').trim();
           const updated = {
             ...existing,
             ...body,
+            personnelCode: cleanCode,
             fullName: body.fullName || `${body.firstName ?? existing.firstName} ${body.lastName ?? existing.lastName}`.trim(),
             baseSalary: body.baseSalary !== undefined ? Number(body.baseSalary) : existing.baseSalary,
             updatedAt: faDate(),
           };
           await env.DB.prepare('UPDATE personnel SET personnel_code = ?, data_json = ?, updated_at = ? WHERE id = ?')
-            .bind(String(updated.personnelCode || ''), JSON.stringify(updated), updated.updatedAt, id)
+            .bind(cleanCode, JSON.stringify(updated), updated.updatedAt, id)
             .run();
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: updated, message: 'پرونده پرسنلی با موفقیت به‌روزرسانی شد.' });
@@ -2012,7 +2056,7 @@ export default {
           const slice = incomingCodes.slice(i, i + 50);
           const placeholders = slice.map(() => '?').join(',');
           const { results } = await env.DB.prepare(
-            `SELECT personnel_code, data_json FROM personnel WHERE TRIM(personnel_code) IN (${placeholders})`
+            `SELECT personnel_code, data_json FROM personnel WHERE personnel_code IN (${placeholders})`
           )
             .bind(...slice)
             .all<{ personnel_code: string; data_json: string }>();
@@ -2118,8 +2162,7 @@ export default {
           ['personnel_code', 'data_json', 'updated_at'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
           success: true,
           added,
@@ -2181,7 +2224,7 @@ export default {
           const slice = incomingCodes.slice(i, i + 50);
           const ph = slice.map(() => '?').join(',');
           const { results } = await env.DB.prepare(
-            `SELECT data_json FROM personnel WHERE TRIM(personnel_code) IN (${ph})`
+            `SELECT data_json FROM personnel WHERE personnel_code IN (${ph})`
           )
             .bind(...slice)
             .all<{ data_json: string }>();
@@ -2306,7 +2349,7 @@ export default {
         if (touchedParents.size > 0) {
           const rowsToSave = Array.from(touchedParents.values()).map((p) => [
             p.id,
-            String(p.personnelCode || ''),
+            toAsciiDigits(p.personnelCode || '').trim(),
             JSON.stringify(p),
             p.updatedAt,
           ]);
@@ -2318,8 +2361,7 @@ export default {
             ['personnel_code', 'data_json', 'updated_at'],
             rowsToSave
           );
-          await batchExecuteChunked(env.DB, stmts);
-          await touchLastSaved(env.DB);
+          await batchExecuteAndTouch(env.DB, stmts);
         }
 
         return jsonRes(request, env, {
@@ -2519,7 +2561,7 @@ export default {
           return jsonRes(request, env, { success: false, message: 'کد پرسنلی و دوره کارانه الزامی است.' }, 400);
         }
         const cleanCode = toAsciiDigits(kData.personnelCode).trim();
-        const existingRow = await env.DB.prepare('SELECT id, data_json FROM karaneh WHERE period = ? AND TRIM(personnel_code) = ?')
+        const existingRow = await env.DB.prepare('SELECT id, data_json FROM karaneh WHERE period = ? AND personnel_code = ?')
           .bind(kData.period, cleanCode)
           .first<{ id: string; data_json?: string }>();
         const existingParsed = existingRow?.data_json ? JSON.parse(existingRow.data_json) : null;
@@ -2609,7 +2651,7 @@ export default {
           const slice = incomingCodes.slice(i, i + 75);
           const placeholders = slice.map(() => '?').join(',');
           const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, TRIM(personnel_code) as personnelCode, data_json FROM karaneh WHERE period = ? AND TRIM(personnel_code) IN (${placeholders})`
+            `SELECT id, personnel_code as personnelCode, data_json FROM karaneh WHERE period = ? AND personnel_code IN (${placeholders})`
           )
             .bind(period, ...slice)
             .all<any>();
@@ -2699,8 +2741,7 @@ export default {
           ['period', 'personnel_code', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
           success: true,
           added,
@@ -3045,7 +3086,7 @@ export default {
           const slice = incomingCodes.slice(i, i + 75);
           const ph = slice.map(() => '?').join(',');
           const { results } = await env.DB.prepare(
-            `SELECT id, TRIM(personnel_code) as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE TRIM(personnel_code) IN (${ph})`
+            `SELECT id, personnel_code as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE personnel_code IN (${ph})`
           )
             .bind(...slice)
             .all<any>();
@@ -3132,8 +3173,7 @@ export default {
           ['personnel_code', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
           success: true,
           added,
@@ -3280,8 +3320,7 @@ export default {
           ['personnel_code', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, { success: true, added, message: `${added} سند تعهد پرسنلی با موفقیت ذخیره شد.` });
       }
 
@@ -3349,7 +3388,7 @@ export default {
           const slice = incomingPayCodes.slice(i, i + 75);
           const placeholders = slice.map(() => '?').join(',');
           const { results: existingPayRows } = await env.DB.prepare(
-            `SELECT id, period, TRIM(personnel_code) as personnelCode FROM payroll WHERE TRIM(personnel_code) IN (${placeholders})`
+            `SELECT id, period, personnel_code as personnelCode FROM payroll WHERE personnel_code IN (${placeholders})`
           )
             .bind(...slice)
             .all<{ id: string; period: string; personnelCode: string }>();
@@ -3447,8 +3486,7 @@ export default {
           ['period', 'personnel_code', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
           success: true,
           added,
@@ -3606,8 +3644,7 @@ export default {
           ['period', 'unit_name', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
@@ -3679,7 +3716,7 @@ export default {
         if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش وضعیت ماشین‌آلات.');
         if (!body.machineCode || !body.machineName) return jsonRes(request, env, { success: false, message: 'کد دستگاه و نام تجهیز الزامی است.' }, 400);
         const existingRow = !body.id
-          ? await env.DB.prepare('SELECT id FROM mining_machinery WHERE TRIM(machine_code) = ?').bind(String(body.machineCode).trim()).first<{ id: string }>()
+          ? await env.DB.prepare('SELECT id FROM mining_machinery WHERE machine_code = ?').bind(toAsciiDigits(body.machineCode).trim()).first<{ id: string }>()
           : null;
         const rawStatus = String(body.status || 'آماده به کار').trim();
         const status =
@@ -3731,7 +3768,7 @@ export default {
           const slice = incomingMachineCodes.slice(i, i + 50);
           const ph = slice.map(() => '?').join(',');
           const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, TRIM(machine_code) as machineCode FROM mining_machinery WHERE TRIM(machine_code) IN (${ph})`
+            `SELECT id, machine_code as machineCode FROM mining_machinery WHERE machine_code IN (${ph})`
           )
             .bind(...slice)
             .all<{ id: string; machineCode: string }>();
@@ -3805,8 +3842,7 @@ export default {
           ['machine_code', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
@@ -4007,8 +4043,7 @@ export default {
           ['period', 'unit_name', 'data_json'],
           Array.from(pendingMap.values())
         );
-        await batchExecuteChunked(env.DB, stmts);
-        await touchLastSaved(env.DB);
+        await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
