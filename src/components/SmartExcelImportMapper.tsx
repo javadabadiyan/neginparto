@@ -191,6 +191,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
   const [showUnmappedOnly, setShowUnmappedOnly] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [importProgress, setImportProgress] = useState<BatchImportProgress | null>(null);
 
@@ -199,6 +200,18 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
       setImportProgress(next);
     });
   }, []);
+
+  useEffect(() => {
+    if (!submitting) {
+      setElapsedSec(0);
+      return;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [submitting]);
 
   const targetFields = useMemo(() => getSmartModuleFields(moduleType), [moduleType]);
 
@@ -538,6 +551,9 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
                   </div>
                   <div className="flex items-center gap-3 text-[11px] font-medium text-indigo-700">
                     <span>دسته {toPersianDigits(importProgress.completedChunks)} از {toPersianDigits(importProgress.totalChunks)}</span>
+                    {elapsedSec > 0 && (
+                      <span className="text-slate-600">{toPersianDigits(elapsedSec)} ثانیه</span>
+                    )}
                     {importProgress.savedRows > 0 && (
                       <span className="text-emerald-700 font-bold">{toPersianDigits(importProgress.savedRows)} ثبت‌شده</span>
                     )}

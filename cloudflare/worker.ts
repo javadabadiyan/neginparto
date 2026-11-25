@@ -57,16 +57,27 @@ function jsonRes(
 
 async function readJsonBody(request: Request): Promise<any> {
   try {
+    const buf = await request.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return {};
+    const bytes = new Uint8Array(buf);
+    const hasGzipMagic = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
     const reqUrl = new URL(request.url);
-    const isGzip =
+    const hasGzipHint =
       reqUrl.searchParams.get('gz') === '1' ||
       request.headers.get('X-Requested-With') === 'npn-gzip' ||
       (request.headers.get('Content-Encoding') || '').toLowerCase().includes('gzip');
-    if (isGzip && request.body && typeof DecompressionStream !== 'undefined') {
-      const decompressed = request.body.pipeThrough(new DecompressionStream('gzip'));
-      return await new Response(decompressed).json();
+
+    if ((hasGzipMagic || (hasGzipHint && bytes[0] !== 0x7b && bytes[0] !== 0x5b)) && typeof DecompressionStream !== 'undefined') {
+      try {
+        const decompressed = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+        const text = await new Response(decompressed).text();
+        if (text) return JSON.parse(text);
+      } catch {
+        // Fallback below if a proxy modified headers or pre-decompressed the payload
+      }
     }
-    return await request.json();
+    const plainText = textDecoder.decode(bytes);
+    return plainText ? JSON.parse(plainText) : {};
   } catch {
     return {};
   }
@@ -922,14 +933,30 @@ async function getPersonnelLookupMap(
   const map = new Map<string, any>();
   const baseSelect = `SELECT id,
               personnel_code as personnelCode,
-              COALESCE(json_extract(data_json, '$.firstName'), '') as firstName,
-              COALESCE(json_extract(data_json, '$.lastName'), '') as lastName,
-              COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
-              COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId,
-              COALESCE(json_extract(data_json, '$.department'), '') as department,
-              COALESCE(json_extract(data_json, '$.position'), '') as position,
-              COALESCE(json_extract(data_json, '$.employeeId'), '') as employeeId
+              CASE WHEN data_json LIKE '%"documents":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json
        FROM personnel`;
+
+  const ingestRow = (r: any) => {
+    const code = toAsciiDigits(r.personnelCode).trim();
+    if (!code) return;
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(r.data_json);
+    } catch {
+      parsed = {};
+    }
+    map.set(code, {
+      id: r.id,
+      personnelCode: code,
+      firstName: String(parsed?.firstName || ''),
+      lastName: String(parsed?.lastName || ''),
+      fullName: String(parsed?.fullName || ''),
+      nationalId: String(parsed?.nationalId || ''),
+      department: String(parsed?.department || ''),
+      position: String(parsed?.position || ''),
+      employeeId: String(parsed?.employeeId || ''),
+    });
+  };
 
   if (Array.isArray(codes) && codes.length > 0) {
     const cleanCodes = Array.from(new Set(codes.map((c) => toAsciiDigits(c).trim()).filter(Boolean)));
@@ -948,8 +975,7 @@ async function getPersonnelLookupMap(
     );
     for (const res of responses) {
       for (const r of res.results || []) {
-        const code = toAsciiDigits(r.personnelCode).trim();
-        if (code) map.set(code, { ...r, personnelCode: code });
+        ingestRow(r);
       }
     }
     return map;
@@ -957,14 +983,13 @@ async function getPersonnelLookupMap(
 
   const { results } = await db.prepare(baseSelect).all<any>();
   for (const r of results || []) {
-    const code = toAsciiDigits(r.personnelCode).trim();
-    if (code) map.set(code, { ...r, personnelCode: code });
+    ingestRow(r);
   }
   return map;
 }
 
 async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  const CHUNK = 25;
+  const CHUNK = 50;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
   }
@@ -979,7 +1004,7 @@ async function batchExecuteAndTouch(db: D1Database, stmts: D1PreparedStatement[]
     await metaStmt.run();
     return;
   }
-  const CHUNK = 25;
+  const CHUNK = 50;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     const slice = stmts.slice(i, i + CHUNK);
     if (i + CHUNK >= stmts.length) {
@@ -990,17 +1015,8 @@ async function batchExecuteAndTouch(db: D1Database, stmts: D1PreparedStatement[]
 }
 
 function utf8ByteLength(str: string): number {
-  let bytes = 0;
-  for (let i = 0; i < str.length; i++) {
-    const code = str.charCodeAt(i);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      bytes += 4;
-      i++;
-    } else bytes += 3;
-  }
-  return bytes;
+  if (!NON_ASCII_RE.test(str)) return str.length;
+  return textEncoder.encode(str).byteLength;
 }
 
 function buildMultiRowUpsertStmts(

@@ -1018,6 +1018,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('personnel', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در ورود اکسل.', 'error');
         return false;
       }
@@ -1152,6 +1155,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('karaneh', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در بارگذاری کارانه.', 'error');
         return false;
       }
@@ -1355,6 +1361,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('jobClassifications', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در ورود اکسل طبقه‌بندی مشاغل.', 'error');
         return false;
       }
@@ -1459,6 +1468,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('commitments', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در بارگذاری اکسل تعهدات.', 'error');
         return false;
       }
@@ -1532,6 +1544,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('users', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در ورود گروهی کاربران.', 'error');
         return false;
       }
@@ -1636,6 +1651,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       } else {
+        if (Number(res?.data?.partialSaved || 0) > 0) {
+          void afterUploadRefresh('payroll', { silentBg: true });
+        }
         showNotification(res.message || 'خطا در بارگذاری فایل حقوق.', 'error');
         return false;
       }
@@ -1920,6 +1938,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         return true;
       }
+      if (Number(res?.data?.partialSaved || 0) > 0) {
+        void afterUploadRefresh('personnel', { silentBg: true });
+      }
       showNotification(res.message || 'خطا در ورود اطلاعات بستگان.', 'error');
       return false;
     } catch (e: any) {
@@ -2180,6 +2201,9 @@ export default function App() {
         showNotification(res.message || 'آمار حجم عملیات از اکسل بارگذاری شد.');
         return { success: true, message: res.message };
       }
+      if (Number(res?.data?.partialSaved || 0) > 0) {
+        void afterUploadRefresh('miningVolumes', { silentBg: true });
+      }
       showNotification(res.message || 'خطا در ورود اکسل آمار حجم.', 'error');
       return { success: false, message: res.message };
     } catch (e: any) {
@@ -2316,6 +2340,9 @@ export default function App() {
         showNotification(res.message || 'لیست ماشین‌آلات از اکسل وارد شد.');
         return { success: true, message: res.message };
       }
+      if (Number(res?.data?.partialSaved || 0) > 0) {
+        void afterUploadRefresh('miningMachinery', { silentBg: true });
+      }
       showNotification(res.message || 'خطا در ورود اکسل ماشین‌آلات.', 'error');
       return { success: false, message: res.message };
     } catch (e: any) {
@@ -2448,6 +2475,9 @@ export default function App() {
         scheduleMirrorSnapshot();
         showNotification(res.message || 'گزارش اکسل واحد با موفقیت بارگذاری و به داشبورد مدیرعامل ارسال شد.');
         return { success: true, message: res.message };
+      }
+      if (Number(res?.data?.partialSaved || 0) > 0) {
+        void afterUploadRefresh('unitReports', { silentBg: true });
       }
       showNotification(res.message || 'خطا در ورود اکسل گزارش واحد.', 'error');
       return { success: false, message: res.message };
