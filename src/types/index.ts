@@ -235,6 +235,8 @@ export interface KaranehRecord {
   id: string;
   personnelId: string;
   personnelCode: string;
+  firstName?: string;
+  lastName?: string;
   fullName: string;
   department: string;
   position: string;
@@ -256,6 +258,8 @@ export interface KaranehRecord {
 export interface KaranehComparisonRow {
   id?: string;
   personnelCode: string;
+  firstName?: string;
+  lastName?: string;
   fullName: string;
   department: string;
   position: string;

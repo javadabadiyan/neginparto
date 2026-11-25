@@ -1103,11 +1103,27 @@ export default function App() {
             const deductions = optNum(optVal(row, 'deductions', 'کسورات کارانه', 'کسورات'));
             const finalRaw = optVal(row, 'finalKaraneh', 'کارانه نهایی قابل پرداخت', 'کارانه نهایی', 'کارانه نهایی (ریال)', 'کارانه', 'مبلغ');
             const finalKaraneh = finalRaw !== undefined ? optNum(finalRaw) : baseKaraneh + overtimeBonus - deductions;
+            const rawFullInput = String(optVal(row, 'fullName', 'نام و نام خانوادگی', 'نام و نام خانوادگي') || '').trim();
+            const fallbackFull = rawFullInput || String(matchingP?.fullName || existing?.fullName || '').trim();
+            const fallbackParts = fallbackFull ? fallbackFull.split(/\s+/).filter(Boolean) : [];
+            const firstName =
+              String(optVal(row, 'firstName', 'نام') || '').trim() ||
+              String(matchingP?.firstName || existing?.firstName || '').trim() ||
+              fallbackParts[0] ||
+              '';
+            const lastName =
+              String(optVal(row, 'lastName', 'نام خانوادگی', 'نام خانوادگي', 'فامیل', 'فامیلی') || '').trim() ||
+              String(matchingP?.lastName || existing?.lastName || '').trim() ||
+              fallbackParts.slice(1).join(' ') ||
+              '';
+            const fullName = `${firstName} ${lastName}`.trim() || fallbackFull || 'پرسنل';
             const rec: KaranehRecord = {
               id: existing?.id || `opt_k_${Date.now()}_${i}`,
               personnelId: matchingP?.id || existing?.personnelId || '',
               personnelCode: code,
-              fullName: String(optVal(row, 'fullName', 'نام و نام خانوادگی') || matchingP?.fullName || existing?.fullName || 'پرسنل'),
+              firstName,
+              lastName,
+              fullName,
               department: String(optVal(row, 'department', 'واحد اداری', 'واحد سازمانی', 'واحد') || matchingP?.department || existing?.department || 'عمومی').trim(),
               position: String(optVal(row, 'position', 'پست سازمانی', 'پست و سمت', 'پست', 'سمت') || matchingP?.position || existing?.position || '').trim(),
               period: cleanPeriod,

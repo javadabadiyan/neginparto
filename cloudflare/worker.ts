@@ -918,10 +918,12 @@ function rawJsonResponse(request: Request, env: Env, rawJsonBody: string, status
 async function getPersonnelLookupMap(
   db: D1Database,
   codes?: string[]
-): Promise<Map<string, { id: string; personnelCode: string; fullName: string; nationalId: string; department: string; position: string; employeeId: string }>> {
+): Promise<Map<string, { id: string; personnelCode: string; firstName: string; lastName: string; fullName: string; nationalId: string; department: string; position: string; employeeId: string }>> {
   const map = new Map<string, any>();
   const baseSelect = `SELECT id,
               personnel_code as personnelCode,
+              COALESCE(json_extract(data_json, '$.firstName'), '') as firstName,
+              COALESCE(json_extract(data_json, '$.lastName'), '') as lastName,
               COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
               COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId,
               COALESCE(json_extract(data_json, '$.department'), '') as department,
@@ -2605,11 +2607,17 @@ export default {
           const diffAmount = currFinal - prevFinal;
           const diffPercent = prevFinal > 0 ? Number(((diffAmount / prevFinal) * 100).toFixed(1)) : currFinal > 0 ? 100 : 0;
           const trend = !prev ? 'new' : diffAmount > 0 ? 'increase' : diffAmount < 0 ? 'decrease' : 'unchanged';
+          const rawFull = String(curr.fullName || '').trim();
+          const nameParts = rawFull ? rawFull.split(/\s+/).filter(Boolean) : [];
+          const firstName = String(curr.firstName || '').trim() || nameParts[0] || '';
+          const lastName = String(curr.lastName || '').trim() || nameParts.slice(1).join(' ') || '';
           return {
             id: curr.id,
             personnelId: curr.personnelId,
             personnelCode: curr.personnelCode,
-            fullName: curr.fullName,
+            firstName,
+            lastName,
+            fullName: `${firstName} ${lastName}`.trim() || rawFull,
             department: curr.department,
             position: curr.position,
             currentKaraneh: currFinal,
@@ -2691,11 +2699,19 @@ export default {
             ? 'submitted'
             : existingParsed?.status || 'draft';
 
+        const rawFullName = String(kData.fullName || existingParsed?.fullName || '').trim();
+        const rawParts = rawFullName ? rawFullName.split(/\s+/).filter(Boolean) : [];
+        const resolvedFirstName = String(kData.firstName ?? existingParsed?.firstName ?? '').trim() || rawParts[0] || '';
+        const resolvedLastName = String(kData.lastName ?? existingParsed?.lastName ?? '').trim() || rawParts.slice(1).join(' ') || '';
+        const resolvedFullName = `${resolvedFirstName} ${resolvedLastName}`.trim() || rawFullName || 'پرسنل';
+
         const record = {
           id: existingRow?.id || kData.id || genId('k'),
           personnelId: kData.personnelId || existingParsed?.personnelId || '',
           personnelCode: cleanCode,
-          fullName: kData.fullName || existingParsed?.fullName || 'پرسنل',
+          firstName: resolvedFirstName,
+          lastName: resolvedLastName,
+          fullName: resolvedFullName,
           department: effectiveDept,
           position: kData.position ?? existingParsed?.position ?? '',
           period: kData.period,
@@ -2800,11 +2816,28 @@ export default {
           const finalRaw = getVal(row, 'finalKaraneh', 'کارانه نهایی قابل پرداخت', 'کارانه نهایی', 'کارانه نهایی (ریال)', 'کارانه', 'مبلغ');
           const finalKaraneh = finalRaw !== undefined ? parseNum(finalRaw) : baseKaraneh + overtimeBonus - deductions;
 
+          const rawFullNameInput = String(getVal(row, 'fullName', 'نام و نام خانوادگی', 'نام و نام خانوادگي') || '').trim();
+          const baseFallbackFull = rawFullNameInput || String(matchingP?.fullName || prev?.fullName || '').trim();
+          const baseParts = baseFallbackFull ? baseFallbackFull.split(/\s+/).filter(Boolean) : [];
+          const firstName =
+            String(getVal(row, 'firstName', 'نام') || '').trim() ||
+            String(matchingP?.firstName || prev?.firstName || '').trim() ||
+            baseParts[0] ||
+            '';
+          const lastName =
+            String(getVal(row, 'lastName', 'نام خانوادگی', 'نام خانوادگي', 'فامیل', 'فامیلی') || '').trim() ||
+            String(matchingP?.lastName || prev?.lastName || '').trim() ||
+            baseParts.slice(1).join(' ') ||
+            '';
+          const fullName = `${firstName} ${lastName}`.trim() || baseFallbackFull || 'پرسنل';
+
           const record = {
             id: prev?.id || genId('k'),
             personnelId: matchingP?.id || prev?.personnelId || '',
             personnelCode: code,
-            fullName: String(getVal(row, 'fullName', 'نام و نام خانوادگی') || matchingP?.fullName || prev?.fullName || 'پرسنل'),
+            firstName,
+            lastName,
+            fullName,
             department: dept,
             position: String(getVal(row, 'position', 'پست سازمانی', 'پست و سمت', 'پست', 'سمت') || matchingP?.position || prev?.position || ''),
             period,

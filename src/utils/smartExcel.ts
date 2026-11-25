@@ -112,10 +112,12 @@ const RELATIVES_FIELDS: SmartFieldDefinition[] = [
 ];
 
 const KARANEH_FIELDS: SmartFieldDefinition[] = [
-  { key: 'personnelCode', label: 'کد پرسنلی', required: true, aliases: ['کد پرسنلی', 'كد پرسنلي', 'شماره پرسنلی', 'کد کارمند'] },
-  { key: 'fullName', label: 'نام و نام خانوادگی', aliases: ['نام و نام خانوادگی', 'نام کامل', 'نام پرسنل', 'نام'] },
-  { key: 'department', label: 'واحد', aliases: ['واحد', 'واحد اداری', 'واحد سازمانی', 'دپارتمان', 'قسمت'] },
-  { key: 'position', label: 'پست', aliases: ['پست', 'پست سازمانی', 'سمت', 'شغل', 'پست و سمت'] },
+  { key: 'personnelCode', label: 'کد پرسنلی', required: true, aliases: ['کد پرسنلی', 'كد پرسنلي', 'شماره پرسنلی', 'کد کارمند', 'personnel code', 'code'] },
+  { key: 'firstName', label: 'نام', aliases: ['نام', 'نام کوچک', 'first name', 'firstname'] },
+  { key: 'lastName', label: 'نام خانوادگی', aliases: ['نام خانوادگی', 'نام خانوادگي', 'فامیل', 'فامیلی', 'نام خانواده', 'last name', 'lastname'] },
+  { key: 'fullName', label: 'نام و نام خانوادگی (اختیاری / ترکیبی)', aliases: ['نام و نام خانوادگی', 'نام و نام خانوادگي', 'نام کامل', 'نام پرسنل', 'full name', 'fullname'] },
+  { key: 'department', label: 'واحد', aliases: ['واحد', 'واحد اداری', 'واحد سازمانی', 'دپارتمان', 'قسمت', 'department'] },
+  { key: 'position', label: 'پست', aliases: ['پست', 'پست سازمانی', 'سمت', 'شغل', 'پست و سمت', 'position'] },
   { key: 'baseKaraneh', label: 'مبلغ کارانه (ریال)', aliases: ['کارانه', 'مبلغ کارانه', 'مبلغ کارانه (ریال)', 'کارانه پایه', 'کارانه پایه (ریال)', 'پاداش کارانه', 'مبلغ'] },
   { key: 'overtimeBonus', label: 'پاداش اضافه‌کاری', aliases: ['پاداش اضافه کاری', 'اضافه کاری', 'پاداش بهره وری', 'فوق العاده'] },
   { key: 'deductions', label: 'کسورات کارانه', aliases: ['کسورات', 'کسورات کارانه', 'کسر کارانه'] },

@@ -128,7 +128,8 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingRecord, setEditingRecord] = useState<KaranehRecord | null>(null);
   const [editForm, setEditForm] = useState({
-    fullName: '',
+    firstName: '',
+    lastName: '',
     position: '',
     department: '',
     finalKaraneh: 0,
@@ -178,10 +179,20 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     return map;
   }, [karanehList, previousPeriod]);
 
+  const personnelByCode = useMemo(() => {
+    const map = new Map<string, Personnel>();
+    personnelList.forEach((p) => {
+      const code = normalizeDuplicateKey(p.personnelCode);
+      if (code) map.set(code, p);
+    });
+    return map;
+  }, [personnelList]);
+
   const comparisonRows: KaranehComparisonRow[] = useMemo(() => {
     return currentSubmittedRecords.map((curr) => {
       const code = String(curr.personnelCode).trim();
       const prev = prevMap.get(code);
+      const pMatch = personnelByCode.get(normalizeDuplicateKey(code));
       const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
       const currFinal = Number(curr.finalKaraneh || 0);
       const diffAmount = currFinal - prevFinal;
@@ -199,10 +210,17 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
         ? 'decrease'
         : 'unchanged';
 
+      const rawFull = String(curr.fullName || pMatch?.fullName || '').trim();
+      const parts = rawFull ? rawFull.split(/\s+/).filter(Boolean) : [];
+      const firstName = String(curr.firstName || '').trim() || String(pMatch?.firstName || '').trim() || parts[0] || '';
+      const lastName = String(curr.lastName || '').trim() || String(pMatch?.lastName || '').trim() || parts.slice(1).join(' ') || '';
+
       return {
         id: curr.id,
         personnelCode: curr.personnelCode,
-        fullName: curr.fullName,
+        firstName,
+        lastName,
+        fullName: `${firstName} ${lastName}`.trim() || rawFull,
         department: curr.department || 'عمومی',
         position: curr.position || '',
         currentKaraneh: currFinal,
@@ -216,7 +234,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
         submittedByName: curr.submittedByName
       };
     });
-  }, [currentSubmittedRecords, prevMap]);
+  }, [currentSubmittedRecords, prevMap, personnelByCode]);
 
   // Unit Summary & Analysis grouped by department
   const unitSummaries: UnitSummaryRow[] = useMemo(() => {
@@ -293,6 +311,8 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
       const nid = personnelNationalIdByCode.get(normalizeDuplicateKey(r.personnelCode)) || '';
       const matchesSearch =
         !term ||
+        (r.firstName || '').toLowerCase().includes(term) ||
+        (r.lastName || '').toLowerCase().includes(term) ||
         r.fullName.toLowerCase().includes(term) ||
         r.personnelCode.toLowerCase().includes(term) ||
         nid.toLowerCase().includes(term) ||
@@ -341,8 +361,10 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     if (!rec) return;
     setEditingRecord(rec);
     setEditError('');
+    const parts = (rec.fullName || '').trim().split(/\s+/).filter(Boolean);
     setEditForm({
-      fullName: rec.fullName,
+      firstName: rec.firstName || row.firstName || parts[0] || '',
+      lastName: rec.lastName || row.lastName || parts.slice(1).join(' ') || '',
       position: rec.position || '',
       department: rec.department || '',
       finalKaraneh: Number(rec.finalKaraneh || 0),
@@ -354,10 +376,18 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     e.preventDefault();
     if (!editingRecord) return;
     setEditError('');
+    const fn = editForm.firstName.trim();
+    const ln = editForm.lastName.trim();
+    if (!fn && !ln) {
+      setEditError('لطفاً نام و نام خانوادگی را وارد کنید.');
+      return;
+    }
     setSavingEdit(true);
     const ok = await onSaveKaraneh({
       ...editingRecord,
-      fullName: editForm.fullName.trim(),
+      firstName: fn,
+      lastName: ln,
+      fullName: `${fn} ${ln}`.trim(),
       position: editForm.position.trim(),
       department: editForm.department.trim(),
       finalKaraneh: Number(toEnglishDigits(editForm.finalKaraneh)) || 0,
@@ -887,7 +917,8 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
                 )}
                 <th className="py-3 px-3 text-center w-12">ردیف</th>
                 <th className="py-3 px-3">کد پرسنلی</th>
-                <th className="py-3 px-4">نام و نام خانوادگی</th>
+                <th className="py-3 px-3">نام</th>
+                <th className="py-3 px-3">نام خانوادگی</th>
                 <th className="py-3 px-3">واحد</th>
                 <th className="py-3 px-4">پست سازمانی</th>
                 <th className="py-3 px-3 bg-slate-100/70">کارانه ماه قبل</th>
@@ -902,7 +933,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={(canEdit || canDelete) ? (canDelete ? 13 : 12) : 11} className="py-12 text-center text-slate-500">
+                  <td colSpan={(canEdit || canDelete) ? (canDelete ? 14 : 13) : 12} className="py-12 text-center text-slate-500">
                     ردیف کارانه ارسالی برای این دوره یا فیلتر یافت نشد.
                   </td>
                 </tr>
@@ -950,13 +981,16 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-4 font-bold text-slate-900">
-                        <div>{row.fullName}</div>
+                      <td className="py-3 px-3 font-bold text-slate-900">
+                        <div>{row.firstName || '—'}</div>
                         {nid && (
                           <div className="text-[10px] text-slate-500 font-normal persian-num">
                             کد ملی: {toPersianDigits(nid)}
                           </div>
                         )}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-900">
+                        {row.lastName || '—'}
                       </td>
                       <td className="py-3 px-3 text-slate-700 font-semibold">{row.department}</td>
                       <td className="py-3 px-4 text-slate-700">
@@ -1060,12 +1094,22 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">نام و نام خانوادگی</label>
+                  <label className="block font-semibold text-slate-700 mb-1">نام *</label>
                   <input
                     type="text"
                     required
-                    value={editForm.fullName}
-                    onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+                    value={editForm.firstName}
+                    onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">نام خانوادگی *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.lastName}
+                    onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
                   />
                 </div>
@@ -1079,7 +1123,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg"
                   />
                 </div>
-                <div className="sm:col-span-2">
+                <div>
                   <label className="block font-semibold text-slate-700 mb-1">پست سازمانی</label>
                   <input
                     type="text"

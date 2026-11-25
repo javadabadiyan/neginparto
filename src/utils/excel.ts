@@ -142,6 +142,17 @@ export function downloadPersonnelRelativesTemplate() {
   XLSX.writeFile(workbook, 'الگوی_اکسل_اطلاعات_بستگان_پرسنل.xlsx');
 }
 
+function splitKaranehNames(r: Pick<KaranehComparisonRow, 'firstName' | 'lastName' | 'fullName'>): { firstName: string; lastName: string } {
+  const fn = (r.firstName || '').trim();
+  const ln = (r.lastName || '').trim();
+  if (fn || ln) return { firstName: fn, lastName: ln };
+  const parts = (r.fullName || '').trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || '',
+    lastName: parts.slice(1).join(' ') || '',
+  };
+}
+
 /**
  * Export Karaneh list to Excel with Month-over-Month comparison
  */
@@ -151,25 +162,30 @@ export function exportKaranehComparisonToExcel(
   previousPeriodName: string,
   fileName = `گزارش_تحلیلی_مقایسه_کارانه_${currentPeriodName}.xlsx`
 ) {
-  const data = rows.map((r, index) => ({
-    'ردیف': index + 1,
-    'کد پرسنلی': r.personnelCode,
-    'نام و نام خانوادگی': r.fullName,
-    'پست سازمانی': r.position || '',
-    'واحد اداری': r.department || '',
-    [`کارانه ${previousPeriodName} (ماه قبل)`]: r.previousKaraneh,
-    [`کارانه ${currentPeriodName} (ماه جدید)`]: r.currentKaraneh,
-    'اختلاف مبلغ (ریال)': r.diffAmount,
-    'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
-    'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
-    'توضیحات و علت تغییر': r.notes || ''
-  }));
+  const data = rows.map((r, index) => {
+    const { firstName, lastName } = splitKaranehNames(r);
+    return {
+      'ردیف': index + 1,
+      'کد پرسنلی': r.personnelCode,
+      'نام': firstName,
+      'نام خانوادگی': lastName,
+      'پست سازمانی': r.position || '',
+      'واحد اداری': r.department || '',
+      [`کارانه ${previousPeriodName} (ماه قبل)`]: r.previousKaraneh,
+      [`کارانه ${currentPeriodName} (ماه جدید)`]: r.currentKaraneh,
+      'اختلاف مبلغ (ریال)': r.diffAmount,
+      'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+      'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+      'توضیحات و علت تغییر': r.notes || ''
+    };
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   worksheet['!cols'] = [
     { wch: 6 },
     { wch: 14 },
-    { wch: 22 },
+    { wch: 16 },
+    { wch: 20 },
     { wch: 22 },
     { wch: 20 },
     { wch: 22 },
@@ -204,21 +220,25 @@ export function exportFinalKaranehToExcel(
   previousPeriodName: string,
   fileName = `کارانه_نهایی_ارسالی_واحدها_${currentPeriodName}.xlsx`
 ) {
-  const detailsData = rows.map((r, index) => ({
-    'ردیف': index + 1,
-    'کد پرسنلی': r.personnelCode,
-    'نام و نام خانوادگی': r.fullName,
-    'واحد': r.department || '',
-    'پست': r.position || '',
-    [`کارانه ${previousPeriodName} (ماه قبل)`]: r.previousKaraneh,
-    [`کارانه ${currentPeriodName} (ماه جدید)`]: r.currentKaraneh,
-    'تغییر مبلغ (ریال)': r.diffAmount,
-    'درصد افزایش / تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
-    'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
-    'تأییدکننده واحد': r.submittedByName || '—',
-    'زمان ارسال': r.submittedAt || '—',
-    'توضیحات': r.notes || '',
-  }));
+  const detailsData = rows.map((r, index) => {
+    const { firstName, lastName } = splitKaranehNames(r);
+    return {
+      'ردیف': index + 1,
+      'کد پرسنلی': r.personnelCode,
+      'نام': firstName,
+      'نام خانوادگی': lastName,
+      'واحد': r.department || '',
+      'پست': r.position || '',
+      [`کارانه ${previousPeriodName} (ماه قبل)`]: r.previousKaraneh,
+      [`کارانه ${currentPeriodName} (ماه جدید)`]: r.currentKaraneh,
+      'تغییر مبلغ (ریال)': r.diffAmount,
+      'درصد افزایش / تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+      'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+      'تأییدکننده واحد': r.submittedByName || '—',
+      'زمان ارسال': r.submittedAt || '—',
+      'توضیحات': r.notes || '',
+    };
+  });
 
   const unitData = unitSummaries.map((u, index) => ({
     'ردیف': index + 1,
@@ -236,7 +256,8 @@ export function exportFinalKaranehToExcel(
   detailsSheet['!cols'] = [
     { wch: 6 },
     { wch: 14 },
-    { wch: 22 },
+    { wch: 16 },
+    { wch: 20 },
     { wch: 22 },
     { wch: 22 },
     { wch: 22 },
@@ -354,7 +375,8 @@ export function downloadKaranehTemplate(defaultUnit = '') {
   const sample = [
     {
       'کد پرسنلی': '10101',
-      'نام و نام خانوادگی': 'رضا قاسمی',
+      'نام': 'رضا',
+      'نام خانوادگی': 'قاسمی',
       'واحد': unitName,
       'پست': 'رئیس شیفت استخراج',
       'مبلغ کارانه (ریال)': 55000000,
@@ -362,7 +384,8 @@ export function downloadKaranehTemplate(defaultUnit = '') {
     },
     {
       'کد پرسنلی': '10102',
-      'نام و نام خانوادگی': 'زهرا کریمی',
+      'نام': 'زهرا',
+      'نام خانوادگی': 'کریمی',
       'واحد': unitName,
       'پست': 'کارشناس ارشد واحد',
       'مبلغ کارانه (ریال)': 48000000,
@@ -370,7 +393,8 @@ export function downloadKaranehTemplate(defaultUnit = '') {
     },
     {
       'کد پرسنلی': '10103',
-      'نام و نام خانوادگی': 'امیرحسین مرادی',
+      'نام': 'امیرحسین',
+      'نام خانوادگی': 'مرادی',
       'واحد': unitName,
       'پست': 'سرپرست شیفت',
       'مبلغ کارانه (ریال)': 42000000,
@@ -381,7 +405,8 @@ export function downloadKaranehTemplate(defaultUnit = '') {
   const worksheet = XLSX.utils.json_to_sheet(sample);
   worksheet['!cols'] = [
     { wch: 14 },
-    { wch: 22 },
+    { wch: 16 },
+    { wch: 20 },
     { wch: 24 },
     { wch: 24 },
     { wch: 22 },

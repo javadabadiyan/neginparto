@@ -186,14 +186,16 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const [formMonthIndex, setFormMonthIndex] = useState<number>(7);
   const [formData, setFormData] = useState<{
     personnelCode: string;
-    fullName: string;
+    firstName: string;
+    lastName: string;
     position: string;
     department: string;
     finalKaraneh: number;
     notes: string;
   }>({
     personnelCode: '',
-    fullName: '',
+    firstName: '',
+    lastName: '',
     position: '',
     department: '',
     finalKaraneh: 45000000,
@@ -231,9 +233,19 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     prevMap.set(String(p.personnelCode).trim(), p);
   });
 
+  const personnelByCode = useMemo(() => {
+    const map = new Map<string, Personnel>();
+    personnelList.forEach((p) => {
+      const code = normalizeDuplicateKey(p.personnelCode);
+      if (code) map.set(code, p);
+    });
+    return map;
+  }, [personnelList]);
+
   const comparisonRows: KaranehComparisonRow[] = currentRecords.map(curr => {
     const code = String(curr.personnelCode).trim();
     const prev = prevMap.get(code);
+    const pMatch = personnelByCode.get(normalizeDuplicateKey(code));
 
     const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
     const currFinal = Number(curr.finalKaraneh || 0);
@@ -255,10 +267,17 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
       trend = 'decrease';
     }
 
+    const rawFull = String(curr.fullName || pMatch?.fullName || '').trim();
+    const parts = rawFull ? rawFull.split(/\s+/).filter(Boolean) : [];
+    const firstName = String(curr.firstName || '').trim() || String(pMatch?.firstName || '').trim() || parts[0] || '';
+    const lastName = String(curr.lastName || '').trim() || String(pMatch?.lastName || '').trim() || parts.slice(1).join(' ') || '';
+
     return {
       id: curr.id,
       personnelCode: curr.personnelCode,
-      fullName: curr.fullName,
+      firstName,
+      lastName,
+      fullName: `${firstName} ${lastName}`.trim() || rawFull,
       position: curr.position || '',
       department: curr.department || '',
       currentKaraneh: currFinal,
@@ -311,6 +330,8 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     const term = searchTerm.toLowerCase();
     const nid = personnelNationalIdByCode.get(normalizeDuplicateKey(r.personnelCode)) || '';
     const matchesSearch =
+      (r.firstName || '').toLowerCase().includes(term) ||
+      (r.lastName || '').toLowerCase().includes(term) ||
       r.fullName.toLowerCase().includes(term) ||
       r.personnelCode.toLowerCase().includes(term) ||
       nid.toLowerCase().includes(term) ||
@@ -344,10 +365,12 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
     const firstP = scopedPersonnelList[0];
     const prevBonus = firstP ? previousRecords.find(p => p.personnelCode === firstP.personnelCode) : null;
+    const firstParts = (firstP?.fullName || '').trim().split(/\s+/).filter(Boolean);
 
     setFormData({
       personnelCode: firstP ? firstP.personnelCode : '',
-      fullName: firstP ? firstP.fullName : '',
+      firstName: firstP ? (firstP.firstName || firstParts[0] || '') : '',
+      lastName: firstP ? (firstP.lastName || firstParts.slice(1).join(' ') || '') : '',
       position: firstP ? firstP.position : '',
       department: firstP ? firstP.department : (allowedUnits[0] || ''),
       finalKaraneh: prevBonus ? prevBonus.finalKaraneh : 45000000,
@@ -368,10 +391,12 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     const parsed = parsePeriod(originalRecord.period);
     setFormYear(parsed.year);
     setFormMonthIndex(parsed.monthIndex);
+    const fullParts = (originalRecord.fullName || '').trim().split(/\s+/).filter(Boolean);
 
     setFormData({
       personnelCode: originalRecord.personnelCode,
-      fullName: originalRecord.fullName,
+      firstName: originalRecord.firstName || row.firstName || fullParts[0] || '',
+      lastName: originalRecord.lastName || row.lastName || fullParts.slice(1).join(' ') || '',
       position: originalRecord.position || '',
       department: originalRecord.department || allowedUnits[0] || '',
       finalKaraneh: originalRecord.finalKaraneh || 0,
@@ -386,11 +411,13 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     if (!found) return;
 
     const prevBonus = previousRecords.find(p => p.personnelCode === code);
+    const nameParts = (found.fullName || '').trim().split(/\s+/).filter(Boolean);
 
     setFormData(prev => ({
       ...prev,
       personnelCode: found.personnelCode,
-      fullName: found.fullName,
+      firstName: found.firstName || nameParts[0] || '',
+      lastName: found.lastName || nameParts.slice(1).join(' ') || '',
       position: found.position,
       department: found.department || allowedUnits[0] || '',
       finalKaraneh: prevBonus ? prevBonus.finalKaraneh : (found.baseSalary ? Math.round(found.baseSalary * 0.25) : 45000000)
@@ -401,8 +428,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
-    if (!formData.personnelCode.trim() || !formData.fullName.trim()) {
-      setFormError('لطفاً کد پرسنلی و نام و نام خانوادگی را وارد نمایید.');
+    const fn = formData.firstName.trim();
+    const ln = formData.lastName.trim();
+    if (!formData.personnelCode.trim() || (!fn && !ln)) {
+      setFormError('لطفاً کد پرسنلی، نام و نام خانوادگی را وارد نمایید.');
       return;
     }
 
@@ -417,7 +446,9 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     const payload: Partial<KaranehRecord> = {
       id: editingRecord ? editingRecord.id : undefined,
       personnelCode: toEnglishDigits(formData.personnelCode).trim(),
-      fullName: formData.fullName.trim(),
+      firstName: fn,
+      lastName: ln,
+      fullName: `${fn} ${ln}`.trim(),
       position: formData.position.trim(),
       department: resolvedDept,
       period: targetPeriod,
@@ -580,7 +611,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
             </h2>
           </div>
           <p className="text-xs text-slate-600 mt-1">
-            ثبت دستی بر اساس جدول، ورود با اکسل (کد، نام، پست، واحد و مبلغ)، و تحلیل خودکار تغییرات دو ماه
+            ثبت دستی بر اساس جدول، ورود با اکسل (کد پرسنلی، نام، نام خانوادگی، واحد، پست و مبلغ)، و تحلیل خودکار تغییرات دو ماه
           </p>
         </div>
 
@@ -973,7 +1004,8 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 )}
                 <th className="py-3 px-3 text-center w-12">ردیف</th>
                 <th className="py-3 px-3">کد پرسنلی</th>
-                <th className="py-3 px-4">نام و نام خانوادگی</th>
+                <th className="py-3 px-3">نام</th>
+                <th className="py-3 px-3">نام خانوادگی</th>
                 {/* ستون اختصاصی و تفکیک‌شده پست سازمانی طبق درخواست کاربر */}
                 <th className="py-3 px-4 bg-indigo-50/30 text-indigo-950 font-bold border-x border-slate-200/60">
                   <div className="flex items-center gap-1.5">
@@ -999,7 +1031,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={canDelete ? 14 : 13} className="py-12 text-center text-slate-600">
+                  <td colSpan={canDelete ? 15 : 14} className="py-12 text-center text-slate-600">
                     رکوردی برای دوره {getPeriodLabel(currentPeriod)} با فیلترهای انتخابی یافت نشد.
                   </td>
                 </tr>
@@ -1049,13 +1081,16 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                         </span>
                       )}
                     </td>
-                    <td className="py-3.5 px-4 font-bold text-slate-900">
-                      <div>{row.fullName}</div>
+                    <td className="py-3.5 px-3 font-bold text-slate-900">
+                      <div>{row.firstName || '—'}</div>
                       {nid && (
                         <div className="text-[10px] text-slate-500 font-normal persian-num">
                           کد ملی: {toPersianDigits(nid)}
                         </div>
                       )}
+                    </td>
+                    <td className="py-3.5 px-3 font-bold text-slate-900">
+                      {row.lastName || '—'}
                     </td>
                     
                     {/* ستون اختصاصی و شکیل پست سازمانی */}
@@ -1203,7 +1238,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 <TrendingUp className="w-5 h-5 text-indigo-400" />
                 <div>
                   <h3 className="font-bold text-base">
-                    {editingRecord ? `ویرایش کارانه (${formData.fullName})` : 'ثبت دستی کارانه ماهانه پرسنل'}
+                    {editingRecord ? `ویرایش کارانه (${`${formData.firstName} ${formData.lastName}`.trim() || editingRecord.fullName})` : 'ثبت دستی کارانه ماهانه پرسنل'}
                   </h3>
                   <p className="text-[11px] text-slate-400 mt-0.5">
                     ورود اطلاعات منطبق بر جدول کارانه با مقایسه خودکار کارانه ماه قبل
@@ -1275,9 +1310,9 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
                 </select>
               </div>
 
-              {/* ۴ فیلد جدول: کد پرسنلی، نام و نام خانوادگی، پست سازمانی، واحد اداری */}
+              {/* فیلدهای جدول: کد پرسنلی، نام، نام خانوادگی، پست سازمانی، واحد اداری */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     کد پرسنلی *
                   </label>
@@ -1293,14 +1328,28 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    نام و نام خانوادگی *
+                    نام *
                   </label>
                   <input
                     type="text"
                     required
-                    value={formData.fullName}
-                    onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                    placeholder="مثلاً: رضا قاسمی"
+                    value={formData.firstName}
+                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                    placeholder="مثلاً: رضا"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    نام خانوادگی *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.lastName}
+                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                    placeholder="مثلاً: قاسمی"
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-bold"
                   />
                 </div>
@@ -1467,7 +1516,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
             <SmartExcelImportMapper
               moduleType="karaneh"
               title="ورود هوشمند فایل اکسل کارانه ماهانه"
-              subtitle="تشخیص خودکار ستون‌های کد پرسنلی، نام، پست، واحد و مبلغ کارانه با انتخاب دوره هدف و مبنای مقایسه"
+              subtitle="تشخیص خودکار ستون‌های کد پرسنلی، نام، نام خانوادگی، واحد، پست و مبلغ کارانه با انتخاب دوره هدف و مبنای مقایسه"
               onDownloadTemplate={() => downloadKaranehTemplate(allowedUnits[0] || '')}
               templateLabel="دانلود نمونه اکسل کارانه"
               onImport={handleSmartKaranehImport}
