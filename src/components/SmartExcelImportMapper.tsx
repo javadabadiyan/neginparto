@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
   FileSpreadsheet,
   Upload,
@@ -36,6 +36,138 @@ interface SmartExcelImportMapperProps {
   accentColor?: 'indigo' | 'emerald' | 'amber' | 'violet' | 'cyan';
   confirmLabel?: string;
 }
+
+interface MappingMatrixProps {
+  filteredFields: { key: string; label: string; required?: boolean; category?: string }[];
+  mapping: Record<string, string>;
+  autoMatchedKeys: Set<string>;
+  headers: string[];
+  onMappingChange: (fieldKey: string, sourceHeader: string) => void;
+}
+
+const MappingMatrix = memo<MappingMatrixProps>(({
+  filteredFields,
+  mapping,
+  autoMatchedKeys,
+  headers,
+  onMappingChange,
+}) => (
+  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+    <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+      {filteredFields.map((field) => {
+        const mappedHeader = mapping[field.key] || '';
+        const isAuto = autoMatchedKeys.has(field.key) && Boolean(mappedHeader);
+        return (
+          <div
+            key={field.key}
+            className={`grid grid-cols-1 md:grid-cols-12 items-center gap-2 px-3 py-2 text-xs ${
+              mappedHeader ? 'bg-white' : field.required ? 'bg-amber-50/50' : 'bg-slate-50/40'
+            }`}
+          >
+            <div className="md:col-span-5 flex items-center gap-2">
+              {mappedHeader ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              ) : (
+                <AlertCircle className={`w-4 h-4 shrink-0 ${field.required ? 'text-amber-500' : 'text-slate-300'}`} />
+              )}
+              <div className="min-w-0">
+                <span className="font-bold text-slate-800">{field.label}</span>
+                {field.required && (
+                  <span className="mr-1.5 text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 font-bold">
+                    الزامی
+                  </span>
+                )}
+                {field.category && (
+                  <span className="block text-[10px] text-slate-400">{field.category}</span>
+                )}
+              </div>
+            </div>
+
+            <div className="hidden md:flex md:col-span-1 justify-center text-slate-400">
+              <ArrowLeftRight className="w-3.5 h-3.5" />
+            </div>
+
+            <div className="md:col-span-4">
+              <select
+                value={mappedHeader}
+                onChange={(e) => onMappingChange(field.key, e.target.value)}
+                className={`w-full px-2.5 py-1.5 rounded-lg border text-xs ${
+                  mappedHeader
+                    ? 'border-emerald-300 bg-emerald-50/30 font-bold text-slate-800'
+                    : 'border-slate-200 bg-white text-slate-500'
+                }`}
+              >
+                <option value="">— عدم انتخاب / بدون ستون متناظر —</option>
+                {headers.map((h) => (
+                  <option key={h} value={h}>
+                    {h}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-2 text-left">
+              {mappedHeader ? (
+                <span
+                  className={`inline-block text-[10px] px-2 py-0.5 rounded font-bold ${
+                    isAuto ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  {isAuto ? 'تطبیق خودکار' : 'انتخاب دستی'}
+                </span>
+              ) : (
+                <span className="text-[10px] text-slate-400">نگاشت‌نشده</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+));
+
+interface LiveDataPreviewProps {
+  previewRows: Record<string, any>[];
+  previewFields: { key: string; label: string }[];
+}
+
+const LiveDataPreview = memo<LiveDataPreviewProps>(({ previewRows, previewFields }) => {
+  if (previewRows.length === 0 || previewFields.length === 0) return null;
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+      <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2 text-xs font-bold text-slate-700">
+        <TableIcon className="w-4 h-4 text-indigo-600" />
+        <span>پیش‌نمایش زنده داده‌های استخراج‌شده (۵ ردیف اول)</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-right text-xs">
+          <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+            <tr>
+              <th className="px-3 py-2 font-bold">#</th>
+              {previewFields.map((f) => (
+                <th key={f.key} className="px-3 py-2 font-bold whitespace-nowrap">
+                  {f.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {previewRows.map((row, idx) => (
+              <tr key={idx} className="hover:bg-slate-50/60">
+                <td className="px-3 py-2 text-slate-400">{toPersianDigits(idx + 1)}</td>
+                {previewFields.map((f) => (
+                  <td key={f.key} className="px-3 py-2 text-slate-700 whitespace-nowrap max-w-[180px] truncate">
+                    {String(row[f.key] ?? '—')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+});
 
 export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
   moduleType,
@@ -132,7 +264,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
     runAutoMatch(headers);
   };
 
-  const handleMappingChange = (fieldKey: string, sourceHeader: string) => {
+  const handleMappingChange = useCallback((fieldKey: string, sourceHeader: string) => {
     setMapping((prev) => {
       const next = { ...prev };
       if (!sourceHeader) delete next[fieldKey];
@@ -140,11 +272,12 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
       return next;
     });
     setAutoMatchedKeys((prev) => {
+      if (!prev.has(fieldKey)) return prev;
       const next = new Set(prev);
       next.delete(fieldKey);
       return next;
     });
-  };
+  }, []);
 
   const matchedCount = useMemo(
     () => targetFields.filter((f) => Boolean(mapping[f.key])).length,
@@ -375,114 +508,16 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
           </div>
 
           {/* Column mapping matrix */}
-          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-            <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-              {filteredFields.map((field) => {
-                const mappedHeader = mapping[field.key] || '';
-                const isAuto = autoMatchedKeys.has(field.key) && Boolean(mappedHeader);
-                return (
-                  <div
-                    key={field.key}
-                    className={`grid grid-cols-1 md:grid-cols-12 items-center gap-2 px-3 py-2 text-xs ${
-                      mappedHeader ? 'bg-white' : field.required ? 'bg-amber-50/50' : 'bg-slate-50/40'
-                    }`}
-                  >
-                    <div className="md:col-span-5 flex items-center gap-2">
-                      {mappedHeader ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                      ) : (
-                        <AlertCircle className={`w-4 h-4 shrink-0 ${field.required ? 'text-amber-500' : 'text-slate-300'}`} />
-                      )}
-                      <div className="min-w-0">
-                        <span className="font-bold text-slate-800">{field.label}</span>
-                        {field.required && (
-                          <span className="mr-1.5 text-[10px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 font-bold">
-                            الزامی
-                          </span>
-                        )}
-                        {field.category && (
-                          <span className="block text-[10px] text-slate-400">{field.category}</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="hidden md:flex md:col-span-1 justify-center text-slate-400">
-                      <ArrowLeftRight className="w-3.5 h-3.5" />
-                    </div>
-
-                    <div className="md:col-span-4">
-                      <select
-                        value={mappedHeader}
-                        onChange={(e) => handleMappingChange(field.key, e.target.value)}
-                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs ${
-                          mappedHeader
-                            ? 'border-emerald-300 bg-emerald-50/30 font-bold text-slate-800'
-                            : 'border-slate-200 bg-white text-slate-500'
-                        }`}
-                      >
-                        <option value="">— عدم انتخاب / بدون ستون متناظر —</option>
-                        {extracted.headers.map((h) => (
-                          <option key={h} value={h}>
-                            {h}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="md:col-span-2 text-left">
-                      {mappedHeader ? (
-                        <span
-                          className={`inline-block text-[10px] px-2 py-0.5 rounded font-bold ${
-                            isAuto ? 'bg-indigo-50 text-indigo-700' : 'bg-emerald-50 text-emerald-700'
-                          }`}
-                        >
-                          {isAuto ? 'تطبیق خودکار' : 'انتخاب دستی'}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-400">نگاشت‌نشده</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <MappingMatrix
+            filteredFields={filteredFields}
+            mapping={mapping}
+            autoMatchedKeys={autoMatchedKeys}
+            headers={extracted.headers}
+            onMappingChange={handleMappingChange}
+          />
 
           {/* Live Data Preview */}
-          {previewRows.length > 0 && previewFields.length > 0 && (
-            <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-              <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex items-center gap-2 text-xs font-bold text-slate-700">
-                <TableIcon className="w-4 h-4 text-indigo-600" />
-                <span>پیش‌نمایش زنده داده‌های استخراج‌شده (۵ ردیف اول)</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                    <tr>
-                      <th className="px-3 py-2 font-bold">#</th>
-                      {previewFields.map((f) => (
-                        <th key={f.key} className="px-3 py-2 font-bold whitespace-nowrap">
-                          {f.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {previewRows.map((row, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/60">
-                        <td className="px-3 py-2 text-slate-400">{toPersianDigits(idx + 1)}</td>
-                        {previewFields.map((f) => (
-                          <td key={f.key} className="px-3 py-2 text-slate-700 whitespace-nowrap max-w-[180px] truncate">
-                            {String(row[f.key] ?? '—')}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          <LiveDataPreview previewRows={previewRows} previewFields={previewFields} />
 
           {errorMsg && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs font-bold text-rose-700">

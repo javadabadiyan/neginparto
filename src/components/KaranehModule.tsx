@@ -125,13 +125,35 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     );
   }, [personnelList, hasFullAccess, unitPermsCheck]);
 
+  const karanehPeriods = useMemo(() => {
+    return Array.from(new Set(scopedKaranehList.map((k) => k.period).filter(Boolean))).sort().reverse();
+  }, [scopedKaranehList]);
+
   // Dedicated Year & Month selection for Current Period (ماه جدید)
-  const [currentYear, setCurrentYear] = useState<string>('1403');
-  const [currentMonthIndex, setCurrentMonthIndex] = useState<number>(7); // آبان (0-indexed)
+  const initialPeriod = karanehPeriods[0] || '1403-08';
+  const initialParsed = parsePeriod(initialPeriod);
+  const initialPrevParsed = parsePeriod(getPreviousPeriodId(initialPeriod));
+
+  const [currentYear, setCurrentYear] = useState<string>(initialParsed.year);
+  const [currentMonthIndex, setCurrentMonthIndex] = useState<number>(initialParsed.monthIndex);
 
   // Dedicated Year & Month selection for Previous Period (ماه قبل جهت مقایسه)
-  const [prevYear, setPrevYear] = useState<string>('1403');
-  const [prevMonthIndex, setPrevMonthIndex] = useState<number>(6); // مهر (0-indexed)
+  const [prevYear, setPrevYear] = useState<string>(initialPrevParsed.year);
+  const [prevMonthIndex, setPrevMonthIndex] = useState<number>(initialPrevParsed.monthIndex);
+  const [hasAutoAlignedPeriod, setHasAutoAlignedPeriod] = useState<boolean>(karanehPeriods.length > 0);
+
+  useEffect(() => {
+    if (!hasAutoAlignedPeriod && karanehPeriods.length > 0) {
+      const latest = karanehPeriods[0];
+      const p = parsePeriod(latest);
+      const pp = parsePeriod(getPreviousPeriodId(latest));
+      setCurrentYear(p.year);
+      setCurrentMonthIndex(p.monthIndex);
+      setPrevYear(pp.year);
+      setPrevMonthIndex(pp.monthIndex);
+      setHasAutoAlignedPeriod(true);
+    }
+  }, [karanehPeriods, hasAutoAlignedPeriod]);
 
   const currentPeriod = buildPeriod(currentYear, currentMonthIndex);
   const previousPeriod = buildPeriod(prevYear, prevMonthIndex);
@@ -188,6 +210,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
   // Quick button to set previous month automatically
   const handleAutoSetPreviousMonth = () => {
+    setHasAutoAlignedPeriod(true);
     const prevId = getPreviousPeriodId(currentPeriod);
     const parsed = parsePeriod(prevId);
     setPrevYear(parsed.year);
@@ -408,6 +431,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     const success = await onSaveKaraneh(payload);
     if (success) {
       setIsFormOpen(false);
+      setHasAutoAlignedPeriod(true);
       // Synchronize current period if saved in another period
       if (targetPeriod !== currentPeriod) {
         setCurrentYear(formYear);
@@ -507,6 +531,7 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
     const success = await onBatchImportKaraneh(importPeriod, normalizedRows);
     if (success) {
+      setHasAutoAlignedPeriod(true);
       setIsImportOpen(false);
       setSearchTerm('');
       setFilterTrend('all');
@@ -679,7 +704,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               {/* انتخاب ماه */}
               <select
                 value={currentMonthIndex}
-                onChange={(e) => setCurrentMonthIndex(Number(e.target.value))}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setCurrentMonthIndex(Number(e.target.value));
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-indigo-400"
               >
                 {PERSIAN_MONTHS.map((m, idx) => (
@@ -690,7 +718,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               {/* انتخاب سال */}
               <select
                 value={currentYear}
-                onChange={(e) => setCurrentYear(e.target.value)}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setCurrentYear(e.target.value);
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-indigo-400 persian-num"
               >
                 {YEARS_LIST.map(y => (
@@ -708,7 +739,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               {/* انتخاب ماه */}
               <select
                 value={prevMonthIndex}
-                onChange={(e) => setPrevMonthIndex(Number(e.target.value))}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setPrevMonthIndex(Number(e.target.value));
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-amber-400"
               >
                 {PERSIAN_MONTHS.map((m, idx) => (
@@ -719,7 +753,10 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
               {/* انتخاب سال */}
               <select
                 value={prevYear}
-                onChange={(e) => setPrevYear(e.target.value)}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setPrevYear(e.target.value);
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-amber-400 persian-num"
               >
                 {YEARS_LIST.map(y => (

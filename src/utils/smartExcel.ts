@@ -386,7 +386,7 @@ export async function inspectExcelWorkbook(
 
   const sheets: InspectedSheet[] = workbook.SheetNames.map((name, idx) => {
     const ws = workbook.Sheets[name];
-    const rows2D = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
+    const rows2D = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, blankrows: false });
     const detectedHeaderRowIndex = detectHeaderRowIndex(rows2D, targetFields);
     const extracted = extractRowsFromSheet(rows2D, detectedHeaderRowIndex);
     const mapping = autoMatchColumns(extracted.headers, targetFields);

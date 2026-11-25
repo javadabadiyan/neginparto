@@ -34,6 +34,8 @@ import {
   DatabaseStatus
 } from './types';
 import { normalizePermissions, getFullAdminPermissions, getFirstAccessibleTab } from './utils/permissions';
+import { toEnglishDigits } from './utils/persian';
+import { parseYearMonthToPeriod } from './utils/payrollColumns';
 import { CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { onAuthStateChanged, signOut, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
@@ -88,6 +90,7 @@ export default function App() {
   const isReloadingDataRef = useRef<boolean>(false);
 
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mirrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshDbStatusAsync = () => {
     api.getDatabaseStatus().then((status) => {
@@ -113,18 +116,26 @@ export default function App() {
     | 'unitReports'
     | 'unitOperations';
 
-  const refreshDomainData = async (domain: RefreshDomain = 'all', options?: { showSuccessToast?: boolean }): Promise<boolean> => {
-    setSyncingData(true);
-    setSyncError(null);
+  const refreshDomainData = async (
+    domain: RefreshDomain = 'all',
+    options?: { showSuccessToast?: boolean; silentBg?: boolean }
+  ): Promise<boolean> => {
+    const silentBg = Boolean(options?.silentBg);
+    if (!silentBg) {
+      setSyncingData(true);
+      setSyncError(null);
+    }
     try {
       if (domain === 'all') {
-        await loadAllData({ silent: false, force: true });
+        await loadAllData({ silent: silentBg, force: !silentBg });
       } else if (domain === 'personnel') {
         const [liteList, latestStatus] = await Promise.all([
           api.getPersonnel({ lite: true }),
           api.getDatabaseStatus().catch(() => null),
         ]);
-        setPersonnelList(Array.isArray(liteList) ? liteList : []);
+        if (Array.isArray(liteList) && (!silentBg || liteList.length > 0)) {
+          setPersonnelList(liteList);
+        }
         if (latestStatus) {
           setDbStatus(latestStatus);
           const sv = (latestStatus as any)?.syncVersion;
@@ -144,39 +155,57 @@ export default function App() {
         }
       } else if (domain === 'karaneh') {
         const list = await api.getKaraneh();
-        setKaranehList(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setKaranehList(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'payroll') {
         const list = await api.getPayroll();
-        setPayrollList(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setPayrollList(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'jobGroups' || domain === 'jobClassifications') {
         const [groups, classes] = await Promise.all([
           api.getJobGroups(),
           api.getJobClassifications(),
         ]);
-        setJobGroups(Array.isArray(groups) ? groups : []);
-        setJobClassifications(Array.isArray(classes) ? classes : []);
+        if (Array.isArray(groups) && (!silentBg || groups.length > 0)) {
+          setJobGroups(groups);
+        }
+        if (Array.isArray(classes) && (!silentBg || classes.length > 0)) {
+          setJobClassifications(classes);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'commitments') {
         const list = await api.getCommitments();
-        setCommitments(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setCommitments(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'users') {
         const list = await api.getUsers();
-        setUsers(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setUsers(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'miningVolumes') {
         const list = await api.getMiningVolumes();
-        setMiningVolumes(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setMiningVolumes(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'miningMachinery') {
         const list = await api.getMiningMachinery();
-        setMiningMachinery(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setMiningMachinery(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'unitReports') {
         const list = await api.getUnitReports();
-        setUnitReports(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && (!silentBg || list.length > 0)) {
+          setUnitReports(list);
+        }
         refreshDbStatusAsync();
       } else if (domain === 'unitOperations') {
         const [vols, machs, reps] = await Promise.all([
@@ -184,9 +213,9 @@ export default function App() {
           api.getMiningMachinery(),
           api.getUnitReports(),
         ]);
-        setMiningVolumes(Array.isArray(vols) ? vols : []);
-        setMiningMachinery(Array.isArray(machs) ? machs : []);
-        setUnitReports(Array.isArray(reps) ? reps : []);
+        if (Array.isArray(vols) && (!silentBg || vols.length > 0)) setMiningVolumes(vols);
+        if (Array.isArray(machs) && (!silentBg || machs.length > 0)) setMiningMachinery(machs);
+        if (Array.isArray(reps) && (!silentBg || reps.length > 0)) setUnitReports(reps);
         refreshDbStatusAsync();
       }
 
@@ -195,12 +224,18 @@ export default function App() {
       }
       return true;
     } catch (err: any) {
-      const msg = err?.message || 'خطا در بروزرسانی اطلاعات از سرور';
-      setSyncError(msg);
-      showNotification(msg, 'error');
+      if (!silentBg) {
+        const msg = err?.message || 'خطا در بروزرسانی اطلاعات از سرور';
+        setSyncError(msg);
+        showNotification(msg, 'error');
+      } else {
+        console.warn('Background domain refresh skipped:', err?.message || err);
+      }
       return false;
     } finally {
-      setSyncingData(false);
+      if (!silentBg) {
+        setSyncingData(false);
+      }
     }
   };
 
@@ -208,11 +243,12 @@ export default function App() {
     await refreshDomainData(domain, { showSuccessToast: true });
   };
 
-  const afterUploadRefresh = async (domain: RefreshDomain = 'all') => {
-    await refreshDomainData(domain);
-    if (typeof window !== 'undefined') {
+  const afterUploadRefresh = async (domain: RefreshDomain = 'all', options?: { silentBg?: boolean }) => {
+    const ok = await refreshDomainData(domain, { silentBg: Boolean(options?.silentBg) });
+    if (!options?.silentBg && typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+    return ok;
   };
 
   useEffect(() => {
@@ -412,10 +448,9 @@ export default function App() {
     }
   };
 
-  const loadAllData = async (options?: { silent?: boolean; retryAttempt?: number; force?: boolean }) => {
+  const loadAllData = async (options?: { silent?: boolean; force?: boolean }) => {
     const silent = Boolean(options?.silent);
     const force = Boolean(options?.force);
-    const retryAttempt = Number(options?.retryAttempt || 0);
     if (isBatchImportActive() && !force) return;
     if (isReloadingDataRef.current && silent && !force) return;
     isReloadingDataRef.current = true;
@@ -472,14 +507,6 @@ export default function App() {
     } catch (err: any) {
       console.error('Error loading data:', err);
       if (!silent && !isBatchImportActive()) {
-        if (retryAttempt < 1 && loadedForUserIdRef.current === activeUserId) {
-          setTimeout(() => {
-            if (loadedForUserIdRef.current === activeUserId && !isBatchImportActive()) {
-              void loadAllData({ silent: false, retryAttempt: retryAttempt + 1 });
-            }
-          }, 2500);
-          return;
-        }
         const msg = err?.message || 'خطا در بارگذاری اطلاعات از پایگاه داده سرور';
         setSyncError(msg);
         showNotification(msg, 'error');
@@ -729,6 +756,35 @@ export default function App() {
     }
   };
 
+  // Defer snapshot mirroring by 4 seconds so immediate post-upload table views never contend with full-DB exports
+  const scheduleMirrorSnapshot = () => {
+    if (mirrorTimerRef.current) {
+      clearTimeout(mirrorTimerRef.current);
+    }
+    mirrorTimerRef.current = setTimeout(() => {
+      mirrorTimerRef.current = null;
+      void mirrorSnapshotInBackground();
+    }, 4000);
+  };
+
+  // Optimistic client-side normalization helpers for instant post-import table rendering
+  const optVal = (row: Record<string, any>, ...keys: string[]) => {
+    for (const k of keys) {
+      const v = row?.[k];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+    return undefined;
+  };
+  const optNum = (v: any): number => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+    if (v === undefined || v === null || v === '') return 0;
+    const cleaned = toEnglishDigits(String(v)).replace(/[,٬،\s]/g, '').replace(/ریال/g, '');
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const optNorm = (v: any): string =>
+    toEnglishDigits(String(v ?? '')).replace(/[يی]/g, 'ی').replace(/[كک]/g, 'ک').replace(/\s+/g, ' ').trim();
+
   const handleConnectGoogleFirebase = async (): Promise<boolean> => {
     try {
       setFirebaseSyncing(true);
@@ -889,9 +945,77 @@ export default function App() {
     try {
       const res = await api.batchImportPersonnel(items);
       if (res.success) {
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setPersonnelList((prev) => {
+          const next = [...prev];
+          const idxByCode = new Map<string, number>();
+          next.forEach((p, idx) => {
+            const c = toEnglishDigits(p.personnelCode || '').trim();
+            if (c) idxByCode.set(c, idx);
+          });
+          items.forEach((row, i) => {
+            const code = toEnglishDigits(optVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی') || '').trim();
+            if (!code) return;
+            const existingIdx = idxByCode.get(code);
+            const existing = existingIdx !== undefined ? next[existingIdx] : undefined;
+            const firstName = String(optVal(row, 'firstName', 'نام') || existing?.firstName || '').trim();
+            const lastName = String(optVal(row, 'lastName', 'نام خانوادگي', 'نام خانوادگی') || existing?.lastName || '').trim();
+            const fullName =
+              `${firstName} ${lastName}`.trim() ||
+              String(optVal(row, 'fullName', 'نام و نام خانوادگي', 'نام و نام خانوادگی') || existing?.fullName || 'پرسنل').trim();
+            const merged: Personnel = {
+              ...(existing || {}),
+              id: existing?.id || `opt_p_${Date.now()}_${i}`,
+              employeeId: String(optVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') ?? existing?.employeeId ?? ''),
+              personnelCode: code,
+              firstName: firstName || fullName.split(' ')[0] || '',
+              lastName: lastName || fullName.split(' ').slice(1).join(' ') || '',
+              fullName,
+              fatherName: String(optVal(row, 'fatherName', 'نام پدر') ?? existing?.fatherName ?? ''),
+              shenasnamehNumber: String(optVal(row, 'shenasnamehNumber', 'شماره شناسنامه') ?? existing?.shenasnamehNumber ?? ''),
+              nationalId: toEnglishDigits(optVal(row, 'nationalId', 'كد ملي', 'کد ملی') ?? existing?.nationalId ?? '').trim(),
+              nationality: String(optVal(row, 'nationality', 'مليت', 'ملیت') ?? existing?.nationality ?? 'ایرانی'),
+              citizenship: String(optVal(row, 'citizenship', 'تابعيت', 'تابعیت') ?? existing?.citizenship ?? 'جمهوری اسلامی ایران'),
+              gender: String(optVal(row, 'gender', 'جنسيت', 'جنسیت') ?? existing?.gender ?? ''),
+              phone: toEnglishDigits(optVal(row, 'phone', 'تلفن همراه', 'شماره تماس', 'تلفن') ?? existing?.phone ?? '').trim(),
+              email: String(optVal(row, 'email', 'پست الكترونيك', 'پست الکترونیک', 'ایمیل') ?? existing?.email ?? ''),
+              birthPlace: String(optVal(row, 'birthPlace', 'محل تولد') ?? existing?.birthPlace ?? ''),
+              issuePlace: String(optVal(row, 'issuePlace', 'محل صدور') ?? existing?.issuePlace ?? ''),
+              birthDate: toEnglishDigits(optVal(row, 'birthDate', 'تاريخ تولد', 'تاریخ تولد') ?? existing?.birthDate ?? '').trim(),
+              issueDate: toEnglishDigits(optVal(row, 'issueDate', 'تاريخ صدور', 'تاریخ صدور') ?? existing?.issueDate ?? '').trim(),
+              maritalStatus: String(optVal(row, 'maritalStatus', 'وضعيت تاهل', 'وضعیت تاهل', 'وضعیت تأهل') ?? existing?.maritalStatus ?? ''),
+              militaryStatus: String(optVal(row, 'militaryStatus', 'وضعيت نظام وظيفه', 'وضعیت نظام وظیفه') ?? existing?.militaryStatus ?? ''),
+              education: String(optVal(row, 'education', 'مدرك تحصيلي', 'مدرک تحصیلی', 'تحصیلات') ?? existing?.education ?? ''),
+              fieldOfStudy: String(optVal(row, 'fieldOfStudy', 'رشته تحصيلي', 'رشته تحصیلی') ?? existing?.fieldOfStudy ?? ''),
+              hireDate: toEnglishDigits(optVal(row, 'hireDate', 'تاريخ استخدام', 'تاریخ استخدام') ?? existing?.hireDate ?? '1403/01/01').trim(),
+              workLocation: String(optVal(row, 'workLocation', 'محل خدمت') ?? existing?.workLocation ?? ''),
+              department: String(optVal(row, 'department', 'واحد سازماني', 'واحد سازمانی', 'واحد') ?? existing?.department ?? 'عمومی'),
+              jobTitle: String(optVal(row, 'jobTitle', 'شغل') ?? existing?.jobTitle ?? ''),
+              jobCode: String(optVal(row, 'jobCode', 'كد شغل', 'کد شغل') ?? existing?.jobCode ?? ''),
+              position: String(optVal(row, 'position', 'پست', 'پست و سمت', 'پست سازمانی') ?? existing?.position ?? 'کارشناس'),
+              positionCode: String(optVal(row, 'positionCode', 'كد پست', 'کد پست') ?? existing?.positionCode ?? ''),
+              employmentType: (optVal(row, 'employmentType', 'نوع استخدام') ?? existing?.employmentType ?? 'قراردادی') as any,
+              jobGroupId: String(optVal(row, 'jobGroupId') ?? existing?.jobGroupId ?? ''),
+              jobGroupName: String(optVal(row, 'jobGroupName', 'گروه شغلی') ?? existing?.jobGroupName ?? ''),
+              status: (optVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال') as any,
+              baseSalary: optNum(optVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
+              notes: String(optVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
+              relatives: Array.isArray(existing?.relatives) ? existing.relatives : [],
+              createdAt: existing?.createdAt || nowStr,
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) {
+              next[existingIdx] = merged;
+            } else {
+              idxByCode.set(code, next.length);
+              next.push(merged);
+            }
+          });
+          return next;
+        });
         showNotification(res.message || 'بارگذاری پرونده‌ها از اکسل انجام شد.');
-        await afterUploadRefresh('personnel');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('personnel', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در ورود اکسل.', 'error');
@@ -953,9 +1077,63 @@ export default function App() {
     try {
       const res = await api.batchImportKaraneh(period, items);
       if (res.success) {
+        const cleanPeriod = parseYearMonthToPeriod(period, period);
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setKaranehList((prev) => {
+          const next = [...prev];
+          const persMap = new Map<string, Personnel>();
+          (personnelList.length > 0 ? personnelList : karanehUnitPersonnel).forEach((p) => {
+            const c = toEnglishDigits(p.personnelCode || '').trim();
+            if (c) persMap.set(c, p);
+          });
+          const idxByKey = new Map<string, number>();
+          next.forEach((k, idx) => {
+            const c = toEnglishDigits(k.personnelCode || '').trim();
+            if (k.period && c) idxByKey.set(`${k.period}__${c}`, idx);
+          });
+          items.forEach((row, i) => {
+            const code = toEnglishDigits(optVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي', 'شماره پرسنلی') || '').trim();
+            if (!code) return;
+            const key = `${cleanPeriod}__${code}`;
+            const existingIdx = idxByKey.get(key);
+            const existing = existingIdx !== undefined ? next[existingIdx] : undefined;
+            const matchingP = persMap.get(code);
+            const baseKaraneh = optNum(optVal(row, 'baseKaraneh', 'مبلغ کارانه (ریال)', 'مبلغ کارانه', 'کارانه پایه', 'کارانه پایه (ریال)'));
+            const overtimeBonus = optNum(optVal(row, 'overtimeBonus', 'پاداش اضافه‌کاری', 'پاداش', 'پاداش و اضافه‌کار', 'پاداش مازاد'));
+            const deductions = optNum(optVal(row, 'deductions', 'کسورات کارانه', 'کسورات'));
+            const finalRaw = optVal(row, 'finalKaraneh', 'کارانه نهایی قابل پرداخت', 'کارانه نهایی', 'کارانه نهایی (ریال)', 'کارانه', 'مبلغ');
+            const finalKaraneh = finalRaw !== undefined ? optNum(finalRaw) : baseKaraneh + overtimeBonus - deductions;
+            const rec: KaranehRecord = {
+              id: existing?.id || `opt_k_${Date.now()}_${i}`,
+              personnelId: matchingP?.id || existing?.personnelId || '',
+              personnelCode: code,
+              fullName: String(optVal(row, 'fullName', 'نام و نام خانوادگی') || matchingP?.fullName || existing?.fullName || 'پرسنل'),
+              department: String(optVal(row, 'department', 'واحد اداری', 'واحد سازمانی', 'واحد') || matchingP?.department || existing?.department || 'عمومی').trim(),
+              position: String(optVal(row, 'position', 'پست سازمانی', 'پست و سمت', 'پست', 'سمت') || matchingP?.position || existing?.position || '').trim(),
+              period: cleanPeriod,
+              baseKaraneh,
+              overtimeBonus,
+              deductions,
+              finalKaraneh,
+              notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
+              status: existing?.status || 'draft',
+              submittedAt: existing?.submittedAt || '',
+              submittedBy: existing?.submittedBy || '',
+              submittedByName: existing?.submittedByName || '',
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) {
+              next[existingIdx] = rec;
+            } else {
+              idxByKey.set(key, next.length);
+              next.push(rec);
+            }
+          });
+          return next;
+        });
         showNotification(res.message || 'کارانه ماهانه با موفقیت از اکسل بارگذاری گردید.');
-        await afterUploadRefresh('karaneh');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('karaneh', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در بارگذاری کارانه.', 'error');
@@ -1104,9 +1282,61 @@ export default function App() {
     try {
       const res = await api.batchImportJobClassifications(items);
       if (res.success) {
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setJobClassifications((prev) => {
+          const next = [...prev];
+          const byCode = new Map<string, number>();
+          const byNat = new Map<string, number>();
+          next.forEach((c, idx) => {
+            const pc = toEnglishDigits(c.personnelCode || '').trim();
+            const nid = toEnglishDigits(c.nationalId || '').trim();
+            if (pc) byCode.set(pc, idx);
+            if (nid) byNat.set(nid, idx);
+          });
+          items.forEach((row, i) => {
+            const code = toEnglishDigits(optVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
+            const nationalId = toEnglishDigits(optVal(row, 'nationalId', 'کد ملی', 'كد ملي') || '').trim();
+            const firstName = String(optVal(row, 'firstName', 'نام') || '').trim();
+            const lastName = String(optVal(row, 'lastName', 'نام خانوادگی', 'نام خانوادگي') || '').trim();
+            if (!code && !nationalId && !lastName) return;
+            const existingIdx = (code ? byCode.get(code) : undefined) ?? (nationalId ? byNat.get(nationalId) : undefined);
+            const existing = existingIdx !== undefined ? next[existingIdx] : undefined;
+            const rec: JobClassificationRecord = {
+              id: existing?.id || `opt_jc_${Date.now()}_${i}`,
+              personnelCode: code,
+              firstName,
+              lastName,
+              workLocation: String(optVal(row, 'workLocation', 'محل خدمت') || '').trim(),
+              department: String(optVal(row, 'department', 'واحد', 'واحد سازمانی') || '').trim(),
+              nationalId,
+              education: String(optVal(row, 'education', 'مدرک تحصیلی', 'مدرك تحصيلي') || '').trim(),
+              hireDate: toEnglishDigits(optVal(row, 'hireDate', 'تاریخ استخدام', 'تاريخ استخدام') || '').trim(),
+              hireMonth: String(optVal(row, 'hireMonth', 'ماه استخدام') || '').trim(),
+              miningExperienceDays: String(optVal(row, 'miningExperienceDays', 'سابقه معدنی به روز') || '').trim(),
+              totalInsuranceHistory: String(optVal(row, 'totalInsuranceHistory', 'سابقه بیمه کلی') || '').trim(),
+              miningExperience: String(optVal(row, 'miningExperience', 'سابقه معدنی') || '').trim(),
+              nonMiningExperience: String(optVal(row, 'nonMiningExperience', 'سابقه غیرمعدنی') || '').trim(),
+              jobGroup: String(optVal(row, 'jobGroup', 'گروه شغلی') || '').trim(),
+              groupGapFrom1405: String(optVal(row, 'groupGapFrom1405', 'فاصله گروه از 1405 به بعد', 'فاصله گروه از ۱۴۰۵ به بعد') || '').trim(),
+              nextGroupGap: String(optVal(row, 'nextGroupGap', 'فاصله گروه بعدی') || '').trim(),
+              jobTitle: String(optVal(row, 'jobTitle', 'شغل') || '').trim(),
+              position: String(optVal(row, 'position', 'پست', 'سمت') || '').trim(),
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) {
+              next[existingIdx] = rec;
+            } else {
+              const newIdx = next.length;
+              next.push(rec);
+              if (code) byCode.set(code, newIdx);
+              if (nationalId) byNat.set(nationalId, newIdx);
+            }
+          });
+          return next;
+        });
         showNotification(res.message || 'فایل اکسل طبقه‌بندی مشاغل با موفقیت بارگذاری شد.');
-        await afterUploadRefresh('jobClassifications');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('jobClassifications', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در ورود اکسل طبقه‌بندی مشاغل.', 'error');
@@ -1173,9 +1403,44 @@ export default function App() {
     try {
       const res = await api.batchImportCommitments(items);
       if (res.success) {
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        const persMap = new Map<string, Personnel>();
+        personnelList.forEach((p) => {
+          const c = toEnglishDigits(p.personnelCode || '').trim();
+          if (c) persMap.set(c, p);
+        });
+        const newCommitments: PersonnelCommitment[] = [];
+        items.forEach((row, i) => {
+          const code = toEnglishDigits(optVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
+          const matchingP = code ? persMap.get(code) : undefined;
+          const rawName = String(optVal(row, 'personnelName', 'نام پرسنل', 'نام و نام خانوادگی') || matchingP?.fullName || '').trim();
+          const name = rawName || (code ? `پرسنل ${code}` : '');
+          if (!name) return;
+          const rawArch = String(optVal(row, 'isArchived', 'بایگانی', 'وضعیت بایگانی') || '').trim();
+          const isArchived = ['بله', 'آری', 'true', '1', 'بایگانی شده'].includes(rawArch);
+          newCommitments.push({
+            id: `opt_cmt_${Date.now()}_${i}`,
+            personnelId: matchingP?.id || '',
+            personnelCode: code,
+            personnelName: name,
+            commitmentType: String(optVal(row, 'commitmentType', 'نوع تعهد یا تضمین', 'نوع تعهد') || 'تعهد خدمت').trim() as any,
+            amount: optNum(optVal(row, 'amount', 'مبلغ تعهد فعلی (ریال)', 'مبلغ تعهد فعلی', 'مبلغ تعهد', 'مبلغ')),
+            previouslyTakenAmount: optNum(optVal(row, 'previouslyTakenAmount', 'مبلغ قبلاً دریافت شده (ریال)', 'مبلغ قبلی', 'مبلغی که قبلاً گرفته')),
+            maxAllowedAmount: optNum(optVal(row, 'maxAllowedAmount', 'سقف مجاز کل (ریال)', 'سقف کل مجاز', 'سقف مجاز')),
+            startDate: toEnglishDigits(optVal(row, 'startDate', 'تاریخ شروع') || nowStr).trim(),
+            endDate: toEnglishDigits(optVal(row, 'endDate', 'تاریخ سررسید', 'تاریخ پایان') || '').trim(),
+            status: String(optVal(row, 'status', 'وضعیت') || 'جاری و معتبر') as any,
+            isArchived,
+            guarantorName: String(optVal(row, 'guarantorName', 'نام ضامن', 'ضامن') || '-'),
+            notes: String(optVal(row, 'notes', 'توضیحات') || ''),
+          });
+        });
+        if (newCommitments.length > 0) {
+          setCommitments((prev) => [...prev, ...newCommitments]);
+        }
         showNotification(res.message || 'اسناد تعهدات از فایل اکسل با موفقیت ثبت شد.');
-        await afterUploadRefresh('commitments');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('commitments', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در بارگذاری اکسل تعهدات.', 'error');
@@ -1247,8 +1512,8 @@ export default function App() {
       const res = await api.batchImportUsers(items);
       if (res.success) {
         showNotification(res.message || 'کاربران با موفقیت از اکسل تعریف/به‌روزرسانی شدند.');
-        await afterUploadRefresh('users');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('users', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در ورود گروهی کاربران.', 'error');
@@ -1269,9 +1534,90 @@ export default function App() {
     try {
       const res = await api.batchImportPayroll(period, items, useRowYearMonth);
       if (res.success) {
+        const cleanFallback = parseYearMonthToPeriod(period, period);
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setPayrollList((prev) => {
+          const next = [...prev];
+          const persMap = new Map<string, Personnel>();
+          personnelList.forEach((p) => {
+            const c = toEnglishDigits(p.personnelCode || '').trim();
+            if (c) persMap.set(c, p);
+          });
+          const idxByKey = new Map<string, number>();
+          next.forEach((r, idx) => {
+            const c = toEnglishDigits(r.personnelCode || '').trim();
+            if (r.period && c) idxByKey.set(`${r.period}__${c}`, idx);
+          });
+          items.forEach((row, i) => {
+            const code = toEnglishDigits(optVal(row, 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی', 'personnelCode') || '').trim();
+            if (!code) return;
+            const rawYm = optVal(row, 'سال/ماه', 'سال ماه', 'دوره', 'yearMonthLabel');
+            const targetPeriod = useRowYearMonth ? parseYearMonthToPeriod(rawYm, cleanFallback) : cleanFallback;
+            const key = `${targetPeriod}__${code}`;
+            const existingIdx = idxByKey.get(key);
+            const existing = existingIdx !== undefined ? next[existingIdx] : undefined;
+            const matchingP = persMap.get(code);
+            const firstName = String(optVal(row, 'نام', 'firstName') || '').trim();
+            const lastName = String(optVal(row, 'نام خانوادگي', 'نام خانوادگی', 'lastName') || '').trim();
+            const fullNameRaw = String(optVal(row, 'نام و نام خانوادگي', 'نام و نام خانوادگی', 'fullName') || '').trim();
+            const fullName = fullNameRaw || `${firstName} ${lastName}`.trim() || matchingP?.fullName || existing?.fullName || 'پرسنل';
+            const rec: PayrollRecord = {
+              id: existing?.id || `opt_pay_${Date.now()}_${i}`,
+              period: targetPeriod,
+              yearMonthLabel: toEnglishDigits(rawYm || targetPeriod.replace('-', '/')).trim(),
+              employeeId: String(optVal(row, 'شناسه كارمند', 'شناسه کارمند', 'employeeId') || ''),
+              personnelCode: code,
+              firstName,
+              lastName,
+              fullName,
+              nationalId: toEnglishDigits(optVal(row, 'كد ملي', 'کد ملی', 'nationalId') || matchingP?.nationalId || '').trim(),
+              workLocation: String(optVal(row, 'محل خدمت', 'workLocation') || ''),
+              department: String(optVal(row, 'واحد سازماني', 'واحد سازمانی', 'واحد', 'department') || matchingP?.department || ''),
+              jobTitle: String(optVal(row, 'شغل', 'jobTitle') || ''),
+              position: String(optVal(row, 'پست', 'پست سازمانی', 'position') || matchingP?.position || ''),
+              jobGroupCode: String(optVal(row, 'کد گروه شغلي', 'کد گروه شغلی', 'jobGroupCode') || ''),
+              jobGroupTitle: String(optVal(row, 'عنوان گروه شغلي', 'عنوان گروه شغلی', 'jobGroupTitle') || ''),
+              employmentType: String(optVal(row, 'نوع استخدام', 'employmentType') || ''),
+              effectiveDays: optNum(optVal(row, 'کارکرد موثر', 'effectiveDays')),
+              netPayable: optNum(optVal(row, 'خالص پرداختی', 'netPayable')),
+              totalBenefits: optNum(optVal(row, 'جمع مزایا', 'totalBenefits')),
+              overtimeAmount: optNum(optVal(row, 'اضافه کاری', 'overtimeAmount')),
+              fridayWorkAmount: optNum(optVal(row, 'جمعه کاری', 'fridayWorkAmount')),
+              missionAmount: optNum(optVal(row, 'ماموریت ریالی', 'missionAmount')),
+              bonusAmount: optNum(optVal(row, 'پاداش', 'پاداشِ', 'bonusAmount')),
+              incentiveAmount: optNum(optVal(row, 'تشویقی', 'incentiveAmount')),
+              otherBenefits: optNum(optVal(row, 'سایر مزایا', 'otherBenefits')),
+              arrearsAmount: optNum(optVal(row, 'مابه التفاوت', 'arrearsAmount')),
+              advanceAmount: optNum(optVal(row, 'مساعده', 'advanceAmount')),
+              totalDeductions: optNum(optVal(row, 'جمع کسور', 'totalDeductions')),
+              taxAmount: optNum(optVal(row, 'مالیات', 'taxAmount')),
+              salaryTaxAmount: optNum(optVal(row, 'مالیات حقوق', 'salaryTaxAmount')),
+              jobWage: optNum(optVal(row, 'مزد شغل', 'jobWage')),
+              totalOrderFactors: optNum(optVal(row, 'جمع عوامل حکمی', 'جمع عوامل حكمي', 'totalOrderFactors')),
+              baseSalaryOrder: optNum(optVal(row, 'حقوق پایه(حكم-اصلي)', 'حقوق پایه(حکم-اصلی)', 'baseSalaryOrder')),
+              overtimeHours: optNum(optVal(row, 'ساعت اضافه کاری(کارکرد)', 'overtimeHours')),
+              fridayWorkHours: optNum(optVal(row, 'ساعت جمعه کاری(کارکرد)', 'fridayWorkHours')),
+              costCenterCode: String(optVal(row, 'مرکز هزینه(كد تفصيل)', 'مرکز هزینه(کد تفصیل)') || ''),
+              costCenterTitle: String(optVal(row, 'مرکز هزینه(عنوان تفصيل)', 'مرکز هزینه(عنوان تفصیل)') || ''),
+              projectCode: String(optVal(row, 'پروژه(كد تفصيل)', 'پروژه(کد تفصیل)') || ''),
+              projectTitle: String(optVal(row, 'پروژه(عنوان تفصيل)', 'پروژه(عنوان تفصیل)') || ''),
+              bankName: String(optVal(row, 'نام بانک') || ''),
+              bankAccount: String(optVal(row, 'شماره حساب') || ''),
+              rawFields: row,
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) {
+              next[existingIdx] = rec;
+            } else {
+              idxByKey.set(key, next.length);
+              next.push(rec);
+            }
+          });
+          return next;
+        });
         showNotification(res.message || 'فایل اکسل حقوق با موفقیت در پایگاه داده ثبت شد.');
-        await afterUploadRefresh('payroll');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('payroll', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       } else {
         showNotification(res.message || 'خطا در بارگذاری فایل حقوق.', 'error');
@@ -1488,9 +1834,74 @@ export default function App() {
     try {
       const res = await api.batchImportRelatives(items);
       if (res.success) {
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setPersonnelList((prev) => {
+          const next = [...prev];
+          const byCode = new Map<string, number>();
+          const byEmp = new Map<string, number>();
+          const byNat = new Map<string, number>();
+          const byName = new Map<string, number>();
+          next.forEach((p, idx) => {
+            const c = toEnglishDigits(p.personnelCode || '').trim();
+            const e = toEnglishDigits(p.employeeId || '').trim();
+            const n = toEnglishDigits(p.nationalId || '').trim();
+            const nm = optNorm(p.fullName);
+            if (c) byCode.set(c, idx);
+            if (e) byEmp.set(e, idx);
+            if (n) byNat.set(n, idx);
+            if (nm) byName.set(nm, idx);
+          });
+          items.forEach((row, i) => {
+            const pCode = toEnglishDigits(optVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
+            const pEmpId = toEnglishDigits(optVal(row, 'employeeId', 'شناسه كارمند', 'شناسه کارمند') || '').trim();
+            const pNatId = toEnglishDigits(optVal(row, 'personnelNationalId', 'کد ملی کارمند', 'کد ملی پرسنل') || '').trim();
+            const pName = optNorm(optVal(row, 'personnelName', 'نام کارمند', 'نام پرسنل', 'نام و نام خانوادگی کارمند') || '');
+            const parentIdx =
+              (pCode ? byCode.get(pCode) : undefined) ??
+              (pEmpId ? byEmp.get(pEmpId) : undefined) ??
+              (pNatId ? byNat.get(pNatId) : undefined) ??
+              (pName ? byName.get(pName) : undefined);
+            if (parentIdx === undefined) return;
+            const relFullName = String(optVal(row, 'fullName', 'نام و نام خانوادگی بستگان', 'نام بستگان', 'نام و نام خانوادگی') || '').trim();
+            if (!relFullName) return;
+            const parent = next[parentIdx];
+            const relNat = toEnglishDigits(optVal(row, 'nationalId', 'کد ملی بستگان', 'کد ملی', 'كد ملي') || '').trim();
+            const relation = String(optVal(row, 'relation', 'نسبت', 'نسبت با کارمند') || 'سایر').trim();
+            const depRaw = String(optVal(row, 'isDependent', 'تحت تکفل', 'تکفل') || '').trim();
+            const insRaw = String(optVal(row, 'insuranceCovered', 'پوشش بیمه تکمیلی', 'بیمه تکمیلی', 'بیمه') || '').trim();
+            const existingRels = Array.isArray(parent.relatives) ? [...parent.relatives] : [];
+            const matchIdx = existingRels.findIndex((r) =>
+              (relNat && r.nationalId === relNat) ||
+              (optNorm(r.fullName) === optNorm(relFullName) && optNorm(r.relation) === optNorm(relation))
+            );
+            const relObj = {
+              id: (matchIdx >= 0 ? existingRels[matchIdx].id : '') || `opt_rel_${Date.now()}_${i}`,
+              personnelId: parent.id,
+              personnelCode: parent.personnelCode,
+              personnelName: parent.fullName,
+              fullName: relFullName,
+              relation,
+              nationalId: relNat,
+              shenasnamehNumber: toEnglishDigits(optVal(row, 'shenasnamehNumber', 'شماره شناسنامه', 'شناسنامه') || '').trim(),
+              fatherName: String(optVal(row, 'fatherName', 'نام پدر') || '').trim(),
+              birthDate: toEnglishDigits(optVal(row, 'birthDate', 'تاریخ تولد', 'تاريخ تولد') || '').trim(),
+              gender: String(optVal(row, 'gender', 'جنسیت', 'جنسيت') || '').trim() as any,
+              phone: toEnglishDigits(optVal(row, 'phone', 'شماره تماس', 'تلفن همراه', 'تلفن') || '').trim(),
+              education: String(optVal(row, 'education', 'تحصیلات', 'مدرک تحصیلی') || '').trim(),
+              isDependent: ['بله', 'آری', 'true', '1', 'دارد', 'تحت تکفل'].includes(depRaw),
+              insuranceCovered: ['بله', 'آری', 'true', '1', 'دارد', 'تحت پوشش'].includes(insRaw),
+              notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
+              updatedAt: nowStr,
+            };
+            if (matchIdx >= 0) existingRels[matchIdx] = relObj;
+            else existingRels.push(relObj);
+            next[parentIdx] = { ...parent, relatives: existingRels, updatedAt: nowStr };
+          });
+          return next;
+        });
         showNotification(res.message || 'اطلاعات بستگان با موفقیت در پرونده پرسنل ثبت شد.');
-        await afterUploadRefresh('personnel');
-        mirrorSnapshotInBackground();
+        void afterUploadRefresh('personnel', { silentBg: true });
+        scheduleMirrorSnapshot();
         return true;
       }
       showNotification(res.message || 'خطا در ورود اطلاعات بستگان.', 'error');
@@ -1709,8 +2120,47 @@ export default function App() {
     try {
       const res = await api.batchImportMiningVolumes(items);
       if (res.success) {
-        await afterUploadRefresh('miningVolumes');
-        mirrorSnapshotInBackground();
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setMiningVolumes((prev) => {
+          const next = [...prev];
+          const idxMap = new Map<string, number>();
+          next.forEach((v, idx) => {
+            idxMap.set(`${toEnglishDigits(v.period || '').trim()}__${optNorm(v.unitName)}__${optNorm(v.metricTitle)}`, idx);
+          });
+          items.forEach((row, i) => {
+            const unitName = String(optVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
+            if (!unitName) return;
+            const rawP = optVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه');
+            const period = parseYearMonthToPeriod(rawP, '1403-08');
+            const activityType = String(optVal(row, 'activityType', 'نوع عملیات / فعالیت', 'نوع عملیات', 'عملیات') || 'عملیات معدنی').trim();
+            const metricTitle = String(optVal(row, 'metricTitle', 'عنوان شاخص حجم', 'عنوان شاخص', 'شرح عملیات') || activityType).trim();
+            const volumeValue = optNum(optVal(row, 'volumeValue', 'حجم محقق‌شده ماه', 'حجم محقق شده', 'حجم', 'مقدار'));
+            const targetVolume = optNum(optVal(row, 'targetVolume', 'برنامه / هدف ماه', 'برنامه ماه', 'هدف ماه', 'هدف'));
+            const k = `${period}__${optNorm(unitName)}__${optNorm(metricTitle)}`;
+            const existingIdx = idxMap.get(k);
+            const rec: MiningVolumeRecord = {
+              id: existingIdx !== undefined ? next[existingIdx].id : `opt_mv_${Date.now()}_${i}`,
+              period,
+              unitName,
+              activityType,
+              metricTitle,
+              volumeValue,
+              targetVolume,
+              unitLabel: String(optVal(row, 'unitLabel', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'تن').trim(),
+              status: String(optVal(row, 'status', 'وضعیت تحقق', 'وضعیت') || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim(),
+              notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) next[existingIdx] = rec;
+            else {
+              idxMap.set(k, next.length);
+              next.push(rec);
+            }
+          });
+          return next;
+        });
+        void afterUploadRefresh('miningVolumes', { silentBg: true });
+        scheduleMirrorSnapshot();
         showNotification(res.message || 'آمار حجم عملیات از اکسل بارگذاری شد.');
         return { success: true, message: res.message };
       }
@@ -1801,8 +2251,52 @@ export default function App() {
     try {
       const res = await api.batchImportMiningMachinery(items);
       if (res.success) {
-        await afterUploadRefresh('miningMachinery');
-        mirrorSnapshotInBackground();
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setMiningMachinery((prev) => {
+          const next = [...prev];
+          const idxMap = new Map<string, number>();
+          next.forEach((m, idx) => {
+            const mc = toEnglishDigits(m.machineCode || '').trim();
+            if (mc) idxMap.set(mc, idx);
+          });
+          items.forEach((row, i) => {
+            const machineCode = toEnglishDigits(optVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'پلاک تجهیزات', 'کد') || '').trim();
+            const machineName = String(optVal(row, 'machineName', 'نام و مدل دستگاه', 'نام دستگاه', 'مدل') || '').trim();
+            if (!machineCode || !machineName) return;
+            const rawStatus = String(optVal(row, 'status', 'وضعیت دستگاه', 'وضعیت عملیاتی', 'وضعیت') || 'آماده به کار').trim();
+            const status =
+              rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
+                ? 'خراب / در تعمیرگاه'
+                : rawStatus.includes('قطعه')
+                ? 'در انتظار قطعه'
+                : rawStatus.includes('سرویس')
+                ? 'سرویس دوره‌ای'
+                : 'آماده به کار';
+            const existingIdx = idxMap.get(machineCode);
+            const rec: MiningMachineryRecord = {
+              id: existingIdx !== undefined ? next[existingIdx].id : `opt_mm_${Date.now()}_${i}`,
+              machineCode,
+              machineName,
+              machineType: String(optVal(row, 'machineType', 'نوع ماشین‌آلات', 'نوع تجهیز', 'نوع') || 'تجهیز معدنی').trim(),
+              unitName: String(optVal(row, 'unitName', 'واحد مستقر / بهره‌بردار', 'واحد مستقر', 'واحد معدن', 'واحد') || 'تعمیرگاه و ماشین‌آلات سنگین').trim(),
+              status,
+              issueDescription: String(optVal(row, 'issueDescription', 'شرح خرابی / وضعیت تعمیر', 'شرح خرابی', 'علت توقف') || '').trim(),
+              stoppedSince: toEnglishDigits(optVal(row, 'stoppedSince', 'تاریخ توقف / ورود به تعمیرگاه', 'تاریخ توقف', 'شروع توقف') || '-').trim(),
+              estimatedReadyDate: toEnglishDigits(optVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تخمین آماده‌به‌کار', 'تاریخ تحویل') || '-').trim(),
+              operatorName: String(optVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'مسئول / اپراتور', 'اپراتور') || '').trim(),
+              notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) next[existingIdx] = rec;
+            else {
+              idxMap.set(machineCode, next.length);
+              next.push(rec);
+            }
+          });
+          return next;
+        });
+        void afterUploadRefresh('miningMachinery', { silentBg: true });
+        scheduleMirrorSnapshot();
         showNotification(res.message || 'لیست ماشین‌آلات از اکسل وارد شد.');
         return { success: true, message: res.message };
       }
@@ -1894,8 +2388,48 @@ export default function App() {
     try {
       const res = await api.batchImportUnitReports({ items });
       if (res.success) {
-        await afterUploadRefresh('unitReports');
-        mirrorSnapshotInBackground();
+        const nowStr = new Date().toLocaleDateString('fa-IR');
+        setUnitReports((prev) => {
+          const next = [...prev];
+          const idxMap = new Map<string, number>();
+          next.forEach((r, idx) => {
+            idxMap.set(`${toEnglishDigits(r.period || '').trim()}__${optNorm(r.unitName)}__${optNorm(r.metricName)}`, idx);
+          });
+          items.forEach((row, i) => {
+            if (!row || typeof row !== 'object') return;
+            const unitName = String(optVal(row, 'unitName', 'نام واحد عملیاتی', 'واحد عملیاتی معدن', 'نام واحد', 'واحد', 'بخش') || '').trim();
+            const rawP = optVal(row, 'period', 'دوره (سال-ماه)', 'دوره', 'سال-ماه', 'سال/ماه');
+            const period = parseYearMonthToPeriod(rawP, '1403-08');
+            const metricName = String(optVal(row, 'metricName', 'عنوان شاخص / موضوع فعالیت', 'عنوان شاخص / فعالیت', 'شرح شاخص', 'فعالیت', 'عنوان', 'موضوع') || '').trim();
+            if (!unitName || !metricName) return;
+            const k = `${period}__${optNorm(unitName)}__${optNorm(metricName)}`;
+            const existingIdx = idxMap.get(k);
+            const rec: UnitOperationalReport = {
+              id: existingIdx !== undefined ? next[existingIdx].id : `opt_ur_${Date.now()}_${i}`,
+              period,
+              unitName,
+              reportCategory: String(optVal(row, 'reportCategory', 'دسته‌بندی / نوع گزارش', 'دسته‌بندی گزارش', 'نوع گزارش', 'گروه فعالیت') || 'گزارش عملیاتی واحد').trim(),
+              metricName,
+              actualValue: optNum(optVal(row, 'actualValue', 'مقدار محقق‌شده ماه', 'مقدار محقق‌شده', 'عملکرد ماه جاری', 'عملکرد', 'مقدار', 'مقدار فعلی')),
+              previousValue: optNum(optVal(row, 'previousValue', 'مقدار ماه قبل', 'عملکرد ماه قبل', 'دوره قبل')),
+              targetValue: optNum(optVal(row, 'targetValue', 'هدف / برنامه ماه', 'هدف / برنامه', 'برنامه ماه', 'هدف')),
+              unitLabel: String(optVal(row, 'unitLabel', 'واحد سنجش (یکا)', 'واحد اندازه‌گیری', 'واحد اندازه گیری', 'یکا') || 'عدد').trim(),
+              status: String(optVal(row, 'status', 'وضعیت / ارزیابی', 'وضعیت گزارش', 'وضعیت') || 'تایید شده').trim(),
+              submittedBy: String(optVal(row, 'submittedBy', 'ثبت‌کننده / سرپرست واحد', 'ثبت‌کننده / مسئول واحد', 'مسئول واحد', 'ثبت‌کننده') || currentUser?.fullName || '').trim(),
+              notes: String(optVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim(),
+              rawFields: row.rawFields || row,
+              updatedAt: nowStr,
+            };
+            if (existingIdx !== undefined) next[existingIdx] = rec;
+            else {
+              idxMap.set(k, next.length);
+              next.push(rec);
+            }
+          });
+          return next;
+        });
+        void afterUploadRefresh('unitReports', { silentBg: true });
+        scheduleMirrorSnapshot();
         showNotification(res.message || 'گزارش اکسل واحد با موفقیت بارگذاری و به داشبورد مدیرعامل ارسال شد.');
         return { success: true, message: res.message };
       }

@@ -1097,8 +1097,8 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
       .prepare(
         `SELECT
            COUNT(*) as total,
-           COALESCE(SUM(CASE WHEN COALESCE(json_extract(data_json, '$.documents.nationalCardImage'), '') != '' OR COALESCE(json_array_length(json_extract(data_json, '$.documents.shenasnamehPages')), 0) > 0 THEN 1 ELSE 0 END), 0) as docsCount,
-           COALESCE(SUM(COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0)), 0) as relCount
+           COALESCE(SUM(CASE WHEN (data_json LIKE '%"nationalCardImage":"_%' OR data_json LIKE '%"shenasnamehPages":["_%') AND json_valid(data_json) AND (COALESCE(json_extract(data_json, '$.documents.nationalCardImage'), '') != '' OR COALESCE(json_array_length(json_extract(data_json, '$.documents.shenasnamehPages')), 0) > 0) THEN 1 ELSE 0 END), 0) as docsCount,
+           COALESCE(SUM(CASE WHEN data_json LIKE '%"relatives":[{%' AND json_valid(data_json) THEN COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0) ELSE 0 END), 0) as relCount
          FROM personnel`
       )
       .first<any>(),
@@ -1110,7 +1110,7 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
     db
       .prepare(
         `SELECT COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN json_extract(data_json, '$.isArchived') = 1 THEN 1 ELSE 0 END), 0) as archivedTotal
+                COALESCE(SUM(CASE WHEN (data_json LIKE '%"isArchived":true%' OR data_json LIKE '%"isArchived":1%') AND json_valid(data_json) AND json_extract(data_json, '$.isArchived') = 1 THEN 1 ELSE 0 END), 0) as archivedTotal
          FROM commitments`
       )
       .first<any>(),
@@ -1602,9 +1602,12 @@ export default {
         const canUsers = checkPermission(authUser, 'users', 'view');
         const isCeoOrSuper = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
 
-        const persLimit = 800;
-        const karLimit = 1000;
-        const payLimit = canPay ? 250 : undefined;
+        const persLimit = 250;
+        const karLimit = 400;
+        const payLimit = canPay ? 150 : undefined;
+        const jcLimit = 300;
+        const cmtLimit = 300;
+        const urLimit = 300;
 
         const [
           personnelJson,
@@ -1628,7 +1631,7 @@ export default {
                 'personnel',
                 '',
                 [],
-                "CASE WHEN json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) ELSE data_json END",
+                "CASE WHEN data_json LIKE '%\"documents\":%' AND json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) WHEN json_valid(data_json) THEN json_set(data_json, '$.baseSalary', 0) ELSE data_json END",
                 persLimit,
                 0
               )
@@ -1648,7 +1651,7 @@ export default {
                 'personnel',
                 '',
                 [],
-                "CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END",
+                "CASE WHEN data_json LIKE '%\"documents\":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END",
                 persLimit,
                 0
               )
@@ -1683,8 +1686,8 @@ export default {
                 ),
           canPay ? getRawJsonArrayString(env.DB, 'payroll', '', [], 'data_json', payLimit, 0) : Promise.resolve('[]'),
           canJg ? getRawJsonArrayString(env.DB, 'job_groups') : Promise.resolve('[]'),
-          canJg ? getRawJsonArrayString(env.DB, 'job_classifications') : Promise.resolve('[]'),
-          canCmt ? getRawJsonArrayString(env.DB, 'commitments') : Promise.resolve('[]'),
+          canJg ? getRawJsonArrayString(env.DB, 'job_classifications', '', [], 'data_json', jcLimit, 0) : Promise.resolve('[]'),
+          canCmt ? getRawJsonArrayString(env.DB, 'commitments', '', [], 'data_json', cmtLimit, 0) : Promise.resolve('[]'),
           !canMining
             ? Promise.resolve('[]')
             : isCeoOrSuper
@@ -1700,12 +1703,13 @@ export default {
                 JSON.stringify(rows.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName)))
               ),
           !canMining
-            ? Promise.resolve('[]')
+            ? Promise.resolve({ json: '[]', total: 0 })
             : isCeoOrSuper
-            ? getRawJsonArrayString(env.DB, 'unit_reports')
-            : getJsonRows(env.DB, 'unit_reports').then((rows) =>
-                JSON.stringify(rows.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName)))
-              ),
+            ? getRawJsonArrayString(env.DB, 'unit_reports', '', [], 'data_json', urLimit, 0).then((json) => ({ json, total: -1 }))
+            : getJsonRows(env.DB, 'unit_reports').then((rows) => {
+                const filtered = rows.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
+                return { json: JSON.stringify(filtered.slice(0, urLimit)), total: filtered.length };
+              }),
           canUsers ? getAllUsers(env.DB) : Promise.resolve([]),
           computeDatabaseStatus(env.DB, authUser),
         ]);
@@ -1716,6 +1720,13 @@ export default {
             : karanehResult.total >= 0
             ? karanehResult.total
             : Number(dbStatus.totalKaranehRecords || 0);
+
+        const resolvedUrTotal =
+          !canMining
+            ? 0
+            : rawReportsResult.total >= 0
+            ? rawReportsResult.total
+            : Number(dbStatus.totalUnitReports || 0);
 
         const payloadStr =
           `{"success":true,"data":{` +
@@ -1728,14 +1739,17 @@ export default {
           `"commitments":${commitmentsJson},` +
           `"miningVolumes":${rawVolumesResult},` +
           `"miningMachinery":${rawMachineryResult},` +
-          `"unitReports":${rawReportsResult},` +
+          `"unitReports":${rawReportsResult.json},` +
           `"users":${JSON.stringify(rawUsers.map(sanitizeUser))},` +
           `"dbStatus":${JSON.stringify(dbStatus)},` +
           `"syncVersion":${JSON.stringify(dbStatus.syncVersion)},` +
           `"lite":${isLite},` +
           `"personnelTotal":${canPers ? Number(dbStatus.totalPersonnel || 0) : 0},` +
           `"karanehTotal":${resolvedKarTotal},` +
-          `"payrollTotal":${checkPermission(authUser, 'payroll', 'view') ? Number(dbStatus.totalPayrollRecords || 0) : 0}` +
+          `"payrollTotal":${checkPermission(authUser, 'payroll', 'view') ? Number(dbStatus.totalPayrollRecords || 0) : 0},` +
+          `"jobClassificationsTotal":${canJg ? Number(dbStatus.totalJobClassifications || 0) : 0},` +
+          `"commitmentsTotal":${canCmt ? Number(dbStatus.totalCommitments || 0) : 0},` +
+          `"unitReportsTotal":${resolvedUrTotal}` +
           `}}`;
 
         return rawJsonResponse(request, env, payloadStr);
@@ -2013,11 +2027,11 @@ export default {
         const hideDocs = !checkPermission(authUser, 'personnel', 'documents') || url.searchParams.get('lite') === '1';
         const selectExpr =
           hideSalary && hideDocs
-            ? "CASE WHEN json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) ELSE data_json END"
+            ? "CASE WHEN data_json LIKE '%\"documents\":%' AND json_valid(data_json) THEN json_set(json_remove(data_json, '$.documents'), '$.baseSalary', 0) WHEN json_valid(data_json) THEN json_set(data_json, '$.baseSalary', 0) ELSE data_json END"
             : hideSalary
             ? "CASE WHEN json_valid(data_json) THEN json_set(data_json, '$.baseSalary', 0) ELSE data_json END"
             : hideDocs
-            ? "CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END"
+            ? "CASE WHEN data_json LIKE '%\"documents\":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END"
             : 'data_json';
         const pg = parsePagination(url);
         if (pg.hasPagination) {
@@ -2123,7 +2137,7 @@ export default {
           lookupSlices.map((slice) => {
             const placeholders = slice.map(() => '?').join(',');
             return env.DB.prepare(
-              `SELECT personnel_code, CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${placeholders})`
+              `SELECT personnel_code, CASE WHEN data_json LIKE '%"documents":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${placeholders})`
             )
               .bind(...slice)
               .all<{ personnel_code: string; data_json: string }>();
@@ -2231,7 +2245,7 @@ export default {
           'id',
           ['personnel_code', 'data_json', 'updated_at'],
           Array.from(pendingMap.values()),
-          "personnel_code = excluded.personnel_code, data_json = CASE WHEN json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
+          "personnel_code = excluded.personnel_code, data_json = CASE WHEN personnel.data_json LIKE '%\"documents\":%' AND json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
         );
         await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
@@ -2297,7 +2311,7 @@ export default {
           relCodeSlices.map((slice) => {
             const ph = slice.map(() => '?').join(',');
             return env.DB.prepare(
-              `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${ph})`
+              `SELECT CASE WHEN data_json LIKE '%"documents":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${ph})`
             )
               .bind(...slice)
               .all<{ data_json: string }>();
@@ -2335,7 +2349,7 @@ export default {
             natSlices.map((slice) => {
               const ph = slice.map(() => '?').join(',');
               return env.DB.prepare(
-                `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.nationalId') IN (${ph})`
+                `SELECT CASE WHEN data_json LIKE '%"documents":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.nationalId') IN (${ph})`
               )
                 .bind(...slice)
                 .all<{ data_json: string }>();
@@ -2345,7 +2359,7 @@ export default {
             empSlices.map((slice) => {
               const ph = slice.map(() => '?').join(',');
               return env.DB.prepare(
-                `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.employeeId') IN (${ph})`
+                `SELECT CASE WHEN data_json LIKE '%"documents":%' AND json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.employeeId') IN (${ph})`
               )
                 .bind(...slice)
                 .all<{ data_json: string }>();
@@ -2443,7 +2457,7 @@ export default {
             'id',
             ['personnel_code', 'data_json', 'updated_at'],
             rowsToSave,
-            "personnel_code = excluded.personnel_code, data_json = CASE WHEN json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
+            "personnel_code = excluded.personnel_code, data_json = CASE WHEN personnel.data_json LIKE '%\"documents\":%' AND json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
           );
           await batchExecuteAndTouch(env.DB, stmts);
         }
@@ -3091,7 +3105,22 @@ export default {
       // ================= JOB CLASSIFICATIONS ROUTES =================
       if (path === '/job-classifications' && method === 'GET') {
         if (!checkPermission(authUser, 'jobGroups', 'view')) return jsonRes(request, env, { success: true, data: [] });
-        return jsonRes(request, env, { success: true, data: await getJsonRows(env.DB, 'job_classifications') });
+        const pg = parsePagination(url);
+        if (pg.hasPagination) {
+          const [countRow, rawArr] = await Promise.all([
+            env.DB.prepare('SELECT COUNT(*) as total FROM job_classifications').first<{ total: number }>(),
+            getRawJsonArrayString(env.DB, 'job_classifications', '', [], 'data_json', pg.limit, pg.offset),
+          ]);
+          const total = Number(countRow?.total || 0);
+          const hasMore = pg.offset + pg.limit < total;
+          return rawJsonResponse(
+            request,
+            env,
+            `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+          );
+        }
+        const rawArr = await getRawJsonArrayString(env.DB, 'job_classifications');
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/job-classifications' && method === 'POST') {
@@ -3299,7 +3328,22 @@ export default {
       // ================= COMMITMENTS ROUTES =================
       if (path === '/commitments' && method === 'GET') {
         if (!checkPermission(authUser, 'commitments', 'view')) return jsonRes(request, env, { success: true, data: [] });
-        return jsonRes(request, env, { success: true, data: await getJsonRows(env.DB, 'commitments') });
+        const pg = parsePagination(url);
+        if (pg.hasPagination) {
+          const [countRow, rawArr] = await Promise.all([
+            env.DB.prepare('SELECT COUNT(*) as total FROM commitments').first<{ total: number }>(),
+            getRawJsonArrayString(env.DB, 'commitments', '', [], 'data_json', pg.limit, pg.offset),
+          ]);
+          const total = Number(countRow?.total || 0);
+          const hasMore = pg.offset + pg.limit < total;
+          return rawJsonResponse(
+            request,
+            env,
+            `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+          );
+        }
+        const rawArr = await getRawJsonArrayString(env.DB, 'commitments');
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/commitments' && method === 'POST') {
@@ -4018,12 +4062,46 @@ export default {
         if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
         const period = url.searchParams.get('period');
         const unitName = url.searchParams.get('unitName');
+        const fullScope = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
+        const pg = parsePagination(url);
+        if (fullScope && !unitName) {
+          const whereClause = period ? 'period = ?' : '';
+          const binds = period ? [period] : [];
+          if (pg.hasPagination) {
+            const countSql = whereClause ? `SELECT COUNT(*) as total FROM unit_reports WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM unit_reports';
+            const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
+            const [countRow, rawArr] = await Promise.all([
+              countStmt.first<{ total: number }>(),
+              getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds, 'data_json', pg.limit, pg.offset),
+            ]);
+            const total = Number(countRow?.total || 0);
+            const hasMore = pg.offset + pg.limit < total;
+            return rawJsonResponse(
+              request,
+              env,
+              `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+            );
+          }
+          const rawArr = await getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds);
+          return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
+        }
         let records = period
           ? await getJsonRows(env.DB, 'unit_reports', 'period = ?', [period])
           : await getJsonRows(env.DB, 'unit_reports');
         if (unitName) records = records.filter((r: any) => normKey(String(r.unitName || '')) === normKey(unitName));
-        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
+        if (!fullScope) {
           records = records.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
+        }
+        if (pg.hasPagination) {
+          const slice = records.slice(pg.offset, pg.offset + pg.limit);
+          return jsonRes(request, env, {
+            success: true,
+            data: slice,
+            total: records.length,
+            limit: pg.limit,
+            offset: pg.offset,
+            hasMore: pg.offset + pg.limit < records.length,
+          });
         }
         return jsonRes(request, env, { success: true, data: records });
       }

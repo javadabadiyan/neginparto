@@ -116,11 +116,35 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
   const allowImport = granularPermissions ? Boolean(granularPermissions.importExcel) : canManage;
   const allowExport = granularPermissions ? Boolean(granularPermissions.exportExcel) : false;
 
-  // Period selectors
-  const [currentYear, setCurrentYear] = useState<string>('1403');
-  const [currentMonthIndex, setCurrentMonthIndex] = useState<number>(7);
-  const [prevYear, setPrevYear] = useState<string>('1403');
-  const [prevMonthIndex, setPrevMonthIndex] = useState<number>(6);
+  // Available periods stored in DB
+  const availablePeriods = useMemo(() => {
+    const set = new Set<string>(payrollList.map((r) => r.period).filter(Boolean));
+    return Array.from(set).sort().reverse();
+  }, [payrollList]);
+
+  // Period selectors (default to latest stored period if any, else 1403-08)
+  const initialPeriod = availablePeriods[0] || '1403-08';
+  const initialParsed = parsePeriod(initialPeriod);
+  const initialPrevParsed = parsePeriod(getPreviousPeriodId(initialPeriod));
+
+  const [currentYear, setCurrentYear] = useState<string>(initialParsed.year);
+  const [currentMonthIndex, setCurrentMonthIndex] = useState<number>(initialParsed.monthIndex);
+  const [prevYear, setPrevYear] = useState<string>(initialPrevParsed.year);
+  const [prevMonthIndex, setPrevMonthIndex] = useState<number>(initialPrevParsed.monthIndex);
+  const [hasAutoAlignedPeriod, setHasAutoAlignedPeriod] = useState<boolean>(availablePeriods.length > 0);
+
+  useEffect(() => {
+    if (!hasAutoAlignedPeriod && availablePeriods.length > 0) {
+      const latest = availablePeriods[0];
+      const parsed = parsePeriod(latest);
+      const prevParsed = parsePeriod(getPreviousPeriodId(latest));
+      setCurrentYear(parsed.year);
+      setCurrentMonthIndex(parsed.monthIndex);
+      setPrevYear(prevParsed.year);
+      setPrevMonthIndex(prevParsed.monthIndex);
+      setHasAutoAlignedPeriod(true);
+    }
+  }, [availablePeriods, hasAutoAlignedPeriod]);
 
   const currentPeriod = buildPeriod(currentYear, currentMonthIndex);
   const previousPeriod = buildPeriod(prevYear, prevMonthIndex);
@@ -178,13 +202,8 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
     setSelectedIds((prev) => prev.filter((id) => valid.has(id)));
   }, [payrollList, currentPeriod]);
 
-  // Available periods stored in DB
-  const availablePeriods = useMemo(() => {
-    const set = new Set<string>(payrollList.map((r) => r.period));
-    return Array.from(set).sort().reverse();
-  }, [payrollList]);
-
   const handleSelectSavedPeriod = (periodId: string) => {
+    setHasAutoAlignedPeriod(true);
     const parsed = parsePeriod(periodId);
     setCurrentYear(parsed.year);
     setCurrentMonthIndex(parsed.monthIndex);
@@ -195,6 +214,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
   };
 
   const handleAutoSetPreviousMonth = () => {
+    setHasAutoAlignedPeriod(true);
     const prevId = getPreviousPeriodId(currentPeriod);
     const parsed = parsePeriod(prevId);
     setPrevYear(parsed.year);
@@ -526,6 +546,7 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
     if (mappedRows.length === 0) return;
     const ok = await onBatchImportPayroll(importPeriod, mappedRows, useRowYearMonth);
     if (ok) {
+      setHasAutoAlignedPeriod(true);
       setIsImportOpen(false);
       setSearchTerm('');
       setFilterTrend('all');
@@ -855,7 +876,10 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
               <span className="font-bold text-white whitespace-nowrap">حقوق ماه جدید:</span>
               <select
                 value={currentMonthIndex}
-                onChange={(e) => setCurrentMonthIndex(Number(e.target.value))}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setCurrentMonthIndex(Number(e.target.value));
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-indigo-400"
               >
                 {PERSIAN_MONTHS.map((m, idx) => (
@@ -864,7 +888,10 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
               </select>
               <select
                 value={currentYear}
-                onChange={(e) => setCurrentYear(e.target.value)}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setCurrentYear(e.target.value);
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-indigo-400 persian-num"
               >
                 {YEARS_LIST.map((y) => (
@@ -879,7 +906,10 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
               <span className="font-bold text-amber-300 whitespace-nowrap">ماه قبل (مبنای مقایسه):</span>
               <select
                 value={prevMonthIndex}
-                onChange={(e) => setPrevMonthIndex(Number(e.target.value))}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setPrevMonthIndex(Number(e.target.value));
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-amber-400"
               >
                 {PERSIAN_MONTHS.map((m, idx) => (
@@ -888,7 +918,10 @@ export const PayrollModule: React.FC<PayrollModuleProps> = ({
               </select>
               <select
                 value={prevYear}
-                onChange={(e) => setPrevYear(e.target.value)}
+                onChange={(e) => {
+                  setHasAutoAlignedPeriod(true);
+                  setPrevYear(e.target.value);
+                }}
                 className="bg-slate-900 text-white font-bold px-2 py-1 rounded-lg border border-slate-600 focus:ring-1 focus:ring-amber-400 persian-num"
               >
                 {YEARS_LIST.map((y) => (

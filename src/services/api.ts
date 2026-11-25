@@ -421,7 +421,7 @@ async function callBackendOnce(
     }
   }
 
-  const timeoutMs = options.timeoutMs ?? 30000;
+  const timeoutMs = options.timeoutMs ?? 20000;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timerId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
@@ -482,17 +482,28 @@ async function callBackend(
   options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; retries?: number; compress?: boolean } = {}
 ): Promise<any> {
   const method = options.method || 'GET';
-  const maxRetries = options.retries ?? (method === 'GET' ? 2 : 0);
+  const maxRetries = options.retries ?? (method === 'GET' ? 1 : 0);
   let lastRes: any;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     lastRes = await callBackendOnce(route, options);
     if (lastRes && lastRes.success !== false) return lastRes;
     const retryable = Boolean(lastRes?.networkError || lastRes?.timeout || (lastRes?.status && lastRes.status >= 502));
     if (!retryable || attempt >= maxRetries) return lastRes;
-    await new Promise((r) => setTimeout(r, 550 * (attempt + 1)));
+    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
   }
   return lastRes;
 }
+
+const PERSIAN_DIGIT_TEST_RE = /[۰-۹٠-٩]/;
+const ASCII_CONVERT_KEYS = new Set([
+  'employeeId', 'personnelCode', 'nationalId', 'shenasnamehNumber', 'phone',
+  'birthDate', 'issueDate', 'hireDate', 'baseSalary', 'jobCode', 'positionCode',
+  'personnelNationalId', 'period', 'yearMonthLabel', 'baseKaraneh', 'overtimeBonus',
+  'deductions', 'finalKaraneh', 'score', 'performanceCoeff', 'netPayable',
+  'totalBenefits', 'amount', 'previouslyTakenAmount', 'maxAllowedAmount',
+  'startDate', 'endDate', 'machineCode', 'stoppedSince', 'estimatedReadyDate',
+  'volumeValue', 'targetVolume', 'actualValue', 'previousValue',
+]);
 
 function compactRowForUpload(row: any): any {
   if (!row || typeof row !== 'object') return row;
@@ -503,7 +514,7 @@ function compactRowForUpload(row: any): any {
     if (typeof v === 'string') {
       const t = v.trim();
       if (!t) continue;
-      out[k] = t;
+      out[k] = ASCII_CONVERT_KEYS.has(k) && PERSIAN_DIGIT_TEST_RE.test(t) ? toAsciiDigits(t) : t;
       continue;
     }
     out[k] = v;
@@ -541,8 +552,8 @@ async function sendBatchInChunks(
 
   const totalRows = nonEmptyItems.length;
   const initialChunkSize = Math.max(1, Math.min(chunkSize, totalRows));
-  const minChunkSize = Math.min(initialChunkSize, 12);
-  const maxConcurrency = Math.max(1, Math.min(5, concurrency));
+  const minChunkSize = Math.min(initialChunkSize, 15);
+  const maxConcurrency = Math.max(1, Math.min(6, concurrency));
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
@@ -586,7 +597,7 @@ async function sendBatchInChunks(
     let nextCursor = 0;
     const pendingRanges: BatchRange[] = [];
     let currentChunkSize = initialChunkSize;
-    let activeConcurrency = Math.min(maxConcurrency, 2);
+    let activeConcurrency = Math.min(maxConcurrency, 4);
     let successStreak = 0;
 
     const getRangeKeys = (r: BatchRange): string[] => {
@@ -743,7 +754,7 @@ async function sendBatchInChunks(
           failedRows,
         });
         if (needsBackoff) {
-          await new Promise((r) => setTimeout(r, 450));
+          await new Promise((r) => setTimeout(r, 250));
         }
       } else {
         successStreak += wave.length;
@@ -846,7 +857,7 @@ async function fetchPaginatedCloudflareList<T>(
   let results = [...initialItems];
   let offset = startOffset;
 
-  const first = await callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${offset}`, { timeoutMs: 45000, retries: 2 });
+  const first = await callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${offset}`, { timeoutMs: 18000, retries: 1 });
   const firstBatch = unwrapArrayResponse<T>(first, fallbackError);
   results = results.concat(firstBatch);
 
@@ -858,12 +869,12 @@ async function fetchPaginatedCloudflareList<T>(
   for (let next = offset + firstBatch.length; next < total; next += pageSize) {
     offsets.push(next);
   }
-  // Fetch remaining pages in waves of 3 concurrent read requests for fast table loading
-  for (let i = 0; i < offsets.length; i += 3) {
-    const wave = offsets.slice(i, i + 3);
+  // Fetch remaining pages in waves of 4 concurrent read requests for fast table loading
+  for (let i = 0; i < offsets.length; i += 4) {
+    const wave = offsets.slice(i, i + 4);
     const pages = await Promise.all(
       wave.map((off) =>
-        callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${off}`, { timeoutMs: 45000, retries: 2 }).then((r) =>
+        callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${off}`, { timeoutMs: 18000, retries: 1 }).then((r) =>
           unwrapArrayResponse<T>(r, fallbackError)
         )
       )
@@ -936,9 +947,9 @@ export const api = {
     if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportUsers(items));
     return sendBatchInChunks(
       items,
-      25,
-      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 25000, compress: true }),
-      2
+      20,
+      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      3
     );
   },
 
@@ -960,7 +971,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getPersonnel();
     if (engine === 'cloudflare') {
       const route = options?.lite ? '/personnel?lite=1' : '/personnel';
-      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 800 : 300, 'خطا در دریافت اطلاعات پرسنل');
+      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 250 : 150, 'خطا در دریافت اطلاعات پرسنل');
     }
     const json = await callBackend('/personnel');
     return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت اطلاعات پرسنل');
@@ -990,9 +1001,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      220,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      4
+      90,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 12000, compress: true }),
+      6
     );
   },
 
@@ -1014,9 +1025,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      150,
-      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      3
+      90,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 14000, compress: true }),
+      5
     );
   },
 
@@ -1032,7 +1043,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getKaraneh(period);
     const route = period ? `/karaneh?period=${encodeURIComponent(period)}` : '/karaneh';
     if (engine === 'cloudflare') {
-      return fetchPaginatedCloudflareList<KaranehRecord>(route, 1000, 'خطا در دریافت اطلاعات کارانه');
+      return fetchPaginatedCloudflareList<KaranehRecord>(route, 400, 'خطا در دریافت اطلاعات کارانه');
     }
     const json = await callBackend(route);
     return unwrapArrayResponse<KaranehRecord>(json, 'خطا در دریافت اطلاعات کارانه');
@@ -1080,9 +1091,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      350,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period }), timeoutMs: 18000, compress: true }),
-      4
+      180,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period }), timeoutMs: 12000, compress: true }),
+      6
     );
   },
 
@@ -1164,6 +1175,9 @@ export const api = {
   async getJobClassifications(): Promise<JobClassificationRecord[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getJobClassifications();
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<JobClassificationRecord>('/job-classifications', 300, 'خطا در دریافت طبقه‌بندی مشاغل');
+    }
     const json = await callBackend('/job-classifications');
     return unwrapArrayResponse<JobClassificationRecord>(json, 'خطا در دریافت طبقه‌بندی مشاغل');
   },
@@ -1192,9 +1206,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      250,
-      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      4
+      150,
+      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 12000, compress: true }),
+      6
     );
   },
 
@@ -1214,6 +1228,9 @@ export const api = {
   async getCommitments(): Promise<PersonnelCommitment[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getCommitments();
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<PersonnelCommitment>('/commitments', 300, 'خطا در دریافت تعهدات پرسنلی');
+    }
     const json = await callBackend('/commitments');
     return unwrapArrayResponse<PersonnelCommitment>(json, 'خطا در دریافت تعهدات پرسنلی');
   },
@@ -1242,9 +1259,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      250,
-      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      4
+      150,
+      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 12000, compress: true }),
+      6
     );
   },
 
@@ -1266,9 +1283,9 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getPayroll(period);
     const route = period ? `/payroll?period=${encodeURIComponent(period)}` : '/payroll';
     if (engine === 'cloudflare') {
-      return fetchPaginatedCloudflareList<PayrollRecord>(route, 250, 'خطا در دریافت لیست حقوق و دستمزد');
+      return fetchPaginatedCloudflareList<PayrollRecord>(route, 150, 'خطا در دریافت لیست حقوق و دستمزد');
     }
-    const json = await callBackend(route, { timeoutMs: 45000 });
+    const json = await callBackend(route, { timeoutMs: 25000 });
     return unwrapArrayResponse<PayrollRecord>(json, 'خطا در دریافت لیست حقوق و دستمزد');
   },
 
@@ -1278,9 +1295,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      100,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period, useRowYearMonth }), timeoutMs: 24000, compress: true }),
-      3
+      70,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period, useRowYearMonth }), timeoutMs: 16000, compress: true }),
+      5
     );
   },
 
@@ -1329,9 +1346,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      200,
-      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      3
+      150,
+      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 12000, compress: true }),
+      5
     );
   },
 
@@ -1372,9 +1389,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      200,
-      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
-      3
+      150,
+      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 12000, compress: true }),
+      5
     );
   },
 
@@ -1405,6 +1422,9 @@ export const api = {
     if (unitName) params.set('unitName', unitName);
     const qs = params.toString();
     const route = qs ? `/unit-reports?${qs}` : '/unit-reports';
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<UnitOperationalReport>(route, 300, 'خطا در دریافت گزارش واحدها');
+    }
     const json = await callBackend(route);
     return unwrapArrayResponse<UnitOperationalReport>(json, 'خطا در دریافت گزارش واحدها');
   },
@@ -1427,10 +1447,10 @@ export const api = {
         callBackend('/unit-reports/batch-import', {
           method: 'POST',
           body: buildFastBatchBody(engine, chunk, extra),
-          timeoutMs: 18000,
+          timeoutMs: 14000,
           compress: true,
         }),
-      3
+      5
     );
   },
 
@@ -1508,24 +1528,31 @@ export const api = {
     const wantLite = Boolean(options?.lite);
     if (engine === 'cloudflare') {
       const json = await callBackend(wantLite ? '/bootstrap?lite=1' : '/bootstrap', {
-        timeoutMs: wantLite ? 45000 : 75000,
+        timeoutMs: wantLite ? 22000 : 45000,
+        retries: 1,
       });
       if (json?.success && json?.data) {
         const d = json.data;
         let personnelList: Personnel[] = Array.isArray(d.personnel) ? d.personnel : [];
         let karanehList: KaranehRecord[] = Array.isArray(d.karaneh) ? d.karaneh : [];
         let payrollList: PayrollRecord[] = Array.isArray(d.payroll) ? d.payroll : [];
+        let jcList: JobClassificationRecord[] = Array.isArray(d.jobClassifications) ? d.jobClassifications : [];
+        let cmtList: PersonnelCommitment[] = Array.isArray(d.commitments) ? d.commitments : [];
+        let urList: UnitOperationalReport[] = Array.isArray(d.unitReports) ? d.unitReports : [];
 
         const personnelTotal = Number(d.personnelTotal ?? d.dbStatus?.totalPersonnel ?? personnelList.length);
         const karanehTotal = Number(d.karanehTotal ?? d.dbStatus?.totalKaranehRecords ?? karanehList.length);
         const payrollTotal = Number(d.payrollTotal ?? d.dbStatus?.totalPayrollRecords ?? payrollList.length);
+        const jcTotal = Number(d.jobClassificationsTotal ?? d.dbStatus?.totalJobClassifications ?? jcList.length);
+        const cmtTotal = Number(d.commitmentsTotal ?? d.dbStatus?.totalCommitments ?? cmtList.length);
+        const urTotal = Number(d.unitReportsTotal ?? d.dbStatus?.totalUnitReports ?? urList.length);
 
         const extraLoads: Promise<void>[] = [];
         if (personnelTotal > personnelList.length) {
           extraLoads.push(
             fetchPaginatedCloudflareList<Personnel>(
               wantLite ? '/personnel?lite=1' : '/personnel',
-              wantLite ? 800 : 300,
+              wantLite ? 250 : 150,
               'خطا در دریافت ادامه لیست پرسنل',
               personnelList.length,
               personnelList,
@@ -1539,7 +1566,7 @@ export const api = {
           extraLoads.push(
             fetchPaginatedCloudflareList<KaranehRecord>(
               '/karaneh',
-              1000,
+              400,
               'خطا در دریافت ادامه لیست کارانه',
               karanehList.length,
               karanehList,
@@ -1553,13 +1580,55 @@ export const api = {
           extraLoads.push(
             fetchPaginatedCloudflareList<PayrollRecord>(
               '/payroll',
-              250,
+              150,
               'خطا در دریافت ادامه لیست حقوق',
               payrollList.length,
               payrollList,
               payrollTotal
             ).then((full) => {
               payrollList = full;
+            })
+          );
+        }
+        if (jcTotal > jcList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<JobClassificationRecord>(
+              '/job-classifications',
+              300,
+              'خطا در دریافت ادامه لیست طبقه‌بندی مشاغل',
+              jcList.length,
+              jcList,
+              jcTotal
+            ).then((full) => {
+              jcList = full;
+            })
+          );
+        }
+        if (cmtTotal > cmtList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<PersonnelCommitment>(
+              '/commitments',
+              300,
+              'خطا در دریافت ادامه لیست تعهدات',
+              cmtList.length,
+              cmtList,
+              cmtTotal
+            ).then((full) => {
+              cmtList = full;
+            })
+          );
+        }
+        if (urTotal > urList.length) {
+          extraLoads.push(
+            fetchPaginatedCloudflareList<UnitOperationalReport>(
+              '/unit-reports',
+              300,
+              'خطا در دریافت ادامه گزارش واحدها',
+              urList.length,
+              urList,
+              urTotal
+            ).then((full) => {
+              urList = full;
             })
           );
         }
@@ -1572,6 +1641,9 @@ export const api = {
           personnel: personnelList,
           karaneh: karanehList,
           payroll: payrollList,
+          jobClassifications: jcList,
+          commitments: cmtList,
+          unitReports: urList,
           isLite: Boolean(d.lite),
         };
       }
