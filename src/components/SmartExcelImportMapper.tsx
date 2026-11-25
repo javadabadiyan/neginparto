@@ -184,6 +184,8 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
     setSubmitting(true);
     setErrorMsg('');
     try {
+      // Yield 1 render tick so spinner & progress state paint before synchronous row mapping
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const transformed = transformMappedRows(extracted.rows, mapping, moduleType);
       await onImport(transformed);
     } catch (err: any) {
@@ -509,7 +511,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
                 <div className="w-full h-2.5 bg-white border border-indigo-100 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-gradient-to-l from-indigo-600 to-emerald-500 transition-all duration-300"
-                    style={{ width: `${Math.max(4, pct)}%` }}
+                    style={{ width: `${pct > 0 ? Math.max(2, pct) : 0}%` }}
                   />
                 </div>
               </div>

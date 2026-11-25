@@ -453,7 +453,8 @@ async function sendBatchInChunks(
   }
 
   const totalRows = nonEmptyItems.length;
-  const totalChunks = Math.ceil(totalRows / chunkSize);
+  const initialChunkSize = Math.max(1, Math.min(chunkSize, totalRows));
+  const minChunkSize = Math.min(initialChunkSize, 12);
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
@@ -463,7 +464,7 @@ async function sendBatchInChunks(
   let totalAddedRelatives = 0;
   let processedRows = 0;
   let completedChunks = 0;
-  let failedRows = 0;
+  const failedRows = 0;
   let lastMessage = '';
   let lastFailureMessage = '';
 
@@ -475,131 +476,51 @@ async function sendBatchInChunks(
       r?.status === 429 ||
       (typeof r?.status === 'number' && r.status >= 500 && r.status <= 504));
 
-  const sendAdaptiveSlice = async (
-    slice: any[],
-    chunkIndex: number,
-    totalChunksCount: number,
-    depth = 0
-  ): Promise<any> => {
-    let res = await sendChunk(slice, chunkIndex, totalChunksCount);
-    if (res && res.success) return res;
-    if (isAuthErr(res)) return res;
-
-    // Only retry the exact same slice size if it failed fast (transient 502/network error, NOT a full timeout)
-    if (!res?.timeout && isRetryable(res)) {
-      await new Promise((r) => setTimeout(r, 450));
-      res = await sendChunk(slice, chunkIndex, totalChunksCount);
-      if (res && res.success) return res;
-    }
-
-    // If timed out or still failing transiently, immediately bisect into smaller slices instead of stalling
-    if (isRetryable(res) && slice.length > 1 && depth < 5) {
-      const mid = Math.ceil(slice.length / 2);
-      const left = await sendAdaptiveSlice(slice.slice(0, mid), chunkIndex, totalChunksCount, depth + 1);
-      if (isAuthErr(left)) return left;
-      const right = await sendAdaptiveSlice(slice.slice(mid), chunkIndex, totalChunksCount, depth + 1);
-      if (isAuthErr(right)) return right;
-
-      const leftOk = Boolean(left?.success);
-      const rightOk = Boolean(right?.success);
-      if (!leftOk && !rightOk) return left || right;
-
-      const ld = leftOk ? (left.data || {}) : {};
-      const rd = rightOk ? (right.data || {}) : {};
-      const partialFail = (!leftOk ? mid : 0) + (!rightOk ? slice.length - mid : 0);
-      return {
-        success: true,
-        message: (rightOk ? right.message : left.message) || '',
-        added: (leftOk ? Number(left.added || 0) : 0) + (rightOk ? Number(right.added || 0) : 0),
-        updated: (leftOk ? Number(left.updated || 0) : 0) + (rightOk ? Number(right.updated || 0) : 0),
-        data: {
-          inserted: (leftOk ? Number(ld.inserted ?? left.added ?? 0) : 0) + (rightOk ? Number(rd.inserted ?? right.added ?? 0) : 0),
-          updated: (leftOk ? Number(ld.updated ?? left.updated ?? 0) : 0) + (rightOk ? Number(rd.updated ?? right.updated ?? 0) : 0),
-          skipped: (leftOk ? Number(ld.skipped || 0) : 0) + (rightOk ? Number(rd.skipped || 0) : 0),
-          skippedUnit: (leftOk ? Number(ld.skippedUnit ?? left.skippedUnit ?? 0) : 0) + (rightOk ? Number(rd.skippedUnit ?? right.skippedUnit ?? 0) : 0),
-          matched: (leftOk ? Number(ld.matched || 0) : 0) + (rightOk ? Number(rd.matched || 0) : 0),
-          unmatched: (leftOk ? Number(ld.unmatched || 0) : 0) + (rightOk ? Number(rd.unmatched || 0) : 0),
-          addedRelatives: (leftOk ? Number(ld.addedRelatives || 0) : 0) + (rightOk ? Number(rd.addedRelatives || 0) : 0),
-          failedSliceRows: Number(ld.failedSliceRows || 0) + Number(rd.failedSliceRows || 0) + partialFail,
-        },
-      };
-    }
-
-    return res;
-  };
-
   activeBatchImportCount++;
+  const initialTotalChunks = Math.ceil(totalRows / initialChunkSize);
   emitBatchImportProgress({
     active: true,
     processedRows: 0,
     totalRows,
     completedChunks: 0,
-    totalChunks,
+    totalChunks: initialTotalChunks,
     savedRows: 0,
     failedRows: 0,
   });
 
   try {
-    const parallelWidth = Math.max(1, Math.min(concurrency, 2));
-    let consecutiveFailedWaves = 0;
-    let liveSavedRows = 0;
-    let liveFailedRows = 0;
+    let cursor = 0;
+    let currentChunkSize = initialChunkSize;
+    let successStreak = 0;
+    let consecutiveFailsAtMin = 0;
 
-    for (let start = 0; start < totalChunks; start += parallelWidth) {
-      const waveIndices: number[] = [];
-      for (let offset = 0; offset < parallelWidth && start + offset < totalChunks; offset++) {
-        waveIndices.push(start + offset);
+    while (cursor < totalRows) {
+      const remaining = totalRows - cursor;
+      const sliceLen = Math.min(currentChunkSize, remaining);
+      const slice = nonEmptyItems.slice(cursor, cursor + sliceLen);
+      const estTotalChunks = completedChunks + Math.ceil(remaining / Math.max(1, currentChunkSize));
+
+      let res = await sendChunk(slice, completedChunks, estTotalChunks);
+      if ((!res || !res.success) && !res?.timeout && isRetryable(res)) {
+        await new Promise((r) => setTimeout(r, 300));
+        res = await sendChunk(slice, completedChunks, estTotalChunks);
       }
 
-      const waveResults = await Promise.all(
-        waveIndices.map((idx) => {
-          const slice = nonEmptyItems.slice(idx * chunkSize, (idx + 1) * chunkSize);
-          return sendAdaptiveSlice(slice, idx, totalChunks).then((res) => {
-            processedRows = Math.min(totalRows, processedRows + slice.length);
-            completedChunks = Math.min(totalChunks, completedChunks + 1);
-            if (res && res.success) {
-              const d = res.data || {};
-              const ins = Number(d.inserted ?? res.added ?? 0);
-              const upd = Number(d.updated ?? res.updated ?? 0);
-              const mat = Number(d.matched ?? 0);
-              const rel = Number(d.addedRelatives ?? res.addedRelatives ?? 0);
-              const sliceFail = Number(d.failedSliceRows || 0);
-              liveSavedRows += ins + upd + (ins + upd === 0 ? mat + rel : 0);
-              liveFailedRows += sliceFail;
-            } else {
-              liveFailedRows += slice.length;
-            }
-            emitBatchImportProgress({
-              active: true,
-              processedRows,
-              totalRows,
-              completedChunks,
-              totalChunks,
-              savedRows: liveSavedRows,
-              failedRows: liveFailedRows,
-            });
-            return { idx, sliceLen: slice.length, res };
-          });
-        })
-      );
+      if (isAuthErr(res)) {
+        const baseMsg = res?.message || 'دسترسی یا نشست کاربری معتبر نیست.';
+        const savedSoFar = totalInserted + totalUpdated;
+        const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
+        const progressNote = estTotalChunks > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotalChunks}${savedNote})` : '';
+        return { success: false, message: `${baseMsg}${progressNote}`, data: res?.data };
+      }
 
-      let waveAllFailed = true;
-      for (const { idx, sliceLen, res } of waveResults) {
-        if (isAuthErr(res)) {
-          const baseMsg = res?.message || 'دسترسی یا نشست کاربری معتبر نیست.';
-          const savedSoFar = totalInserted + totalUpdated;
-          const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
-          const progressNote = totalChunks > 1 ? ` (توقف در دسته ${idx + 1} از ${totalChunks}${savedNote})` : '';
-          return { success: false, message: `${baseMsg}${progressNote}`, data: res?.data };
-        }
+      if (res && res.success) {
+        cursor += sliceLen;
+        completedChunks++;
+        processedRows = cursor;
+        consecutiveFailsAtMin = 0;
+        successStreak++;
 
-        if (!res || !res.success) {
-          failedRows += sliceLen;
-          if (res?.message) lastFailureMessage = res.message;
-          continue;
-        }
-
-        waveAllFailed = false;
         const d = res.data || {};
         totalInserted += Number(d.inserted ?? res.added ?? 0);
         totalUpdated += Number(d.updated ?? res.updated ?? 0);
@@ -608,27 +529,66 @@ async function sendBatchInChunks(
         totalMatched += Number(d.matched || 0);
         totalUnmatched += Number(d.unmatched || 0);
         totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
-        failedRows += Number(d.failedSliceRows || 0);
         if (res.message) lastMessage = res.message;
+
+        if (successStreak >= 2 && currentChunkSize < initialChunkSize) {
+          currentChunkSize = Math.min(initialChunkSize, Math.round(currentChunkSize * 1.5));
+          successStreak = 0;
+        }
+
+        const nextRem = totalRows - cursor;
+        const nextTotalChunks = completedChunks + (nextRem > 0 ? Math.ceil(nextRem / Math.max(1, currentChunkSize)) : 0);
+        const liveSaved = totalInserted + totalUpdated + (totalInserted + totalUpdated === 0 ? totalMatched + totalAddedRelatives : 0);
+
+        emitBatchImportProgress({
+          active: true,
+          processedRows,
+          totalRows,
+          completedChunks,
+          totalChunks: Math.max(completedChunks, nextTotalChunks),
+          savedRows: liveSaved,
+          failedRows,
+        });
+        continue;
       }
 
-      if (waveAllFailed) {
-        consecutiveFailedWaves++;
-        if (consecutiveFailedWaves >= 2 || totalChunks === 1) {
-          const failedChunkNum = waveIndices[0] + 1;
-          const baseMsg = lastFailureMessage || 'خطای ارتباط با سرور پایگاه داده.';
-          const savedSoFar = totalInserted + totalUpdated;
-          const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
-          const progressNote = totalChunks > 1 ? ` (توقف در دسته ${failedChunkNum} از ${totalChunks}${savedNote})` : '';
-          return {
-            success: false,
-            message: `${baseMsg}${progressNote}`,
-          };
-        }
-      } else {
-        consecutiveFailedWaves = 0;
+      // Failure path: immediately adapt chunk size downward without recursive 63-branch explosion
+      if (res?.message) lastFailureMessage = res.message;
+      successStreak = 0;
+
+      if (isRetryable(res) && currentChunkSize > minChunkSize) {
+        currentChunkSize = Math.max(minChunkSize, Math.floor(currentChunkSize / 2));
+        const nextTotalChunks = completedChunks + Math.ceil(remaining / Math.max(1, currentChunkSize));
+        emitBatchImportProgress({
+          active: true,
+          processedRows,
+          totalRows,
+          completedChunks,
+          totalChunks: Math.max(completedChunks + 1, nextTotalChunks),
+          savedRows: totalInserted + totalUpdated,
+          failedRows,
+        });
+        continue;
       }
+
+      if (isRetryable(res) && consecutiveFailsAtMin < 1 && totalRows > sliceLen) {
+        consecutiveFailsAtMin++;
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+
+      const baseMsg = lastFailureMessage || 'خطای ارتباط با سرور پایگاه داده.';
+      const savedSoFar = totalInserted + totalUpdated;
+      const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
+      const progressNote = estTotalChunks > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotalChunks}${savedNote})` : '';
+      return {
+        success: false,
+        message: `${baseMsg}${progressNote}`,
+        data: res?.data,
+      };
     }
+
+    const totalChunks = completedChunks;
 
     const totalSaved = totalInserted + totalUpdated + totalMatched;
     if (totalSaved === 0 && (failedRows > 0 || totalSkippedUnit > 0)) {
@@ -691,7 +651,7 @@ async function sendBatchInChunks(
       processedRows,
       totalRows,
       completedChunks,
-      totalChunks,
+      totalChunks: Math.max(completedChunks, initialTotalChunks),
       savedRows: totalInserted + totalUpdated,
       failedRows,
     });
@@ -729,9 +689,9 @@ async function fetchPaginatedCloudflareList<T>(
   for (let next = offset + firstBatch.length; next < total; next += pageSize) {
     offsets.push(next);
   }
-  // Fetch remaining pages in waves of 2 concurrent requests to avoid saturating connection or Worker RAM
-  for (let i = 0; i < offsets.length; i += 2) {
-    const wave = offsets.slice(i, i + 2);
+  // Fetch remaining pages in waves of 3 concurrent read requests for fast table loading
+  for (let i = 0; i < offsets.length; i += 3) {
+    const wave = offsets.slice(i, i + 3);
     const pages = await Promise.all(
       wave.map((off) =>
         callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${off}`, { timeoutMs: 45000, retries: 2 }).then((r) =>
@@ -807,7 +767,7 @@ export const api = {
     if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportUsers(items));
     return sendBatchInChunks(
       items,
-      5,
+      10,
       (chunk) => callBackend('/users/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 30000 }),
       1
     );
@@ -831,7 +791,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getPersonnel();
     if (engine === 'cloudflare') {
       const route = options?.lite ? '/personnel?lite=1' : '/personnel';
-      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 350 : 200, 'خطا در دریافت اطلاعات پرسنل');
+      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 800 : 300, 'خطا در دریافت اطلاعات پرسنل');
     }
     const json = await callBackend('/personnel');
     return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت اطلاعات پرسنل');
@@ -861,8 +821,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      35,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      150,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -885,8 +845,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      30,
-      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      100,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -903,7 +863,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getKaraneh(period);
     const route = period ? `/karaneh?period=${encodeURIComponent(period)}` : '/karaneh';
     if (engine === 'cloudflare') {
-      return fetchPaginatedCloudflareList<KaranehRecord>(route, 600, 'خطا در دریافت اطلاعات کارانه');
+      return fetchPaginatedCloudflareList<KaranehRecord>(route, 1000, 'خطا در دریافت اطلاعات کارانه');
     }
     const json = await callBackend(route);
     return unwrapArrayResponse<KaranehRecord>(json, 'خطا در دریافت اطلاعات کارانه');
@@ -951,8 +911,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      50,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 35000 }),
+      250,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -1063,8 +1023,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      180,
+      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -1113,8 +1073,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      45,
-      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      200,
+      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -1137,7 +1097,7 @@ export const api = {
     if (engine === 'indexeddb') return embeddedDb.getPayroll(period);
     const route = period ? `/payroll?period=${encodeURIComponent(period)}` : '/payroll';
     if (engine === 'cloudflare') {
-      return fetchPaginatedCloudflareList<PayrollRecord>(route, 150, 'خطا در دریافت لیست حقوق و دستمزد');
+      return fetchPaginatedCloudflareList<PayrollRecord>(route, 250, 'خطا در دریافت لیست حقوق و دستمزد');
     }
     const json = await callBackend(route, { timeoutMs: 45000 });
     return unwrapArrayResponse<PayrollRecord>(json, 'خطا در دریافت لیست حقوق و دستمزد');
@@ -1149,8 +1109,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      20,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 40000 }),
+      60,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 30000 }),
       1
     );
   },
@@ -1200,8 +1160,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      150,
+      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -1243,8 +1203,8 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      40,
-      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 35000 }),
+      150,
+      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
       1
     );
   },
@@ -1292,12 +1252,12 @@ export const api = {
     const items = Array.isArray(payload?.items) ? payload.items.map(compactRowForUpload) : [];
     return sendBatchInChunks(
       items,
-      30,
+      100,
       (chunk) =>
         callBackend('/unit-reports/batch-import', {
           method: 'POST',
           body: { ...payload, items: chunk },
-          timeoutMs: 35000,
+          timeoutMs: 25000,
         }),
       1
     );
@@ -1394,7 +1354,7 @@ export const api = {
           extraLoads.push(
             fetchPaginatedCloudflareList<Personnel>(
               wantLite ? '/personnel?lite=1' : '/personnel',
-              wantLite ? 350 : 200,
+              wantLite ? 800 : 300,
               'خطا در دریافت ادامه لیست پرسنل',
               personnelList.length,
               personnelList,
@@ -1408,7 +1368,7 @@ export const api = {
           extraLoads.push(
             fetchPaginatedCloudflareList<KaranehRecord>(
               '/karaneh',
-              600,
+              1000,
               'خطا در دریافت ادامه لیست کارانه',
               karanehList.length,
               karanehList,
@@ -1422,7 +1382,7 @@ export const api = {
           extraLoads.push(
             fetchPaginatedCloudflareList<PayrollRecord>(
               '/payroll',
-              150,
+              250,
               'خطا در دریافت ادامه لیست حقوق',
               payrollList.length,
               payrollList,

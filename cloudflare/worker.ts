@@ -96,7 +96,10 @@ function faDateTime(): string {
 }
 
 function genId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const rand = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 9)}`;
+  return `${prefix}-${rand}`;
 }
 
 // ================= CRYPTO: PBKDF2 + SHA256 + HMAC-SHA256 =================
@@ -909,7 +912,7 @@ async function getPersonnelLookupMap(
 }
 
 async function batchExecuteChunked(db: D1Database, stmts: D1PreparedStatement[]): Promise<void> {
-  const CHUNK = 15;
+  const CHUNK = 25;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     await db.batch(stmts.slice(i, i + CHUNK));
   }
@@ -924,7 +927,7 @@ async function batchExecuteAndTouch(db: D1Database, stmts: D1PreparedStatement[]
     await metaStmt.run();
     return;
   }
-  const CHUNK = 15;
+  const CHUNK = 25;
   for (let i = 0; i < stmts.length; i += CHUNK) {
     const slice = stmts.slice(i, i + CHUNK);
     if (i + CHUNK >= stmts.length) {
@@ -945,15 +948,16 @@ function buildMultiRowUpsertStmts(
   columns: string[],
   conflictCol: string,
   updateCols: string[],
-  rows: any[][]
+  rows: any[][],
+  customUpdateSql?: string
 ): D1PreparedStatement[] {
   if (rows.length === 0) return [];
-  const maxRowsPerStmt = Math.max(1, Math.floor(80 / columns.length));
+  const maxRowsPerStmt = Math.max(1, Math.floor(92 / columns.length));
   // D1 limits bound SQL statements to ~100KB UTF-8 bytes; stay well below to prevent SQLITE_TOOBIG with Persian JSON
-  const MAX_STMT_BYTES = 55_000;
+  const MAX_STMT_BYTES = 58_000;
   const colList = columns.join(', ');
   const rowPlaceholder = `(${columns.map(() => '?').join(',')})`;
-  const updateSql = updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
+  const updateSql = customUpdateSql || updateCols.map((c) => `${c} = excluded.${c}`).join(', ');
   const baseSqlBytes = utf8ByteLength(table) + utf8ByteLength(colList) + utf8ByteLength(updateSql) + 64;
   const stmts: D1PreparedStatement[] = [];
 
@@ -1539,9 +1543,9 @@ export default {
         const canUsers = checkPermission(authUser, 'users', 'view');
         const isCeoOrSuper = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
 
-        const persLimit = 300;
-        const karLimit = 600;
-        const payLimit = canPay ? 150 : undefined;
+        const persLimit = 800;
+        const karLimit = 1000;
+        const payLimit = canPay ? 250 : undefined;
 
         const [
           personnelJson,
@@ -2043,24 +2047,31 @@ export default {
         const items = Array.isArray(body.items) ? body.items : [];
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
-        const incomingCodes = Array.from(
-          new Set(
+        const incomingCodes: string[] = Array.from(
+          new Set<string>(
             items
               .map((row: any) => toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی') || '').trim())
-              .filter(Boolean)
+              .filter((v: string) => Boolean(v))
           )
         );
 
         const byCode = new Map<string, any>();
-        for (let i = 0; i < incomingCodes.length; i += 50) {
-          const slice = incomingCodes.slice(i, i + 50);
-          const placeholders = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT personnel_code, data_json FROM personnel WHERE personnel_code IN (${placeholders})`
-          )
-            .bind(...slice)
-            .all<{ personnel_code: string; data_json: string }>();
-          for (const r of results || []) {
+        const lookupSlices: string[][] = [];
+        for (let i = 0; i < incomingCodes.length; i += 90) {
+          lookupSlices.push(incomingCodes.slice(i, i + 90));
+        }
+        const lookupResponses = await Promise.all(
+          lookupSlices.map((slice) => {
+            const placeholders = slice.map(() => '?').join(',');
+            return env.DB.prepare(
+              `SELECT personnel_code, CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${placeholders})`
+            )
+              .bind(...slice)
+              .all<{ personnel_code: string; data_json: string }>();
+          })
+        );
+        for (const res of lookupResponses) {
+          for (const r of res.results || []) {
             try {
               const parsed = JSON.parse(r.data_json);
               const c = toAsciiDigits(parsed.personnelCode || r.personnel_code).trim();
@@ -2160,7 +2171,8 @@ export default {
           ['id', 'personnel_code', 'data_json', 'updated_at'],
           'id',
           ['personnel_code', 'data_json', 'updated_at'],
-          Array.from(pendingMap.values())
+          Array.from(pendingMap.values()),
+          "personnel_code = excluded.personnel_code, data_json = CASE WHEN json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
         );
         await batchExecuteAndTouch(env.DB, stmts);
         return jsonRes(request, env, {
@@ -2647,15 +2659,25 @@ export default {
         }
 
         const byCode = new Map<string, any>();
-        for (let i = 0; i < incomingCodes.length; i += 75) {
-          const slice = incomingCodes.slice(i, i + 75);
-          const placeholders = slice.map(() => '?').join(',');
-          const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, personnel_code as personnelCode, data_json FROM karaneh WHERE period = ? AND personnel_code IN (${placeholders})`
-          )
-            .bind(period, ...slice)
-            .all<any>();
-          for (const k of existingRows || []) {
+        const karSlices: string[][] = [];
+        for (let i = 0; i < incomingCodes.length; i += 90) {
+          karSlices.push(incomingCodes.slice(i, i + 90));
+        }
+        const [karLookupResponses, persMap] = await Promise.all([
+          Promise.all(
+            karSlices.map((slice) => {
+              const placeholders = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT id, personnel_code as personnelCode, data_json FROM karaneh WHERE period = ? AND personnel_code IN (${placeholders})`
+              )
+                .bind(period, ...slice)
+                .all<any>();
+            })
+          ),
+          getPersonnelLookupMap(env.DB, incomingCodes),
+        ]);
+        for (const res of karLookupResponses) {
+          for (const k of res.results || []) {
             const c = toAsciiDigits(k.personnelCode).trim();
             if (!c) continue;
             try {
@@ -2665,8 +2687,6 @@ export default {
             }
           }
         }
-
-        const persMap = await getPersonnelLookupMap(env.DB, incomingCodes);
         const fullScope = hasFullKaranehScope(authUser);
         const allowedUnits = getKaranehAllowedUnitsForUser(authUser);
         const defaultUnit = !fullScope && allowedUnits.length > 0 ? allowedUnits[0] : 'عمومی';
@@ -3082,30 +3102,35 @@ export default {
         const byCode = new Map<string, string>();
         const byNat = new Map<string, string>();
 
-        for (let i = 0; i < incomingCodes.length; i += 75) {
-          const slice = incomingCodes.slice(i, i + 75);
-          const ph = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT id, personnel_code as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE personnel_code IN (${ph})`
-          )
-            .bind(...slice)
-            .all<any>();
-          for (const r of results || []) {
-            const c = toAsciiDigits(r.personnelCode).trim();
-            const n = toAsciiDigits(r.nationalId).trim();
-            if (c) byCode.set(c, r.id);
-            if (n) byNat.set(n, r.id);
-          }
-        }
-        for (let i = 0; i < incomingNats.length; i += 75) {
-          const slice = incomingNats.slice(i, i + 75);
-          const ph = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT id, TRIM(personnel_code) as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE COALESCE(json_extract(data_json, '$.nationalId'), '') IN (${ph})`
-          )
-            .bind(...slice)
-            .all<any>();
-          for (const r of results || []) {
+        const codeSlices: string[][] = [];
+        for (let i = 0; i < incomingCodes.length; i += 90) codeSlices.push(incomingCodes.slice(i, i + 90));
+        const natSlices: string[][] = [];
+        for (let i = 0; i < incomingNats.length; i += 90) natSlices.push(incomingNats.slice(i, i + 90));
+
+        const [codeResponses, natResponses] = await Promise.all([
+          Promise.all(
+            codeSlices.map((slice) => {
+              const ph = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT id, personnel_code as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE personnel_code IN (${ph})`
+              )
+                .bind(...slice)
+                .all<any>();
+            })
+          ),
+          Promise.all(
+            natSlices.map((slice) => {
+              const ph = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT id, personnel_code as personnelCode, COALESCE(json_extract(data_json, '$.nationalId'), '') as nationalId FROM job_classifications WHERE COALESCE(json_extract(data_json, '$.nationalId'), '') IN (${ph})`
+              )
+                .bind(...slice)
+                .all<any>();
+            })
+          ),
+        ]);
+        for (const res of [...codeResponses, ...natResponses]) {
+          for (const r of res.results || []) {
             const c = toAsciiDigits(r.personnelCode).trim();
             const n = toAsciiDigits(r.nationalId).trim();
             if (c) byCode.set(c, r.id);
@@ -3382,17 +3407,26 @@ export default {
               .filter((c: string) => Boolean(c))
           )
         );
-        const persByCode = await getPersonnelLookupMap(env.DB, incomingPayCodes);
+        const paySlices: string[][] = [];
+        for (let i = 0; i < incomingPayCodes.length; i += 90) {
+          paySlices.push(incomingPayCodes.slice(i, i + 90));
+        }
+        const [persByCode, payLookupResponses] = await Promise.all([
+          getPersonnelLookupMap(env.DB, incomingPayCodes),
+          Promise.all(
+            paySlices.map((slice) => {
+              const placeholders = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT id, period, personnel_code as personnelCode FROM payroll WHERE personnel_code IN (${placeholders})`
+              )
+                .bind(...slice)
+                .all<{ id: string; period: string; personnelCode: string }>();
+            })
+          ),
+        ]);
         const payIdMap = new Map<string, string>();
-        for (let i = 0; i < incomingPayCodes.length; i += 75) {
-          const slice = incomingPayCodes.slice(i, i + 75);
-          const placeholders = slice.map(() => '?').join(',');
-          const { results: existingPayRows } = await env.DB.prepare(
-            `SELECT id, period, personnel_code as personnelCode FROM payroll WHERE personnel_code IN (${placeholders})`
-          )
-            .bind(...slice)
-            .all<{ id: string; period: string; personnelCode: string }>();
-          for (const r of existingPayRows || []) {
+        for (const res of payLookupResponses) {
+          for (const r of res.results || []) {
             const k = `${toAsciiDigits(r.period).trim()}__${toAsciiDigits(r.personnelCode).trim()}`;
             payIdMap.set(k, r.id);
           }
