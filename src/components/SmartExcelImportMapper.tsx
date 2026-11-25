@@ -77,6 +77,9 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
 
   const extracted = useMemo(() => {
     if (!activeSheet) return { headers: [], rows: [] };
+    if (activeSheet.cachedExtracted && headerRowIndex === activeSheet.detectedHeaderRowIndex) {
+      return activeSheet.cachedExtracted;
+    }
     return extractRowsFromSheet(activeSheet.rows2D, headerRowIndex);
   }, [activeSheet, headerRowIndex]);
 
@@ -100,7 +103,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
       const hdrIdx = sheet?.detectedHeaderRowIndex || 0;
       setHeaderRowIndex(hdrIdx);
       if (sheet) {
-        const { headers } = extractRowsFromSheet(sheet.rows2D, hdrIdx);
+        const headers = sheet.cachedExtracted?.headers || extractRowsFromSheet(sheet.rows2D, hdrIdx).headers;
         runAutoMatch(headers);
       }
     } catch (err: any) {
@@ -117,7 +120,7 @@ export const SmartExcelImportMapper: React.FC<SmartExcelImportMapperProps> = ({
     const hdrIdx = sheet?.detectedHeaderRowIndex || 0;
     setHeaderRowIndex(hdrIdx);
     if (sheet) {
-      const { headers } = extractRowsFromSheet(sheet.rows2D, hdrIdx);
+      const headers = sheet.cachedExtracted?.headers || extractRowsFromSheet(sheet.rows2D, hdrIdx).headers;
       runAutoMatch(headers);
     }
   };

@@ -27,6 +27,7 @@ export interface InspectedSheet {
   rows2D: any[][];
   detectedHeaderRowIndex: number;
   rawRowCount: number;
+  cachedExtracted?: { headers: string[]; rows: Record<string, any>[] };
 }
 
 export interface InspectedWorkbook {
@@ -325,13 +326,14 @@ export function extractRowsFromSheet(
   const rawHeaderRow = rows2D[headerRowIndex] || [];
   const headers: string[] = [];
   const usedCounts = new Map<string, number>();
+  const headerIndexMap: { colIdx: number; headerName: string }[] = [];
+  const rowSampleEnd = Math.min(rows2D.length, headerRowIndex + 25);
 
   for (let c = 0; c < rawHeaderRow.length; c++) {
     let h = String(rawHeaderRow[c] ?? '').replace(/\s+/g, ' ').trim();
     if (!h) {
-      // Check if column has any non-empty values below
       let hasData = false;
-      for (let r = headerRowIndex + 1; r < Math.min(rows2D.length, headerRowIndex + 25); r++) {
+      for (let r = headerRowIndex + 1; r < rowSampleEnd; r++) {
         if (String(rows2D[r]?.[c] ?? '').trim() !== '') {
           hasData = true;
           break;
@@ -344,37 +346,22 @@ export function extractRowsFromSheet(
     usedCounts.set(h, count + 1);
     const uniqueName = count > 0 ? `${h}_${count + 1}` : h;
     headers.push(uniqueName);
-  }
-
-  const headerIndexMap: { colIdx: number; headerName: string }[] = [];
-  const countMap = new Map<string, number>();
-  for (let c = 0; c < rawHeaderRow.length; c++) {
-    let h = String(rawHeaderRow[c] ?? '').replace(/\s+/g, ' ').trim();
-    if (!h) {
-      let hasData = false;
-      for (let r = headerRowIndex + 1; r < Math.min(rows2D.length, headerRowIndex + 25); r++) {
-        if (String(rows2D[r]?.[c] ?? '').trim() !== '') {
-          hasData = true;
-          break;
-        }
-      }
-      if (!hasData) continue;
-      h = `ستون_${c + 1}`;
-    }
-    const count = countMap.get(h) || 0;
-    countMap.set(h, count + 1);
-    const uniqueName = count > 0 ? `${h}_${count + 1}` : h;
     headerIndexMap.push({ colIdx: c, headerName: uniqueName });
   }
 
+  const colCount = headerIndexMap.length;
   const rows: Record<string, any>[] = [];
   for (let r = headerRowIndex + 1; r < rows2D.length; r++) {
-    const rawRow = rows2D[r] || [];
+    const rawRow = rows2D[r];
+    if (!rawRow || rawRow.length === 0) continue;
     const obj: Record<string, any> = {};
     let nonEmpty = false;
-    for (const { colIdx, headerName } of headerIndexMap) {
-      const val = rawRow[colIdx] !== undefined && rawRow[colIdx] !== null ? rawRow[colIdx] : '';
-      if (String(val).trim() !== '') nonEmpty = true;
+    for (let j = 0; j < colCount; j++) {
+      const { colIdx, headerName } = headerIndexMap[j];
+      const val = rawRow[colIdx];
+      if (val === undefined || val === null || val === '') continue;
+      if (typeof val === 'string' && val.trim() === '') continue;
+      nonEmpty = true;
       obj[headerName] = val;
     }
     if (nonEmpty) rows.push(obj);
@@ -401,9 +388,9 @@ export async function inspectExcelWorkbook(
     const ws = workbook.Sheets[name];
     const rows2D = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
     const detectedHeaderRowIndex = detectHeaderRowIndex(rows2D, targetFields);
-    const { headers, rows } = extractRowsFromSheet(rows2D, detectedHeaderRowIndex);
-    const mapping = autoMatchColumns(headers, targetFields);
-    const score = Object.values(mapping).filter(Boolean).length * 100 + (rows.length > 0 ? 10 : 0);
+    const extracted = extractRowsFromSheet(rows2D, detectedHeaderRowIndex);
+    const mapping = autoMatchColumns(extracted.headers, targetFields);
+    const score = Object.values(mapping).filter(Boolean).length * 100 + (extracted.rows.length > 0 ? 10 : 0);
     if (score > highestMatchScore) {
       highestMatchScore = score;
       defaultSheetIndex = idx;
@@ -412,7 +399,8 @@ export async function inspectExcelWorkbook(
       name,
       rows2D,
       detectedHeaderRowIndex,
-      rawRowCount: rows.length,
+      rawRowCount: extracted.rows.length,
+      cachedExtracted: extracted,
     };
   });
 

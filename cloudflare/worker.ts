@@ -31,7 +31,7 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': allowOrigin || '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Content-Encoding',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   };
@@ -53,6 +53,49 @@ function jsonRes(
       ...extraHeaders,
     },
   });
+}
+
+async function readJsonBody(request: Request): Promise<any> {
+  try {
+    const reqUrl = new URL(request.url);
+    const isGzip =
+      reqUrl.searchParams.get('gz') === '1' ||
+      request.headers.get('X-Requested-With') === 'npn-gzip' ||
+      (request.headers.get('Content-Encoding') || '').toLowerCase().includes('gzip');
+    if (isGzip && request.body && typeof DecompressionStream !== 'undefined') {
+      const decompressed = request.body.pipeThrough(new DecompressionStream('gzip'));
+      return await new Response(decompressed).json();
+    }
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+function unpackBatchItems(body: any): any[] {
+  if (!body || typeof body !== 'object') return [];
+  if (Array.isArray(body.items)) return body.items;
+  if (Array.isArray(body.__cols) && Array.isArray(body.__rows)) {
+    const cols: string[] = body.__cols;
+    const rows: any[][] = body.__rows;
+    const colCount = cols.length;
+    const out = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const vals = rows[i];
+      const obj: Record<string, any> = {};
+      if (Array.isArray(vals)) {
+        for (let j = 0; j < colCount; j++) {
+          const v = vals[j];
+          if (v !== undefined && v !== null) {
+            obj[cols[j]] = v;
+          }
+        }
+      }
+      out[i] = obj;
+    }
+    return out;
+  }
+  return [];
 }
 
 const FA_DATE_FMT = (() => {
@@ -888,14 +931,21 @@ async function getPersonnelLookupMap(
 
   if (Array.isArray(codes) && codes.length > 0) {
     const cleanCodes = Array.from(new Set(codes.map((c) => toAsciiDigits(c).trim()).filter(Boolean)));
-    for (let i = 0; i < cleanCodes.length; i += 75) {
-      const slice = cleanCodes.slice(i, i + 75);
-      const placeholders = slice.map(() => '?').join(',');
-      const { results } = await db
-        .prepare(`${baseSelect} WHERE personnel_code IN (${placeholders})`)
-        .bind(...slice)
-        .all<any>();
-      for (const r of results || []) {
+    const slices: string[][] = [];
+    for (let i = 0; i < cleanCodes.length; i += 90) {
+      slices.push(cleanCodes.slice(i, i + 90));
+    }
+    const responses = await Promise.all(
+      slices.map((slice) => {
+        const placeholders = slice.map(() => '?').join(',');
+        return db
+          .prepare(`${baseSelect} WHERE personnel_code IN (${placeholders})`)
+          .bind(...slice)
+          .all<any>();
+      })
+    );
+    for (const res of responses) {
+      for (const r of res.results || []) {
         const code = toAsciiDigits(r.personnelCode).trim();
         if (code) map.set(code, { ...r, personnelCode: code });
       }
@@ -938,8 +988,17 @@ async function batchExecuteAndTouch(db: D1Database, stmts: D1PreparedStatement[]
 }
 
 function utf8ByteLength(str: string): number {
-  if (!NON_ASCII_RE.test(str)) return str.length;
-  return textEncoder.encode(str).length;
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
 }
 
 function buildMultiRowUpsertStmts(
@@ -952,7 +1011,7 @@ function buildMultiRowUpsertStmts(
   customUpdateSql?: string
 ): D1PreparedStatement[] {
   if (rows.length === 0) return [];
-  const maxRowsPerStmt = Math.max(1, Math.floor(92 / columns.length));
+  const maxRowsPerStmt = Math.max(1, Math.floor(96 / columns.length));
   // D1 limits bound SQL statements to ~100KB UTF-8 bytes; stay well below to prevent SQLITE_TOOBIG with Persian JSON
   const MAX_STMT_BYTES = 58_000;
   const colList = columns.join(', ');
@@ -1784,8 +1843,8 @@ export default {
         if (!checkPermission(authUser, 'users', 'importExcel') && !checkPermission(authUser, 'users', 'create')) {
           return forbidden(request, env, 'شما مجوز بارگذاری اکسل کاربران را ندارید.');
         }
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) {
           return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
         }
@@ -2043,8 +2102,8 @@ export default {
 
       if (path === '/personnel/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'personnel', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const incomingCodes: string[] = Array.from(
@@ -2204,8 +2263,8 @@ export default {
 
       if (path === '/personnel/relatives/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'personnel', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const incomingCodes = Array.from(
@@ -2232,15 +2291,20 @@ export default {
           if (nm) parentByName.set(nm, parsed);
         };
 
-        for (let i = 0; i < incomingCodes.length; i += 50) {
-          const slice = incomingCodes.slice(i, i + 50);
-          const ph = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT data_json FROM personnel WHERE personnel_code IN (${ph})`
-          )
-            .bind(...slice)
-            .all<{ data_json: string }>();
-          for (const r of results || []) {
+        const relCodeSlices: string[][] = [];
+        for (let i = 0; i < incomingCodes.length; i += 90) relCodeSlices.push(incomingCodes.slice(i, i + 90));
+        const relCodeRes = await Promise.all(
+          relCodeSlices.map((slice) => {
+            const ph = slice.map(() => '?').join(',');
+            return env.DB.prepare(
+              `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE personnel_code IN (${ph})`
+            )
+              .bind(...slice)
+              .all<{ data_json: string }>();
+          })
+        );
+        for (const res of relCodeRes) {
+          for (const r of res.results || []) {
             try {
               indexParent(JSON.parse(r.data_json));
             } catch {
@@ -2261,28 +2325,35 @@ export default {
           if (pNatId && !parentByNatId.has(pNatId)) fallbackNatIds.push(pNatId);
         }
         const uniqFallbackNats = Array.from(new Set(fallbackNatIds));
-        for (let i = 0; i < uniqFallbackNats.length; i += 50) {
-          const slice = uniqFallbackNats.slice(i, i + 50);
-          const ph = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT data_json FROM personnel WHERE json_extract(data_json, '$.nationalId') IN (${ph})`
-          )
-            .bind(...slice)
-            .all<{ data_json: string }>();
-          for (const r of results || []) {
-            try { indexParent(JSON.parse(r.data_json)); } catch {}
-          }
-        }
         const uniqFallbackEmps = Array.from(new Set(fallbackEmpIds));
-        for (let i = 0; i < uniqFallbackEmps.length; i += 50) {
-          const slice = uniqFallbackEmps.slice(i, i + 50);
-          const ph = slice.map(() => '?').join(',');
-          const { results } = await env.DB.prepare(
-            `SELECT data_json FROM personnel WHERE json_extract(data_json, '$.employeeId') IN (${ph})`
-          )
-            .bind(...slice)
-            .all<{ data_json: string }>();
-          for (const r of results || []) {
+        const natSlices: string[][] = [];
+        for (let i = 0; i < uniqFallbackNats.length; i += 90) natSlices.push(uniqFallbackNats.slice(i, i + 90));
+        const empSlices: string[][] = [];
+        for (let i = 0; i < uniqFallbackEmps.length; i += 90) empSlices.push(uniqFallbackEmps.slice(i, i + 90));
+        const [natResList, empResList] = await Promise.all([
+          Promise.all(
+            natSlices.map((slice) => {
+              const ph = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.nationalId') IN (${ph})`
+              )
+                .bind(...slice)
+                .all<{ data_json: string }>();
+            })
+          ),
+          Promise.all(
+            empSlices.map((slice) => {
+              const ph = slice.map(() => '?').join(',');
+              return env.DB.prepare(
+                `SELECT CASE WHEN json_valid(data_json) THEN json_remove(data_json, '$.documents') ELSE data_json END as data_json FROM personnel WHERE json_extract(data_json, '$.employeeId') IN (${ph})`
+              )
+                .bind(...slice)
+                .all<{ data_json: string }>();
+            })
+          ),
+        ]);
+        for (const res of [...natResList, ...empResList]) {
+          for (const r of res.results || []) {
             try { indexParent(JSON.parse(r.data_json)); } catch {}
           }
         }
@@ -2371,7 +2442,8 @@ export default {
             ['id', 'personnel_code', 'data_json', 'updated_at'],
             'id',
             ['personnel_code', 'data_json', 'updated_at'],
-            rowsToSave
+            rowsToSave,
+            "personnel_code = excluded.personnel_code, data_json = CASE WHEN json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
           );
           await batchExecuteAndTouch(env.DB, stmts);
         }
@@ -2636,9 +2708,9 @@ export default {
 
       if (path === '/karaneh/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'karaneh', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
+        const body: any = await readJsonBody(request);
         const period = parseYearMonth(body.period, String(body.period || '').trim());
-        const items = Array.isArray(body.items) ? body.items : [];
+        const items = unpackBatchItems(body);
         if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره کارانه و لیست رکوردها الزامی است.' }, 400);
 
         const incomingCodes = Array.from(
@@ -3080,8 +3152,8 @@ export default {
 
       if (path === '/job-classifications/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'jobGroups', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const incomingCodes = Array.from(
@@ -3285,8 +3357,8 @@ export default {
 
       if (path === '/commitments/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'commitments', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const incomingCodes = Array.from(
@@ -3394,10 +3466,10 @@ export default {
 
       if (path === '/payroll/batch-import' && method === 'POST') {
         if (!checkPermission(authUser, 'payroll', 'importExcel')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
+        const body: any = await readJsonBody(request);
         const period = parseYearMonth(body.period, String(body.period || '').trim());
         const useRowYearMonth = body.useRowYearMonth !== false;
-        const items = Array.isArray(body.items) ? body.items : [];
+        const items = unpackBatchItems(body);
         if (!period || items.length === 0) return jsonRes(request, env, { success: false, message: 'دوره و لیست ردیف‌های حقوق الزامی است.' }, 400);
 
         const incomingPayCodes: string[] = Array.from(
@@ -3608,8 +3680,8 @@ export default {
         const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
         const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
         if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل آمار حجم عملیات.');
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const chunkPeriods = Array.from(
@@ -3620,15 +3692,20 @@ export default {
           )
         ).filter(Boolean);
         const existingMap = new Map<string, string>();
-        for (let i = 0; i < chunkPeriods.length; i += 40) {
-          const slice = chunkPeriods.slice(i, i + 40);
-          const ph = slice.map(() => '?').join(',');
-          const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricTitle'), '') as metricTitle FROM mining_volumes WHERE period IN (${ph})`
-          )
-            .bind(...slice)
-            .all<any>();
-          for (const v of existingRows || []) {
+        const mvSlices: string[][] = [];
+        for (let i = 0; i < chunkPeriods.length; i += 40) mvSlices.push(chunkPeriods.slice(i, i + 40));
+        const mvLookupRes = await Promise.all(
+          mvSlices.map((slice) => {
+            const ph = slice.map(() => '?').join(',');
+            return env.DB.prepare(
+              `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricTitle'), '') as metricTitle FROM mining_volumes WHERE period IN (${ph})`
+            )
+              .bind(...slice)
+              .all<any>();
+          })
+        );
+        for (const res of mvLookupRes) {
+          for (const v of res.results || []) {
             existingMap.set(`${toAsciiDigits(v.period).trim()}__${normKey(v.unitName)}__${normKey(v.metricTitle)}`, v.id);
           }
         }
@@ -3786,8 +3863,8 @@ export default {
         const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
         const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
         if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل ماشین‌آلات.');
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const incomingMachineCodes = Array.from(
@@ -3798,15 +3875,20 @@ export default {
           )
         );
         const existingMap = new Map<string, string>();
-        for (let i = 0; i < incomingMachineCodes.length; i += 50) {
-          const slice = incomingMachineCodes.slice(i, i + 50);
-          const ph = slice.map(() => '?').join(',');
-          const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, machine_code as machineCode FROM mining_machinery WHERE machine_code IN (${ph})`
-          )
-            .bind(...slice)
-            .all<{ id: string; machineCode: string }>();
-          for (const m of existingRows || []) {
+        const mmSlices: string[][] = [];
+        for (let i = 0; i < incomingMachineCodes.length; i += 90) mmSlices.push(incomingMachineCodes.slice(i, i + 90));
+        const mmLookupRes = await Promise.all(
+          mmSlices.map((slice) => {
+            const ph = slice.map(() => '?').join(',');
+            return env.DB.prepare(
+              `SELECT id, machine_code as machineCode FROM mining_machinery WHERE machine_code IN (${ph})`
+            )
+              .bind(...slice)
+              .all<{ id: string; machineCode: string }>();
+          })
+        );
+        for (const res of mmLookupRes) {
+          for (const m of res.results || []) {
             const mc = toAsciiDigits(m.machineCode).trim();
             if (mc) existingMap.set(mc, m.id);
           }
@@ -3990,8 +4072,8 @@ export default {
         const canCeo = checkPermission(authUser, 'ceoDashboard', 'importExcel') || checkPermission(authUser, 'ceoDashboard', 'create');
         const canUnit = checkPermission(authUser, 'unitOperations', 'importExcel') || checkPermission(authUser, 'unitOperations', 'create');
         if (!canCeo && !canUnit) return forbidden(request, env, 'عدم دسترسی ورود اکسل گزارش واحدها.');
-        const body: any = await request.json().catch(() => ({}));
-        const items = Array.isArray(body.items) ? body.items : [];
+        const body: any = await readJsonBody(request);
+        const items = unpackBatchItems(body);
         if (items.length === 0) return jsonRes(request, env, { success: false, message: 'هیچ رکوردی برای بارگذاری ارسال نشده است.' }, 400);
 
         const chunkPeriods = Array.from(
@@ -4004,15 +4086,20 @@ export default {
           )
         ).filter(Boolean);
         const existingMap = new Map<string, string>();
-        for (let i = 0; i < chunkPeriods.length; i += 40) {
-          const slice = chunkPeriods.slice(i, i + 40);
-          const ph = slice.map(() => '?').join(',');
-          const { results: existingRows } = await env.DB.prepare(
-            `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricName'), '') as metricName FROM unit_reports WHERE period IN (${ph})`
-          )
-            .bind(...slice)
-            .all<any>();
-          for (const r of existingRows || []) {
+        const urSlices: string[][] = [];
+        for (let i = 0; i < chunkPeriods.length; i += 40) urSlices.push(chunkPeriods.slice(i, i + 40));
+        const urLookupRes = await Promise.all(
+          urSlices.map((slice) => {
+            const ph = slice.map(() => '?').join(',');
+            return env.DB.prepare(
+              `SELECT id, period, unit_name as unitName, COALESCE(json_extract(data_json, '$.metricName'), '') as metricName FROM unit_reports WHERE period IN (${ph})`
+            )
+              .bind(...slice)
+              .all<any>();
+          })
+        );
+        for (const res of urLookupRes) {
+          for (const r of res.results || []) {
             existingMap.set(`${toAsciiDigits(r.period).trim()}__${normKey(r.unitName)}__${normKey(r.metricName)}`, r.id);
           }
         }
@@ -4254,12 +4341,12 @@ export default {
 
       if (path === '/database/restore-chunk' && method === 'POST') {
         if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
-        const body: any = await request.json().catch(() => ({}));
+        const body: any = await readJsonBody(request);
         if (body.clearAll === true) {
           await clearAllSnapshotTablesInD1(env.DB);
         }
         const table = String(body.table || '').trim();
-        const items = Array.isArray(body.items) ? body.items : [];
+        const items = unpackBatchItems(body);
         let processed = 0;
         if (table && items.length > 0) {
           if (table === 'users' && body.mode === 'merge') {

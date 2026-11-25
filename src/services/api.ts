@@ -322,9 +322,71 @@ function buildPhpUrl(route: string, method: string): string {
   return `./api.php?${params.toString()}`;
 }
 
+async function gzipPayloadBytes(text: string): Promise<Blob | null> {
+  try {
+    if (typeof CompressionStream === 'undefined' || text.length < 900) return null;
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+    const buf = await new Response(stream).arrayBuffer();
+    if (buf.byteLength >= text.length) return null;
+    return new Blob([buf], { type: 'application/json' });
+  } catch {
+    return null;
+  }
+}
+
+function encodeColumnarPayload(items: any[]): { __cols: string[]; __rows: any[][] } {
+  const colIndex = new Map<string, number>();
+  const cols: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const row = items[i];
+    if (!row || typeof row !== 'object') continue;
+    const keys = Object.keys(row);
+    for (let k = 0; k < keys.length; k++) {
+      const key = keys[k];
+      if (!colIndex.has(key)) {
+        colIndex.set(key, cols.length);
+        cols.push(key);
+      }
+    }
+  }
+  const rows: any[][] = new Array(items.length);
+  for (let i = 0; i < items.length; i++) {
+    const row = items[i];
+    if (!row || typeof row !== 'object') {
+      rows[i] = [];
+      continue;
+    }
+    const arr: any[] = [];
+    let lastNonNull = -1;
+    for (let c = 0; c < cols.length; c++) {
+      const val = row[cols[c]];
+      if (val !== undefined && val !== null) {
+        arr[c] = val;
+        lastNonNull = c;
+      } else {
+        arr[c] = null;
+      }
+    }
+    arr.length = lastNonNull + 1;
+    rows[i] = arr;
+  }
+  return { __cols: cols, __rows: rows };
+}
+
+function buildFastBatchBody(
+  engine: StorageEngine,
+  items: any[],
+  extra?: Record<string, any>
+): Record<string, any> {
+  if (engine === 'cloudflare') {
+    return { ...(extra || {}), ...encodeColumnarPayload(items) };
+  }
+  return { ...(extra || {}), items };
+}
+
 async function callBackendOnce(
   route: string,
-  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; compress?: boolean } = {}
 ): Promise<any> {
   const engine = await detectStorageEngine();
   if (engine === 'indexeddb') {
@@ -334,12 +396,30 @@ async function callBackendOnce(
   const method = options.method || 'GET';
   const isPhp = engine === 'php';
   const isCloudflare = engine === 'cloudflare';
-  const url = isPhp
+  let url = isPhp
     ? buildPhpUrl(route, method)
     : isCloudflare
     ? `${getCloudflareApiUrl()}/api${route}`
     : `./api${route}`;
   const fetchMethod = isPhp && method !== 'GET' ? 'POST' : method;
+
+  const headers = getHeaders(isPhp);
+  let requestBody: BodyInit | undefined;
+  if (options.body !== undefined) {
+    const rawJson = JSON.stringify(options.body);
+    if (isCloudflare && options.compress) {
+      const gzBlob = await gzipPayloadBytes(rawJson);
+      if (gzBlob) {
+        url += `${url.includes('?') ? '&' : '?'}gz=1`;
+        headers['X-Requested-With'] = 'npn-gzip';
+        requestBody = gzBlob;
+      } else {
+        requestBody = rawJson;
+      }
+    } else {
+      requestBody = rawJson;
+    }
+  }
 
   const timeoutMs = options.timeoutMs ?? 30000;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -350,8 +430,8 @@ async function callBackendOnce(
   try {
     res = await fetch(url, {
       method: fetchMethod,
-      headers: getHeaders(isPhp),
-      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+      headers,
+      ...(requestBody !== undefined ? { body: requestBody } : {}),
       ...(controller ? { signal: controller.signal } : {}),
     });
 
@@ -399,7 +479,7 @@ async function callBackendOnce(
 
 async function callBackend(
   route: string,
-  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; retries?: number } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; retries?: number; compress?: boolean } = {}
 ): Promise<any> {
   const method = options.method || 'GET';
   const maxRetries = options.retries ?? (method === 'GET' ? 2 : 0);
@@ -439,11 +519,18 @@ function compactPayrollItemForUpload(item: any): any {
   return { ...base, rawFields: compactRowForUpload(raw) };
 }
 
+function extractBatchOverlapKey(row: any): string {
+  if (!row || typeof row !== 'object') return '';
+  const code = row.personnelCode ?? row['كد پرسنلي'] ?? row['کد پرسنلی'] ?? row.machineCode ?? row.username ?? '';
+  if (code === undefined || code === null || code === '') return '';
+  return toAsciiDigits(String(code)).trim();
+}
+
 async function sendBatchInChunks(
   items: any[],
   chunkSize: number,
   sendChunk: (chunk: any[], chunkIndex: number, totalChunks: number) => Promise<any>,
-  concurrency = 1
+  concurrency = 3
 ): Promise<any> {
   const nonEmptyItems = Array.isArray(items)
     ? items.filter((item) => item && typeof item === 'object' && Object.keys(item).length > 0)
@@ -455,6 +542,7 @@ async function sendBatchInChunks(
   const totalRows = nonEmptyItems.length;
   const initialChunkSize = Math.max(1, Math.min(chunkSize, totalRows));
   const minChunkSize = Math.min(initialChunkSize, 12);
+  const maxConcurrency = Math.max(1, Math.min(5, concurrency));
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
@@ -489,103 +577,184 @@ async function sendBatchInChunks(
   });
 
   try {
-    let cursor = 0;
+    interface BatchRange {
+      start: number;
+      end: number;
+      minRetries: number;
+    }
+
+    let nextCursor = 0;
+    const pendingRanges: BatchRange[] = [];
     let currentChunkSize = initialChunkSize;
+    let activeConcurrency = Math.min(maxConcurrency, 2);
     let successStreak = 0;
-    let consecutiveFailsAtMin = 0;
 
-    while (cursor < totalRows) {
-      const remaining = totalRows - cursor;
-      const sliceLen = Math.min(currentChunkSize, remaining);
-      const slice = nonEmptyItems.slice(cursor, cursor + sliceLen);
-      const estTotalChunks = completedChunks + Math.ceil(remaining / Math.max(1, currentChunkSize));
+    const getRangeKeys = (r: BatchRange): string[] => {
+      const keys: string[] = [];
+      for (let idx = r.start; idx < r.end; idx++) {
+        const k = extractBatchOverlapKey(nonEmptyItems[idx]);
+        if (k) keys.push(k);
+      }
+      return keys;
+    };
 
-      let res = await sendChunk(slice, completedChunks, estTotalChunks);
-      if ((!res || !res.success) && !res?.timeout && isRetryable(res)) {
-        await new Promise((r) => setTimeout(r, 300));
-        res = await sendChunk(slice, completedChunks, estTotalChunks);
+    const estimateTotalChunks = (inFlightCount: number) => {
+      const remainingUnqueued = Math.max(0, totalRows - nextCursor);
+      return Math.max(
+        completedChunks + inFlightCount + pendingRanges.length,
+        completedChunks + inFlightCount + pendingRanges.length + Math.ceil(remainingUnqueued / Math.max(1, currentChunkSize))
+      );
+    };
+
+    while (pendingRanges.length > 0 || nextCursor < totalRows) {
+      const wave: BatchRange[] = [];
+      const waveKeys = new Set<string>();
+
+      const tryAddToWave = (candidate: BatchRange): boolean => {
+        const keys = getRangeKeys(candidate);
+        if (wave.length > 0) {
+          for (let i = 0; i < keys.length; i++) {
+            if (waveKeys.has(keys[i])) return false;
+          }
+        }
+        for (let i = 0; i < keys.length; i++) waveKeys.add(keys[i]);
+        wave.push(candidate);
+        return true;
+      };
+
+      while (wave.length < activeConcurrency && pendingRanges.length > 0) {
+        const nextPending = pendingRanges[0];
+        if (!tryAddToWave(nextPending)) break;
+        pendingRanges.shift();
       }
 
-      if (isAuthErr(res)) {
-        const baseMsg = res?.message || 'دسترسی یا نشست کاربری معتبر نیست.';
+      while (wave.length < activeConcurrency && nextCursor < totalRows) {
+        const end = Math.min(totalRows, nextCursor + currentChunkSize);
+        const candidate: BatchRange = { start: nextCursor, end, minRetries: 0 };
+        if (!tryAddToWave(candidate)) break;
+        nextCursor = end;
+      }
+
+      const estTotal = estimateTotalChunks(wave.length);
+      const results = await Promise.all(
+        wave.map(async (range, idx) => {
+          const slice = nonEmptyItems.slice(range.start, range.end);
+          const res = await sendChunk(slice, completedChunks + idx, estTotal);
+          if (res && res.success) {
+            const sliceLen = range.end - range.start;
+            completedChunks++;
+            processedRows += sliceLen;
+            const d = res.data || {};
+            totalInserted += Number(d.inserted ?? res.added ?? 0);
+            totalUpdated += Number(d.updated ?? res.updated ?? 0);
+            totalSkipped += Number(d.skipped || 0);
+            totalSkippedUnit += Number(d.skippedUnit ?? res.skippedUnit ?? 0);
+            totalMatched += Number(d.matched || 0);
+            totalUnmatched += Number(d.unmatched || 0);
+            totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
+            if (res.message) lastMessage = res.message;
+
+            const liveSaved =
+              totalInserted + totalUpdated + (totalInserted + totalUpdated === 0 ? totalMatched + totalAddedRelatives : 0);
+            const liveTotalChunks = Math.max(
+              completedChunks,
+              completedChunks + pendingRanges.length + Math.ceil(Math.max(0, totalRows - nextCursor) / Math.max(1, currentChunkSize))
+            );
+            emitBatchImportProgress({
+              active: true,
+              processedRows,
+              totalRows,
+              completedChunks,
+              totalChunks: liveTotalChunks,
+              savedRows: liveSaved,
+              failedRows,
+            });
+          }
+          return { range, res };
+        })
+      );
+
+      let anyFailed = false;
+      const retryQueuePushFront: BatchRange[] = [];
+      let needsBackoff = false;
+
+      for (const { range, res } of results) {
+        if (res && res.success) continue;
+
+        if (isAuthErr(res)) {
+          const baseMsg = res?.message || 'دسترسی یا نشست کاربری معتبر نیست.';
+          const savedSoFar = totalInserted + totalUpdated;
+          const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
+          const progressNote = estTotal > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotal}${savedNote})` : '';
+          return { success: false, message: `${baseMsg}${progressNote}`, data: res?.data };
+        }
+
+        if (res?.message) lastFailureMessage = res.message;
+        anyFailed = true;
+        const sliceLen = range.end - range.start;
+
+        if (isRetryable(res) && sliceLen > minChunkSize) {
+          const splitSize = Math.max(minChunkSize, Math.floor(sliceLen / 2));
+          for (let s = range.start; s < range.end; s += splitSize) {
+            retryQueuePushFront.push({
+              start: s,
+              end: Math.min(range.end, s + splitSize),
+              minRetries: 0,
+            });
+          }
+          continue;
+        }
+
+        if (isRetryable(res) && range.minRetries < 2) {
+          needsBackoff = true;
+          retryQueuePushFront.push({
+            start: range.start,
+            end: range.end,
+            minRetries: range.minRetries + 1,
+          });
+          continue;
+        }
+
+        const baseMsg = lastFailureMessage || 'خطای ارتباط با سرور پایگاه داده.';
         const savedSoFar = totalInserted + totalUpdated;
         const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
-        const progressNote = estTotalChunks > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotalChunks}${savedNote})` : '';
-        return { success: false, message: `${baseMsg}${progressNote}`, data: res?.data };
+        const progressNote = estTotal > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotal}${savedNote})` : '';
+        return {
+          success: false,
+          message: `${baseMsg}${progressNote}`,
+          data: res?.data,
+        };
       }
 
-      if (res && res.success) {
-        cursor += sliceLen;
-        completedChunks++;
-        processedRows = cursor;
-        consecutiveFailsAtMin = 0;
-        successStreak++;
-
-        const d = res.data || {};
-        totalInserted += Number(d.inserted ?? res.added ?? 0);
-        totalUpdated += Number(d.updated ?? res.updated ?? 0);
-        totalSkipped += Number(d.skipped || 0);
-        totalSkippedUnit += Number(d.skippedUnit ?? res.skippedUnit ?? 0);
-        totalMatched += Number(d.matched || 0);
-        totalUnmatched += Number(d.unmatched || 0);
-        totalAddedRelatives += Number(d.addedRelatives ?? res.addedRelatives ?? 0);
-        if (res.message) lastMessage = res.message;
-
+      if (anyFailed) {
+        successStreak = 0;
+        activeConcurrency = Math.max(1, Math.floor(activeConcurrency / 2));
+        currentChunkSize = Math.max(minChunkSize, Math.floor(currentChunkSize / 2));
+        if (retryQueuePushFront.length > 0) {
+          pendingRanges.unshift(...retryQueuePushFront);
+        }
+        emitBatchImportProgress({
+          active: true,
+          processedRows,
+          totalRows,
+          completedChunks,
+          totalChunks: estimateTotalChunks(0),
+          savedRows: totalInserted + totalUpdated,
+          failedRows,
+        });
+        if (needsBackoff) {
+          await new Promise((r) => setTimeout(r, 450));
+        }
+      } else {
+        successStreak += wave.length;
+        if (activeConcurrency < maxConcurrency) {
+          activeConcurrency = maxConcurrency;
+        }
         if (successStreak >= 2 && currentChunkSize < initialChunkSize) {
           currentChunkSize = Math.min(initialChunkSize, Math.round(currentChunkSize * 1.5));
           successStreak = 0;
         }
-
-        const nextRem = totalRows - cursor;
-        const nextTotalChunks = completedChunks + (nextRem > 0 ? Math.ceil(nextRem / Math.max(1, currentChunkSize)) : 0);
-        const liveSaved = totalInserted + totalUpdated + (totalInserted + totalUpdated === 0 ? totalMatched + totalAddedRelatives : 0);
-
-        emitBatchImportProgress({
-          active: true,
-          processedRows,
-          totalRows,
-          completedChunks,
-          totalChunks: Math.max(completedChunks, nextTotalChunks),
-          savedRows: liveSaved,
-          failedRows,
-        });
-        continue;
       }
-
-      // Failure path: immediately adapt chunk size downward without recursive 63-branch explosion
-      if (res?.message) lastFailureMessage = res.message;
-      successStreak = 0;
-
-      if (isRetryable(res) && currentChunkSize > minChunkSize) {
-        currentChunkSize = Math.max(minChunkSize, Math.floor(currentChunkSize / 2));
-        const nextTotalChunks = completedChunks + Math.ceil(remaining / Math.max(1, currentChunkSize));
-        emitBatchImportProgress({
-          active: true,
-          processedRows,
-          totalRows,
-          completedChunks,
-          totalChunks: Math.max(completedChunks + 1, nextTotalChunks),
-          savedRows: totalInserted + totalUpdated,
-          failedRows,
-        });
-        continue;
-      }
-
-      if (isRetryable(res) && consecutiveFailsAtMin < 1 && totalRows > sliceLen) {
-        consecutiveFailsAtMin++;
-        await new Promise((r) => setTimeout(r, 600));
-        continue;
-      }
-
-      const baseMsg = lastFailureMessage || 'خطای ارتباط با سرور پایگاه داده.';
-      const savedSoFar = totalInserted + totalUpdated;
-      const savedNote = savedSoFar > 0 ? ` (${savedSoFar} ردیف تا پیش از این مرحله ثبت شد)` : '';
-      const progressNote = estTotalChunks > 1 ? ` (توقف در دسته ${completedChunks + 1} از ${estTotalChunks}${savedNote})` : '';
-      return {
-        success: false,
-        message: `${baseMsg}${progressNote}`,
-        data: res?.data,
-      };
     }
 
     const totalChunks = completedChunks;
@@ -767,9 +936,9 @@ export const api = {
     if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(items, () => embeddedDb.batchImportUsers(items));
     return sendBatchInChunks(
       items,
-      10,
-      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 30000 }),
-      1
+      25,
+      (chunk) => callBackend('/users/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 25000, compress: true }),
+      2
     );
   },
 
@@ -821,9 +990,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      150,
-      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      220,
+      (chunk) => callBackend('/personnel/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      4
     );
   },
 
@@ -845,9 +1014,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      100,
-      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      150,
+      (chunk) => callBackend('/personnel/relatives/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      3
     );
   },
 
@@ -911,9 +1080,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      250,
-      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: { period, items: chunk }, timeoutMs: 25000 }),
-      1
+      350,
+      (chunk) => callBackend('/karaneh/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period }), timeoutMs: 18000, compress: true }),
+      4
     );
   },
 
@@ -1023,9 +1192,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      180,
-      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      250,
+      (chunk) => callBackend('/job-classifications/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      4
     );
   },
 
@@ -1073,9 +1242,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      200,
-      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      250,
+      (chunk) => callBackend('/commitments/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      4
     );
   },
 
@@ -1109,9 +1278,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactPayrollItemForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      60,
-      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: { period, useRowYearMonth, items: chunk }, timeoutMs: 30000 }),
-      1
+      100,
+      (chunk) => callBackend('/payroll/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk, { period, useRowYearMonth }), timeoutMs: 24000, compress: true }),
+      3
     );
   },
 
@@ -1160,9 +1329,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      150,
-      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      200,
+      (chunk) => callBackend('/mining-volumes/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      3
     );
   },
 
@@ -1203,9 +1372,9 @@ export const api = {
     const compacted = Array.isArray(items) ? items.map(compactRowForUpload) : items;
     return sendBatchInChunks(
       compacted,
-      150,
-      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: { items: chunk }, timeoutMs: 25000 }),
-      1
+      200,
+      (chunk) => callBackend('/mining-machinery/batch-import', { method: 'POST', body: buildFastBatchBody(engine, chunk), timeoutMs: 18000, compress: true }),
+      3
     );
   },
 
@@ -1250,16 +1419,18 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return runEmbeddedBatchWithProgress(payload?.items || [], () => embeddedDb.batchImportUnitReports(payload));
     const items = Array.isArray(payload?.items) ? payload.items.map(compactRowForUpload) : [];
+    const { items: _ignored, ...extra } = payload || {};
     return sendBatchInChunks(
       items,
-      100,
+      150,
       (chunk) =>
         callBackend('/unit-reports/batch-import', {
           method: 'POST',
-          body: { ...payload, items: chunk },
-          timeoutMs: 25000,
+          body: buildFastBatchBody(engine, chunk, extra),
+          timeoutMs: 18000,
+          compress: true,
         }),
-      1
+      3
     );
   },
 
