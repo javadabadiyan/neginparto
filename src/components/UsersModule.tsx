@@ -1243,8 +1243,10 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                         { key: 'edit', label: 'ویرایش مبالغ کارانه پرسنل' },
                         { key: 'delete', label: 'حذف رکورد کارانه پرسنل' },
                         { key: 'deleteAll', label: 'حذف کامل و پاکسازی کل جدول (Clear Table)' },
-                        { key: 'importExcel', label: 'بارگذاری فایل اکسل کارانه ماهانه' },
-                        { key: 'exportExcel', label: 'دریافت خروجی اکسل مقایسه‌ای کارانه' },
+                        { key: 'importExcel', label: 'بارگذاری فایل اکسل کارانه ماهانه (با نام و نام خانوادگی مجزا)' },
+                        { key: 'exportExcel', label: 'دریافت خروجی اکسل مقایسه‌ای، انتخاب هر ماه و دانلود همه ماه‌ها' },
+                        { key: 'viewAnalytics', label: 'مشاهده نمودار واحدها (میانگین، بیشترین، کمترین) و آنالیز واحد و پست' },
+                        { key: 'exportAnalytics', label: 'دریافت خروجی اکسل آنالیز کارانه بر اساس واحد و پست' },
                         { key: 'submit', label: 'تأیید و ارسال کارانه واحد به صفحه کارانه نهایی ارسالی' },
                       ].map(item => (
                         <label key={item.key} className="flex items-center gap-2.5 cursor-pointer select-none py-0.5 hover:text-emerald-600">
@@ -1829,7 +1831,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                         { key: 'edit', label: 'ویرایش مبالغ و بازگرداندن کارانه واحد به پیش‌نویس' },
                         { key: 'delete', label: 'حذف تکی و گروهی ردیف‌های کارانه نهایی ارسالی' },
                         { key: 'deleteAll', label: 'پاکسازی کامل کارانه‌های ارسالی دوره یا کل' },
-                        { key: 'exportExcel', label: 'خروجی اکسل جامع تمام واحدها + تحلیل درصد تغییرات' },
+                        { key: 'exportExcel', label: 'خروجی اکسل جامع تمام واحدها، انتخاب هر ماه و دانلود همه ماه‌ها' },
                       ].map(item => (
                         <label key={item.key} className="flex items-center gap-2.5 cursor-pointer select-none py-0.5 hover:text-violet-700">
                           <input

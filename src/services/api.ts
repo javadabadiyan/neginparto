@@ -2220,7 +2220,7 @@ export const api = {
         ? `${getCloudflareApiUrl()}/api/database/backup`
         : './api/database/backup';
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90000);
+    const timer = setTimeout(() => controller.abort(), 120000);
     try {
       const res = await fetch(url, { headers: getHeaders(engine === 'php'), signal: controller.signal, cache: 'no-store' });
       if (!res.ok) return false;
@@ -2228,7 +2228,7 @@ export const api = {
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `hr_database_backup_${Date.now()}.json`;
+      a.download = `negin_parto_nasr_backup_${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(blobUrl);
       return true;
@@ -2237,44 +2237,67 @@ export const api = {
     }
   },
 
-  async restoreDatabase(backupData: any) {
+  async restoreDatabase(
+    backupData: any,
+    onProgress?: (info: { stage: string; doneRows: number; totalRows: number }) => void
+  ) {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.restoreDatabase(backupData);
     if (engine === 'cloudflare') {
-      const tableKeys: Array<{ key: string; batchSize: number }> = [
-        { key: 'users', batchSize: 100 },
-        { key: 'jobGroups', batchSize: 200 },
-        { key: 'jobClassifications', batchSize: 120 },
-        { key: 'personnel', batchSize: 80 },
-        { key: 'karaneh', batchSize: 200 },
-        { key: 'commitments', batchSize: 150 },
-        { key: 'payroll', batchSize: 60 },
-        { key: 'miningVolumes', batchSize: 150 },
-        { key: 'miningMachinery', batchSize: 150 },
-        { key: 'unitReports', batchSize: 150 },
+      const tableKeys: Array<{ key: string; label: string; batchSize: number }> = [
+        { key: 'users', label: 'کاربران و دسترسی‌ها', batchSize: 60 },
+        { key: 'jobGroups', label: 'گروه‌های شغلی', batchSize: 150 },
+        { key: 'jobClassifications', label: 'طبقه‌بندی مشاغل', batchSize: 100 },
+        { key: 'personnel', label: 'پرونده پرسنلی و مدارک', batchSize: 50 },
+        { key: 'karaneh', label: 'کارانه و کارانه نهایی', batchSize: 150 },
+        { key: 'commitments', label: 'اسناد تعهدات', batchSize: 100 },
+        { key: 'payroll', label: 'فیش‌های حقوق ۲۲۶ ستونی', batchSize: 40 },
+        { key: 'miningVolumes', label: 'حجم عملیات معدن', batchSize: 120 },
+        { key: 'miningMachinery', label: 'ماشین‌آلات تعمیرگاه', batchSize: 120 },
+        { key: 'unitReports', label: 'گزارش‌های واحدها', batchSize: 120 },
       ];
       const totalRows = tableKeys.reduce(
         (sum, t) => sum + (Array.isArray(backupData?.[t.key]) ? backupData[t.key].length : 0),
         0
       );
-      if (totalRows > 200) {
+      if (totalRows > 50) {
+        onProgress?.({ stage: 'پاکسازی جداول قبلی...', doneRows: 0, totalRows });
         await callBackend('/database/restore-chunk', {
           method: 'POST',
           body: { clearAll: true, mode: 'replace' },
           timeoutMs: 45000,
         });
-        for (const { key, batchSize } of tableKeys) {
-          const rows = Array.isArray(backupData?.[key]) ? backupData[key] : [];
-          for (let i = 0; i < rows.length; i += batchSize) {
-            const slice = rows.slice(i, i + batchSize);
+
+        let doneRows = 0;
+        const sendSliceResilient = async (key: string, label: string, slice: any[]) => {
+          try {
             const res = await callBackend('/database/restore-chunk', {
               method: 'POST',
               body: { table: key, items: slice, mode: 'replace' },
               timeoutMs: 45000,
             });
-            if (!res?.success) return res;
+            if (!res?.success) {
+              throw new Error(res?.message || `خطا در بازیابی بخش ${label}`);
+            }
+          } catch (err: any) {
+            if (slice.length <= 5) throw err;
+            const mid = Math.ceil(slice.length / 2);
+            await sendSliceResilient(key, label, slice.slice(0, mid));
+            await sendSliceResilient(key, label, slice.slice(mid));
+          }
+        };
+
+        for (const { key, label, batchSize } of tableKeys) {
+          const rows = Array.isArray(backupData?.[key]) ? backupData[key] : [];
+          for (let i = 0; i < rows.length; i += batchSize) {
+            const slice = rows.slice(i, i + batchSize);
+            onProgress?.({ stage: `در حال بازیابی ${label}...`, doneRows, totalRows });
+            await sendSliceResilient(key, label, slice);
+            doneRows += slice.length;
+            onProgress?.({ stage: `در حال بازیابی ${label}...`, doneRows, totalRows });
           }
         }
+        onProgress?.({ stage: 'تثبیت نهایی دیتابیس...', doneRows: totalRows, totalRows });
         return callBackend('/database/restore-chunk', {
           method: 'POST',
           body: { finalize: true, mode: 'replace' },
@@ -2282,7 +2305,7 @@ export const api = {
         });
       }
     }
-    return callBackend('/database/restore', { method: 'POST', body: backupData, timeoutMs: 90000 });
+    return callBackend('/database/restore', { method: 'POST', body: backupData, timeoutMs: 120000 });
   },
 
   async exportDatabaseSnapshot() {

@@ -362,6 +362,7 @@ function syncLegacyPermissions(perms: any) {
     canExportExcel: Boolean(
       perms.personnel.exportExcel ||
       perms.karaneh.exportExcel ||
+      perms.karaneh.exportAnalytics ||
       perms.finalKaraneh?.exportExcel ||
       perms.jobGroups.exportExcel ||
       perms.commitments.exportExcel ||
@@ -388,7 +389,7 @@ function syncLegacyPermissions(perms: any) {
 function getFullAdminPermissions() {
   return syncLegacyPermissions({
     personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true, submit: true, allowedUnits: [] },
     finalKaraneh: { view: true, edit: true, delete: true, deleteAll: true, exportExcel: true },
     jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
     commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
@@ -404,7 +405,7 @@ function getFullAdminPermissions() {
 function getEmptyPermissions() {
   return syncLegacyPermissions({
     personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
-    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] },
+    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewAnalytics: false, exportAnalytics: false, submit: false, allowedUnits: [] },
     finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
     jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
     commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
@@ -446,7 +447,7 @@ function normalizePermissions(raw?: any) {
 
     return syncLegacyPermissions({
       personnel: { view: lp, create: lp, edit: lp, delete: lp && lu, deleteAll: false, importExcel: lp && li, exportExcel: lp && le, viewSalary: lp, documents: lp },
-      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le, submit: false, allowedUnits: [] },
+      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le, viewAnalytics: lk, exportAnalytics: lk && le, submit: false, allowedUnits: [] },
       finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: lj, create: lj, edit: lj, delete: lj && lu, deleteAll: false, importExcel: lj && li, exportExcel: lj && le },
       commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
@@ -482,6 +483,8 @@ function normalizePermissions(raw?: any) {
       deleteAll: b(k.deleteAll),
       importExcel: b(k.importExcel),
       exportExcel: b(k.exportExcel),
+      viewAnalytics: k.viewAnalytics === undefined ? b(k.view) : b(k.viewAnalytics),
+      exportAnalytics: k.exportAnalytics === undefined ? b(k.exportExcel) : b(k.exportAnalytics),
       submit: b(k.submit),
       allowedUnits: Array.isArray(k.allowedUnits) ? k.allowedUnits.map(String).filter(Boolean) : [],
     },
@@ -703,7 +706,7 @@ function buildPresetPermissions(presetName: string) {
   if (p.includes('مدیر عامل') || p.includes('مدیرعامل')) {
     return normalizePermissions({
       personnel: { view: true, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, exportExcel: true, allowedUnits: [] },
+      karaneh: { view: true, viewAnalytics: true, exportExcel: true, exportAnalytics: true, allowedUnits: [] },
       finalKaraneh: { view: true, exportExcel: true },
       jobGroups: { view: true, exportExcel: true },
       commitments: { view: true, print: true, exportExcel: true },
@@ -716,7 +719,7 @@ function buildPresetPermissions(presetName: string) {
   }
   if (p.includes('واحد') && p.includes('کارانه')) {
     return normalizePermissions({
-      karaneh: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      karaneh: { view: true, create: true, edit: true, delete: true, importExcel: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true, submit: true, allowedUnits: [] },
     });
   }
   if (p.includes('دیسپچینگ')) {
@@ -750,7 +753,7 @@ function buildPresetPermissions(presetName: string) {
   if (p.includes('کارگزینی')) {
     return normalizePermissions({
       personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-      karaneh: { view: true, exportExcel: true },
+      karaneh: { view: true, viewAnalytics: true, exportExcel: true, exportAnalytics: true },
       finalKaraneh: { view: true, exportExcel: true },
       jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
       commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
@@ -762,7 +765,7 @@ function buildPresetPermissions(presetName: string) {
   if (p.includes('کارانه') || p.includes('حقوق')) {
     return normalizePermissions({
       personnel: { view: true, exportExcel: true, viewSalary: true },
-      karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+      karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true, submit: true, allowedUnits: [] },
       finalKaraneh: { view: true, edit: true, exportExcel: true },
       jobGroups: { view: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
@@ -773,7 +776,7 @@ function buildPresetPermissions(presetName: string) {
   if (p.includes('مشاهده') || p.includes('بیننده') || p.includes('viewer')) {
     return normalizePermissions({
       personnel: { view: true, exportExcel: true },
-      karaneh: { view: true, exportExcel: true },
+      karaneh: { view: true, viewAnalytics: true, exportExcel: true, exportAnalytics: false },
       finalKaraneh: { view: true, exportExcel: true },
       jobGroups: { view: true, exportExcel: true },
       commitments: { view: true, print: true, exportExcel: true },
@@ -1120,7 +1123,14 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
          FROM personnel`
       )
       .first<any>(),
-    db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM karaneh').first<any>(),
+    db.prepare(
+      `SELECT
+         COUNT(*) as total,
+         COUNT(DISTINCT NULLIF(period, '')) as periods,
+         COALESCE(SUM(CASE WHEN data_json LIKE '%"status":"submitted"%' THEN 1 ELSE 0 END), 0) as submittedTotal,
+         COUNT(DISTINCT CASE WHEN data_json LIKE '%"status":"submitted"%' THEN NULLIF(period, '') ELSE NULL END) as submittedPeriods
+       FROM karaneh`
+    ).first<any>(),
     db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM payroll').first<any>(),
     db.prepare('SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN is_active != 0 THEN 1 ELSE 0 END), 0) as activeTotal FROM users').first<any>(),
     db.prepare('SELECT COUNT(*) as total FROM job_groups').first<any>(),
@@ -1157,6 +1167,8 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
     totalPersonnel: canPers ? Number(persAgg?.total || 0) : 0,
     totalRelatives: canPers ? Number(persAgg?.relCount || 0) : 0,
     totalKaranehRecords: canKar ? Number(karAgg?.total || 0) : 0,
+    totalSubmittedKaranehRecords: canKar ? Number(karAgg?.submittedTotal || 0) : 0,
+    submittedKaranehPeriodsCount: canKar ? Number(karAgg?.submittedPeriods || 0) : 0,
     totalPayrollRecords: canPay ? Number(payAgg?.total || 0) : 0,
     totalUsers: canUsers ? Number(usrAgg?.total || 0) : 0,
     totalActiveUsers: canUsers ? Number(usrAgg?.activeTotal || 0) : 0,
@@ -1176,7 +1188,7 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
     isLocalHost: false,
     hostPlatform: 'cloudflare-workers-d1',
     authProtected: true,
-    schemaVersion: '5.0-negin-parto-nasr-units-hub',
+    schemaVersion: '5.1-negin-parto-nasr-full-sync',
   };
 }
 
@@ -1206,7 +1218,7 @@ async function buildInitialSeedData() {
         department: 'اداره جبران خدمت و کارانه',
         permissions: normalizePermissions({
           personnel: { view: true, exportExcel: true, viewSalary: true },
-          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] },
+          karaneh: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true, submit: true, allowedUnits: [] },
           finalKaraneh: { view: true, edit: true, exportExcel: true },
           jobGroups: { view: true, exportExcel: true },
           payroll: { view: true, exportExcel: true },
@@ -1226,7 +1238,7 @@ async function buildInitialSeedData() {
         department: 'امور کارکنان و قراردادها',
         permissions: normalizePermissions({
           personnel: { view: true, create: true, edit: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-          karaneh: { view: true, exportExcel: true },
+          karaneh: { view: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true },
           jobGroups: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
           commitments: { view: true, create: true, edit: true, print: true, archive: true, importExcel: true, exportExcel: true },
           payroll: { view: true, create: true, edit: true, importExcel: true, exportExcel: true },
@@ -4415,6 +4427,7 @@ export default {
                (SELECT COUNT(*) FROM personnel) as personnelCount,
                (SELECT COALESCE(SUM(COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0)), 0) FROM personnel) as relativesCount,
                (SELECT COUNT(*) FROM karaneh) as karanehCount,
+               (SELECT COUNT(*) FROM karaneh WHERE data_json LIKE '%"status":"submitted"%') as submittedKaranehCount,
                (SELECT COUNT(*) FROM payroll) as payrollCount,
                (SELECT COUNT(*) FROM job_groups) as jobGroupsCount,
                (SELECT COUNT(*) FROM job_classifications) as jobClassificationsCount,
@@ -4426,14 +4439,16 @@ export default {
         ]);
 
         const meta = {
-          version: '5.0-negin-parto-nasr-units-hub',
+          version: '5.1-negin-parto-nasr-full-sync',
           exportedAt: new Date().toISOString(),
           engine: 'cloudflare-d1',
+          modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
           counts: {
             users: users.length,
             personnel: Number(countsAgg?.personnelCount || 0),
             relatives: Number(countsAgg?.relativesCount || 0),
             karaneh: Number(countsAgg?.karanehCount || 0),
+            submittedKaraneh: Number(countsAgg?.submittedKaranehCount || 0),
             payroll: Number(countsAgg?.payrollCount || 0),
             jobGroups: Number(countsAgg?.jobGroupsCount || 0),
             jobClassifications: Number(countsAgg?.jobClassificationsCount || 0),

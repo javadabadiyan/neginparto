@@ -20,6 +20,8 @@ export interface GranularKaranehPermissions {
   deleteAll?: boolean;
   importExcel: boolean;
   exportExcel: boolean;
+  viewAnalytics?: boolean;
+  exportAnalytics?: boolean;
   submit?: boolean;
   allowedUnits?: string[];
 }
@@ -478,6 +480,8 @@ export interface DatabaseStatus {
   totalPersonnel: number;
   totalRelatives?: number;
   totalKaranehRecords: number;
+  totalSubmittedKaranehRecords?: number;
+  submittedKaranehPeriodsCount?: number;
   totalPayrollRecords?: number;
   totalUsers: number;
   totalActiveUsers?: number;

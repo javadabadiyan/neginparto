@@ -74,7 +74,10 @@ interface LocalHostDatabaseModuleProps {
   onPullFromFirestore?: () => Promise<boolean>;
   onRefreshStatus: () => void;
   onDataReload?: () => Promise<void>;
-  onRestoreBackup: (backupData: any) => Promise<boolean>;
+  onRestoreBackup: (
+    backupData: any,
+    onProgress?: (info: { stage: string; doneRows: number; totalRows: number }) => void
+  ) => Promise<boolean>;
   onResetDemo: () => Promise<boolean>;
 }
 
@@ -98,6 +101,7 @@ export const LocalHostDatabaseModule: React.FC<LocalHostDatabaseModuleProps> = (
   const [restoreError, setRestoreError] = useState('');
   const [restoreSuccess, setRestoreSuccess] = useState('');
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState<{ stage: string; doneRows: number; totalRows: number } | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<'cloud_instant' | 'pc_direct' | 'github_isolated'>('github_isolated');
   const [ghConfig, setGhConfig] = useState<GitHubSyncConfig>(() => loadGitHubSyncConfig());
@@ -358,32 +362,49 @@ npm start
 
     setRestoreError('');
     setRestoreSuccess('');
+    setRestoreProgress(null);
     setRestoreLoading(true);
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        const json = JSON.parse(text);
-        if (!json.personnel || !json.users) {
+        const parsed = JSON.parse(text);
+        const raw = parsed && !parsed.personnel && parsed.data && parsed.data.personnel ? parsed.data : parsed;
+        if (!raw || (!Array.isArray(raw.personnel) && !Array.isArray(raw.users) && !Array.isArray(raw.karaneh))) {
           throw new Error('ساختار فایل پشتیبان معتبر نیست.');
         }
-        const ok = await onRestoreBackup(json);
+        const normalizedBackup = {
+          users: Array.isArray(raw.users) ? raw.users : [],
+          personnel: Array.isArray(raw.personnel) ? raw.personnel : [],
+          karaneh: Array.isArray(raw.karaneh) ? raw.karaneh : [],
+          commitments: Array.isArray(raw.commitments) ? raw.commitments : [],
+          payroll: Array.isArray(raw.payroll) ? raw.payroll : [],
+          jobGroups: Array.isArray(raw.jobGroups) ? raw.jobGroups : [],
+          jobClassifications: Array.isArray(raw.jobClassifications) ? raw.jobClassifications : [],
+          miningVolumes: Array.isArray(raw.miningVolumes) ? raw.miningVolumes : [],
+          miningMachinery: Array.isArray(raw.miningMachinery) ? raw.miningMachinery : [],
+          unitReports: Array.isArray(raw.unitReports) ? raw.unitReports : [],
+          metadata: raw.metadata || undefined,
+        };
+        const ok = await onRestoreBackup(normalizedBackup, (progress) => setRestoreProgress(progress));
         if (ok) {
-          setRestoreSuccess('پایگاه داده کامل (شامل پرسنل، مدارک هویتی، کارانه، حقوق ۲۲۶ ستونی، طبقه‌بندی مشاغل معدنی، تعهدات، کاربران و مجوزهای داشبورد هوشمند و مدیر عامل) با موفقیت بازگردانی شد.');
+          setRestoreSuccess('پایگاه داده کامل (شامل پرسنل، کارانه و کارانه‌های نهایی ارسالی، حقوق ۲۲۶ ستونی، عملیات واحدها، طبقه‌بندی مشاغل، تعهدات، کاربران و سطح دسترسی‌های جدید) با موفقیت بازگردانی شد.');
           onRefreshStatus();
         } else {
           setRestoreError('خطا در بازیابی پایگاه داده.');
         }
       } catch (err: any) {
-        setRestoreError('خطا در پردازش فایل پشتیبان: ' + err.message);
+        setRestoreError('خطا در پردازش فایل پشتیبان: ' + (err?.message || 'فایل نامعتبر'));
       } finally {
         setRestoreLoading(false);
+        setRestoreProgress(null);
       }
     };
     reader.onerror = () => {
       setRestoreError('خطا در خواندن فایل.');
       setRestoreLoading(false);
+      setRestoreProgress(null);
     };
     reader.readAsText(file);
   };
@@ -646,23 +667,23 @@ npm start
 
       const cfToken = loginJson.data.token;
       const cfTableChunks: Array<{ key: string; batchSize: number }> = [
-        { key: 'users', batchSize: 100 },
-        { key: 'jobGroups', batchSize: 200 },
-        { key: 'jobClassifications', batchSize: 120 },
-        { key: 'personnel', batchSize: 80 },
-        { key: 'karaneh', batchSize: 200 },
-        { key: 'commitments', batchSize: 150 },
-        { key: 'payroll', batchSize: 60 },
-        { key: 'miningVolumes', batchSize: 150 },
-        { key: 'miningMachinery', batchSize: 150 },
-        { key: 'unitReports', batchSize: 150 },
+        { key: 'users', batchSize: 60 },
+        { key: 'jobGroups', batchSize: 120 },
+        { key: 'jobClassifications', batchSize: 80 },
+        { key: 'personnel', batchSize: 50 },
+        { key: 'karaneh', batchSize: 150 },
+        { key: 'commitments', batchSize: 100 },
+        { key: 'payroll', batchSize: 40 },
+        { key: 'miningVolumes', batchSize: 120 },
+        { key: 'miningMachinery', batchSize: 120 },
+        { key: 'unitReports', batchSize: 100 },
       ];
       const totalSnapRows = cfTableChunks.reduce(
         (sum, t) => sum + (Array.isArray((snapRes.data as any)?.[t.key]) ? (snapRes.data as any)[t.key].length : 0),
         0
       );
 
-      if (totalSnapRows > 200) {
+      if (totalSnapRows > 50) {
         const postChunk = async (body: Record<string, any>) => {
           const chunkRes = await fetch(`${check.url}/api/database/restore-chunk`, {
             method: 'POST',
@@ -679,11 +700,22 @@ npm start
           return chunkJson;
         };
 
+        const sendSliceSafe = async (key: string, slice: any[]) => {
+          try {
+            await postChunk({ table: key, items: slice, mode: 'replace' });
+          } catch (err) {
+            if (slice.length <= 5) throw err;
+            const mid = Math.ceil(slice.length / 2);
+            await sendSliceSafe(key, slice.slice(0, mid));
+            await sendSliceSafe(key, slice.slice(mid));
+          }
+        };
+
         await postChunk({ clearAll: true, mode: 'replace' });
         for (const { key, batchSize } of cfTableChunks) {
           const rows = Array.isArray((snapRes.data as any)?.[key]) ? (snapRes.data as any)[key] : [];
           for (let i = 0; i < rows.length; i += batchSize) {
-            await postChunk({ table: key, items: rows.slice(i, i + batchSize), mode: 'replace' });
+            await sendSliceSafe(key, rows.slice(i, i + batchSize));
           }
         }
         await postChunk({ finalize: true, mode: 'replace' });
@@ -739,7 +771,7 @@ npm start
             </h2>
           </div>
           <p className="text-xs text-slate-600 mt-1">
-            پشتیبان‌گیری و همگام‌سازی کامل از تمامی ماژول‌های سامانه (نسخه {dbStatus?.schemaVersion || '5.0-negin-parto-nasr-units-hub'}) شامل پرونده ۲۸ ستونی پرسنل، بستگان، مدارک هویتی، کارانه، حقوق ۲۲۶ ستونی، دیسپچینگ حجم عملیات، تعمیرگاه ماشین‌آلات، گزارش‌های اکسل واحدها، تعهدات و مجوزهای کاربری
+            پشتیبان‌گیری و همگام‌سازی کامل از تمامی ماژول‌های سامانه (نسخه {dbStatus?.schemaVersion || '5.1-negin-parto-nasr-full-sync'}) شامل پرونده ۲۸ ستونی پرسنل، بستگان، مدارک هویتی، کارانه و کارانه‌های نهایی ارسالی، حقوق ۲۲۶ ستونی، دیسپچینگ حجم عملیات، تعمیرگاه ماشین‌آلات، گزارش‌های اکسل واحدها، تعهدات و مجوزهای کاربری به‌روزرسانی‌شده
           </p>
         </div>
 
@@ -1725,9 +1757,9 @@ npm start
           </div>
 
           <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
-            <span className="text-[11px] text-slate-600 block">کارانه و حقوق ۲۲۶ ستونی:</span>
+            <span className="text-[11px] text-slate-600 block">کارانه، کارانه نهایی ارسالی و حقوق ۲۲۶ ستونی:</span>
             <span className="text-sm font-bold text-emerald-700 block mt-1 persian-num">
-              {toPersianDigits(dbStatus?.totalKaranehRecords || 0)} کارانه ({toPersianDigits(dbStatus?.karanehPeriodsCount || 0)} دوره) / {toPersianDigits(dbStatus?.totalPayrollRecords || 0)} حقوق ({toPersianDigits(dbStatus?.payrollPeriodsCount || 0)} دوره)
+              {toPersianDigits(dbStatus?.totalKaranehRecords || 0)} کارانه ({toPersianDigits(dbStatus?.karanehPeriodsCount || 0)} دوره) / {toPersianDigits(dbStatus?.totalSubmittedKaranehRecords || 0)} نهایی ({toPersianDigits(dbStatus?.submittedKaranehPeriodsCount || 0)} دوره) / {toPersianDigits(dbStatus?.totalPayrollRecords || 0)} حقوق
             </span>
           </div>
 
@@ -1762,8 +1794,8 @@ npm start
 
         {/* Updated Backup Coverage Matrix */}
         <div className="p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-xl text-[11px] text-slate-700 leading-relaxed">
-          <b className="text-indigo-900">پوشش کامل نسخه پشتیبان، دیتابیس مستقل از مرورگر و همگام‌سازی گیت‌هاب/ابری (نگین پرتو نصر):</b>{' '}
-          فایل پشتیبان JSON، دیتابیس داخلی خودکار فایل-محور (در <span dir="ltr" className="font-bold">data/hr-database.json</span> / PHP / PostgreSQL مستقل از مرورگر)، اسنپ‌شات شاخه <span dir="ltr" className="font-bold">db-data</span> گیت‌هاب و Firestore شامل تمامی اطلاعات <b>پرونده‌های ۲۸ ستونی پرسنلی، بستگان و اسکن مدارک</b>، <b>آمار حجم دیسپچینگ، ماشین‌آلات تعمیرگاه و گزارش‌های اکسل تمام واحدهای معدن</b>، <b>گروه‌های شغلی و جدول ۱۸ ستونی طبقه‌بندی مشاغل</b>، <b>کارانه و حقوق ۲۲۶ ستونی</b>، <b>اسناد تعهدات</b> و <b>مجوزهای واحدها و مدیرعامل</b> می‌باشد.
+          <b className="text-indigo-900">پوشش کامل نسخه پشتیبان، دیتابیس مستقل از مرورگر و همگام‌سازی گیت‌هاب/ابری (نگین پرتو نصر — نسخه ۵.۱):</b>{' '}
+          فایل پشتیبان JSON، دیتابیس ابری Cloudflare D1، اسنپ‌شات گیت‌هاب و Firestore شامل تمامی اطلاعات <b>پرونده‌های ۲۸ ستونی پرسنلی، بستگان و اسکن مدارک</b>، <b>آمار حجم دیسپچینگ، ماشین‌آلات تعمیرگاه و گزارش‌های اکسل تمام واحدهای معدن</b>، <b>گروه‌های شغلی و جدول ۱۸ ستونی طبقه‌بندی مشاغل</b>، <b>کارانه ماهانه و کارانه‌های نهایی ارسالی واحدها</b>، <b>حقوق ۲۲۶ ستونی</b>، <b>اسناد تعهدات</b> و <b>کلیه دسترسی‌های به‌روزرسانی‌شده (از جمله تحلیل کارانه و خروجی آنالیز)</b> می‌باشد.
         </div>
 
         {/* Restore and Reset */}
@@ -1778,6 +1810,7 @@ npm start
                 <input
                   type="file"
                   accept=".json"
+                  disabled={restoreLoading}
                   onChange={handleBackupFileSelect}
                   className="hidden"
                 />
@@ -1801,6 +1834,27 @@ npm start
             آخرین به‌روزرسانی: <b>{toPersianDigits(dbStatus?.lastSaved || 'هم‌اکنون')}</b>
           </span>
         </div>
+
+        {restoreLoading && restoreProgress && (
+          <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs space-y-2 persian-num">
+            <div className="flex items-center justify-between font-bold text-indigo-900">
+              <span>{restoreProgress.stage}</span>
+              <span>
+                {restoreProgress.totalRows > 0
+                  ? `${toPersianDigits(Math.min(100, Math.round((restoreProgress.doneRows / restoreProgress.totalRows) * 100)))}٪ (${toPersianDigits(restoreProgress.doneRows)} از ${toPersianDigits(restoreProgress.totalRows)})`
+                  : 'در حال آماده‌سازی...'}
+              </span>
+            </div>
+            <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-indigo-600 transition-all duration-200"
+                style={{
+                  width: `${restoreProgress.totalRows > 0 ? Math.min(100, Math.round((restoreProgress.doneRows / restoreProgress.totalRows) * 100)) : 20}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {restoreSuccess && (
           <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-2">

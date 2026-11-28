@@ -21,8 +21,20 @@ import {
   Lock,
   CheckCircle2,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  BarChart3,
+  Layers
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from 'recharts';
 import { KaranehRecord, Personnel, KaranehComparisonRow, GranularKaranehPermissions, UserPermissions } from '../types';
 import { normalizePermissions, canUserAccessKaranehUnit } from '../utils/permissions';
 import {
@@ -40,7 +52,12 @@ import {
 } from '../utils/persian';
 import {
   exportKaranehComparisonToExcel,
-  downloadKaranehTemplate
+  exportKaranehUnitPositionAnalysisToExcel,
+  exportAllKaranehMonthsToExcel,
+  downloadKaranehTemplate,
+  KaranehUnitAnalyticsSummary,
+  KaranehPositionAnalyticsSummary,
+  KaranehUnitPositionAnalyticsSummary
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
 import { TablePagination } from './TablePagination';
@@ -92,6 +109,16 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
   const canSubmit = isAdmin || Boolean(granularPermissions?.submit) || Boolean(userPermissions?.finalKaraneh?.edit);
 
   const effectivePerms = useMemo(() => normalizePermissions(userPermissions), [userPermissions]);
+  const canViewAnalytics =
+    isAdmin ||
+    (granularPermissions?.viewAnalytics !== undefined
+      ? Boolean(granularPermissions.viewAnalytics)
+      : Boolean(effectivePerms.karaneh.viewAnalytics));
+  const canExportAnalytics =
+    isAdmin ||
+    (granularPermissions?.exportAnalytics !== undefined
+      ? Boolean(granularPermissions.exportAnalytics)
+      : Boolean(effectivePerms.karaneh.exportAnalytics));
   const allowedUnits = useMemo(() => {
     const fromGranular = granularPermissions?.allowedUnits;
     const raw = Array.isArray(fromGranular) ? fromGranular : effectivePerms.karaneh.allowedUnits;
@@ -157,6 +184,22 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
 
   const currentPeriod = buildPeriod(currentYear, currentMonthIndex);
   const previousPeriod = buildPeriod(prevYear, prevMonthIndex);
+
+  // Month-selectable export & Analytics UI states
+  const [exportChoice, setExportChoice] = useState<string>('current');
+  const [customExportYear, setCustomExportYear] = useState<string>(initialParsed.year);
+  const [customExportMonthIndex, setCustomExportMonthIndex] = useState<number>(initialParsed.monthIndex);
+  const [analyticsTab, setAnalyticsTab] = useState<'unit' | 'position' | 'unit_position'>('unit');
+  const [showAllChartUnits, setShowAllChartUnits] = useState<boolean>(false);
+
+  const recordCountByPeriod = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of scopedKaranehList) {
+      if (!r.period) continue;
+      counts.set(r.period, (counts.get(r.period) || 0) + 1);
+    }
+    return counts;
+  }, [scopedKaranehList]);
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -242,55 +285,211 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     return map;
   }, [personnelList]);
 
-  const comparisonRows: KaranehComparisonRow[] = currentRecords.map(curr => {
-    const code = String(curr.personnelCode).trim();
-    const prev = prevMap.get(code);
-    const pMatch = personnelByCode.get(normalizeDuplicateKey(code));
-
-    const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
-    const currFinal = Number(curr.finalKaraneh || 0);
-    const diffAmount = currFinal - prevFinal;
-
-    let diffPercent = 0;
-    if (prevFinal > 0) {
-      diffPercent = Number(((diffAmount / prevFinal) * 100).toFixed(1));
-    } else if (currFinal > 0) {
-      diffPercent = 100;
-    }
-
-    let trend: 'increase' | 'decrease' | 'unchanged' | 'new' = 'unchanged';
-    if (!prev) {
-      trend = 'new';
-    } else if (diffAmount > 0) {
-      trend = 'increase';
-    } else if (diffAmount < 0) {
-      trend = 'decrease';
-    }
-
-    const rawFull = String(curr.fullName || pMatch?.fullName || '').trim();
-    const parts = rawFull ? rawFull.split(/\s+/).filter(Boolean) : [];
-    const firstName = String(curr.firstName || '').trim() || String(pMatch?.firstName || '').trim() || parts[0] || '';
-    const lastName = String(curr.lastName || '').trim() || String(pMatch?.lastName || '').trim() || parts.slice(1).join(' ') || '';
-
-    return {
-      id: curr.id,
-      personnelCode: curr.personnelCode,
-      firstName,
-      lastName,
-      fullName: `${firstName} ${lastName}`.trim() || rawFull,
-      position: curr.position || '',
-      department: curr.department || '',
-      currentKaraneh: currFinal,
-      previousKaraneh: prevFinal,
-      diffAmount,
-      diffPercent,
-      trend,
-      notes: curr.notes || '',
-      status: curr.status || 'draft',
-      submittedAt: curr.submittedAt,
-      submittedByName: curr.submittedByName
+  const computeAnalyticsForRows = (rows: KaranehComparisonRow[]) => {
+    const buildUnitSummary = (dept: string, groupRows: KaranehComparisonRow[]): KaranehUnitAnalyticsSummary => {
+      let totalCurrent = 0;
+      let totalPrevious = 0;
+      let submittedCount = 0;
+      let maxRow = groupRows[0];
+      let minRow = groupRows[0];
+      for (const r of groupRows) {
+        totalCurrent += r.currentKaraneh;
+        totalPrevious += r.previousKaraneh;
+        if (r.status === 'submitted') submittedCount += 1;
+        if (r.currentKaraneh > maxRow.currentKaraneh) maxRow = r;
+        if (r.currentKaraneh < minRow.currentKaraneh) minRow = r;
+      }
+      const diffAmount = totalCurrent - totalPrevious;
+      const diffPercent =
+        totalPrevious > 0
+          ? Number(((diffAmount / totalPrevious) * 100).toFixed(1))
+          : totalCurrent > 0
+          ? 100
+          : 0;
+      return {
+        department: dept,
+        employeesCount: groupRows.length,
+        submittedCount,
+        avgKaraneh: groupRows.length > 0 ? Math.round(totalCurrent / groupRows.length) : 0,
+        maxKaraneh: maxRow ? maxRow.currentKaraneh : 0,
+        minKaraneh: minRow ? minRow.currentKaraneh : 0,
+        maxPersonName: maxRow ? maxRow.fullName : '',
+        minPersonName: minRow ? minRow.fullName : '',
+        totalPrevious,
+        totalCurrent,
+        diffAmount,
+        diffPercent,
+      };
     };
-  });
+
+    const unitGroups = new Map<string, KaranehComparisonRow[]>();
+    const posGroups = new Map<string, KaranehComparisonRow[]>();
+    const unitPosGroups = new Map<string, { dept: string; pos: string; rows: KaranehComparisonRow[] }>();
+
+    for (const r of rows) {
+      const dept = (r.department || 'عمومی').trim() || 'عمومی';
+      const pos = (r.position || 'نامشخص').trim() || 'نامشخص';
+      const uArr = unitGroups.get(dept);
+      if (uArr) uArr.push(r);
+      else unitGroups.set(dept, [r]);
+
+      const pArr = posGroups.get(pos);
+      if (pArr) pArr.push(r);
+      else posGroups.set(pos, [r]);
+
+      const upKey = `${dept}__||__${pos}`;
+      const upEntry = unitPosGroups.get(upKey);
+      if (upEntry) upEntry.rows.push(r);
+      else unitPosGroups.set(upKey, { dept, pos, rows: [r] });
+    }
+
+    const unitAnalytics: KaranehUnitAnalyticsSummary[] = Array.from(unitGroups.entries())
+      .map(([dept, groupRows]) => buildUnitSummary(dept, groupRows))
+      .sort((a, b) => b.avgKaraneh - a.avgKaraneh || b.totalCurrent - a.totalCurrent);
+
+    const positionAnalytics: KaranehPositionAnalyticsSummary[] = Array.from(posGroups.entries())
+      .map(([pos, groupRows]) => {
+        let totalCurrent = 0;
+        let totalPrevious = 0;
+        let maxRow = groupRows[0];
+        let minVal = groupRows[0]?.currentKaraneh ?? 0;
+        const unitSet = new Set<string>();
+        for (const r of groupRows) {
+          totalCurrent += r.currentKaraneh;
+          totalPrevious += r.previousKaraneh;
+          unitSet.add((r.department || 'عمومی').trim() || 'عمومی');
+          if (r.currentKaraneh > maxRow.currentKaraneh) maxRow = r;
+          if (r.currentKaraneh < minVal) minVal = r.currentKaraneh;
+        }
+        const diffAmount = totalCurrent - totalPrevious;
+        const diffPercent =
+          totalPrevious > 0
+            ? Number(((diffAmount / totalPrevious) * 100).toFixed(1))
+            : totalCurrent > 0
+            ? 100
+            : 0;
+        return {
+          position: pos,
+          employeesCount: groupRows.length,
+          unitsCount: unitSet.size,
+          avgKaraneh: groupRows.length > 0 ? Math.round(totalCurrent / groupRows.length) : 0,
+          maxKaraneh: maxRow ? maxRow.currentKaraneh : 0,
+          minKaraneh: minVal,
+          maxPersonName: maxRow ? maxRow.fullName : '',
+          totalPrevious,
+          totalCurrent,
+          diffAmount,
+          diffPercent,
+        };
+      })
+      .sort((a, b) => b.avgKaraneh - a.avgKaraneh || b.totalCurrent - a.totalCurrent);
+
+    const unitPositionAnalytics: KaranehUnitPositionAnalyticsSummary[] = Array.from(unitPosGroups.values())
+      .map(({ dept, pos, rows: groupRows }) => {
+        let totalCurrent = 0;
+        let totalPrevious = 0;
+        let maxRow = groupRows[0];
+        let minVal = groupRows[0]?.currentKaraneh ?? 0;
+        for (const r of groupRows) {
+          totalCurrent += r.currentKaraneh;
+          totalPrevious += r.previousKaraneh;
+          if (r.currentKaraneh > maxRow.currentKaraneh) maxRow = r;
+          if (r.currentKaraneh < minVal) minVal = r.currentKaraneh;
+        }
+        const diffAmount = totalCurrent - totalPrevious;
+        const diffPercent =
+          totalPrevious > 0
+            ? Number(((diffAmount / totalPrevious) * 100).toFixed(1))
+            : totalCurrent > 0
+            ? 100
+            : 0;
+        return {
+          department: dept,
+          position: pos,
+          employeesCount: groupRows.length,
+          avgKaraneh: groupRows.length > 0 ? Math.round(totalCurrent / groupRows.length) : 0,
+          maxKaraneh: maxRow ? maxRow.currentKaraneh : 0,
+          minKaraneh: minVal,
+          maxPersonName: maxRow ? maxRow.fullName : '',
+          totalPrevious,
+          totalCurrent,
+          diffAmount,
+          diffPercent,
+        };
+      })
+      .sort((a, b) => a.department.localeCompare(b.department, 'fa') || b.avgKaraneh - a.avgKaraneh);
+
+    return { unitAnalytics, positionAnalytics, unitPositionAnalytics };
+  };
+
+  const computeComparisonForPeriod = (
+    targetPeriod: string,
+    comparePeriod: string,
+    deptFilter = 'all'
+  ): KaranehComparisonRow[] => {
+    const targetRecs = scopedKaranehList.filter(
+      (k) => k.period === targetPeriod && (deptFilter === 'all' || (k.department || 'عمومی') === deptFilter)
+    );
+    const compareMap = new Map<string, KaranehRecord>();
+    scopedKaranehList
+      .filter((k) => k.period === comparePeriod)
+      .forEach((p) => compareMap.set(String(p.personnelCode).trim(), p));
+
+    return targetRecs.map((curr) => {
+      const code = String(curr.personnelCode).trim();
+      const prev = compareMap.get(code);
+      const pMatch = personnelByCode.get(normalizeDuplicateKey(code));
+
+      const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
+      const currFinal = Number(curr.finalKaraneh || 0);
+      const diffAmount = currFinal - prevFinal;
+
+      let diffPercent = 0;
+      if (prevFinal > 0) {
+        diffPercent = Number(((diffAmount / prevFinal) * 100).toFixed(1));
+      } else if (currFinal > 0) {
+        diffPercent = 100;
+      }
+
+      let trend: 'increase' | 'decrease' | 'unchanged' | 'new' = 'unchanged';
+      if (!prev) {
+        trend = 'new';
+      } else if (diffAmount > 0) {
+        trend = 'increase';
+      } else if (diffAmount < 0) {
+        trend = 'decrease';
+      }
+
+      const rawFull = String(curr.fullName || pMatch?.fullName || '').trim();
+      const parts = rawFull ? rawFull.split(/\s+/).filter(Boolean) : [];
+      const firstName = String(curr.firstName || '').trim() || String(pMatch?.firstName || '').trim() || parts[0] || '';
+      const lastName = String(curr.lastName || '').trim() || String(pMatch?.lastName || '').trim() || parts.slice(1).join(' ') || '';
+
+      return {
+        id: curr.id,
+        personnelCode: curr.personnelCode,
+        firstName,
+        lastName,
+        fullName: `${firstName} ${lastName}`.trim() || rawFull,
+        position: curr.position || '',
+        department: curr.department || '',
+        currentKaraneh: currFinal,
+        previousKaraneh: prevFinal,
+        diffAmount,
+        diffPercent,
+        trend,
+        notes: curr.notes || '',
+        status: curr.status || 'draft',
+        submittedAt: curr.submittedAt,
+        submittedByName: curr.submittedByName
+      };
+    });
+  };
+
+  const comparisonRows: KaranehComparisonRow[] = useMemo(
+    () => computeComparisonForPeriod(currentPeriod, previousPeriod),
+    [scopedKaranehList, personnelByCode, currentPeriod, previousPeriod]
+  );
 
   // Summary KPIs
   const totalCurrent = comparisonRows.reduce((sum, r) => sum + r.currentKaraneh, 0);
@@ -355,6 +554,129 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
     () => filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize),
     [filteredRows, safePage, pageSize]
   );
+
+  // Analytics computed over active unit filter (so Unit Chart + Unit/Position tables match the active scope)
+  const analyticsInputRows = useMemo(
+    () =>
+      filterDepartment === 'all'
+        ? comparisonRows
+        : comparisonRows.filter((r) => (r.department || 'عمومی') === filterDepartment),
+    [comparisonRows, filterDepartment]
+  );
+
+  const { unitAnalytics, positionAnalytics, unitPositionAnalytics } = useMemo(
+    () => computeAnalyticsForRows(analyticsInputRows),
+    [analyticsInputRows]
+  );
+
+  const unitChartData = useMemo(() => {
+    const slice = showAllChartUnits ? unitAnalytics : unitAnalytics.slice(0, 10);
+    return slice.map((u) => ({
+      name: u.department.length > 20 ? `${u.department.slice(0, 18)}…` : u.department,
+      fullUnit: u.department,
+      avg: u.avgKaraneh,
+      max: u.maxKaraneh,
+      min: u.minKaraneh,
+      employeesCount: u.employeesCount,
+      maxPersonName: u.maxPersonName,
+      minPersonName: u.minPersonName,
+      totalCurrent: u.totalCurrent,
+      diffPercent: u.diffPercent,
+    }));
+  }, [unitAnalytics, showAllChartUnits]);
+
+  const resolvedExportPeriod =
+    exportChoice === 'current'
+      ? currentPeriod
+      : exportChoice === 'custom'
+      ? buildPeriod(customExportYear, customExportMonthIndex)
+      : exportChoice;
+
+  const exportRowCount =
+    exportChoice === 'all'
+      ? scopedKaranehList.length
+      : exportChoice === 'current' || resolvedExportPeriod === currentPeriod
+      ? filteredRows.length
+      : recordCountByPeriod.get(resolvedExportPeriod) || 0;
+
+  const handleSelectPeriodShortcut = (period: string) => {
+    setHasAutoAlignedPeriod(true);
+    const p = parsePeriod(period);
+    const pp = parsePeriod(getPreviousPeriodId(period));
+    setCurrentYear(p.year);
+    setCurrentMonthIndex(p.monthIndex);
+    setPrevYear(pp.year);
+    setPrevMonthIndex(pp.monthIndex);
+  };
+
+  const handleExportSpecificPeriod = (targetPeriod: string) => {
+    if (targetPeriod === currentPeriod) {
+      const { unitAnalytics: uA, positionAnalytics: pA } = computeAnalyticsForRows(filteredRows);
+      exportKaranehComparisonToExcel(
+        filteredRows,
+        getPeriodLabel(currentPeriod),
+        getPeriodLabel(previousPeriod),
+        `گزارش_تحلیلی_مقایسه_کارانه_${getPeriodLabel(currentPeriod)}.xlsx`,
+        { unitAnalytics: uA, positionAnalytics: pA }
+      );
+      return;
+    }
+
+    const compPrev = getPreviousPeriodId(targetPeriod);
+    const rows = computeComparisonForPeriod(targetPeriod, compPrev, filterDepartment);
+    const { unitAnalytics: uA, positionAnalytics: pA } = computeAnalyticsForRows(rows);
+    exportKaranehComparisonToExcel(
+      rows,
+      getPeriodLabel(targetPeriod),
+      getPeriodLabel(compPrev),
+      `گزارش_تحلیلی_مقایسه_کارانه_${getPeriodLabel(targetPeriod)}.xlsx`,
+      { unitAnalytics: uA, positionAnalytics: pA }
+    );
+  };
+
+  const handleDownloadSelectedExport = () => {
+    if (exportChoice === 'all') {
+      const periodsPayload = karanehPeriods.map((pId) => {
+        const compPrev = getPreviousPeriodId(pId);
+        const rows = computeComparisonForPeriod(pId, compPrev, filterDepartment);
+        const { unitAnalytics: uA, positionAnalytics: pA } = computeAnalyticsForRows(rows);
+        return {
+          periodId: pId,
+          periodLabel: getPeriodLabel(pId),
+          previousPeriodLabel: getPeriodLabel(compPrev),
+          rows,
+          unitAnalytics: uA,
+          positionAnalytics: pA,
+        };
+      });
+      exportAllKaranehMonthsToExcel(periodsPayload);
+      return;
+    }
+    handleExportSpecificPeriod(resolvedExportPeriod);
+  };
+
+  const handleDownloadUnitPositionAnalysis = () => {
+    const targetPeriod = exportChoice === 'all' ? currentPeriod : resolvedExportPeriod;
+    const compPrev = targetPeriod === currentPeriod ? previousPeriod : getPreviousPeriodId(targetPeriod);
+    const rows =
+      targetPeriod === currentPeriod
+        ? analyticsInputRows
+        : computeComparisonForPeriod(targetPeriod, compPrev, filterDepartment);
+    const {
+      unitAnalytics: uA,
+      positionAnalytics: pA,
+      unitPositionAnalytics: upA,
+    } = computeAnalyticsForRows(rows);
+
+    exportKaranehUnitPositionAnalysisToExcel({
+      periodLabel: getPeriodLabel(targetPeriod),
+      previousPeriodLabel: getPeriodLabel(compPrev),
+      unitAnalytics: uA,
+      positionAnalytics: pA,
+      unitPositionAnalytics: upA,
+      rows,
+    });
+  };
 
   // Handle open Add Modal (ثبت دستی کارانه)
   const handleOpenAdd = () => {
@@ -628,16 +950,83 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
             </button>
           )}
           {allowExport && (
-            <button
-              onClick={() => exportKaranehComparisonToExcel(
-                filteredRows,
-                getPeriodLabel(currentPeriod),
-                getPeriodLabel(previousPeriod)
+            <div className="flex flex-wrap items-center gap-1.5 bg-emerald-50/80 border border-emerald-200 p-1.5 rounded-xl">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-emerald-950 px-1 whitespace-nowrap">
+                  ماه خروجی:
+                </span>
+                <select
+                  value={exportChoice}
+                  onChange={(e) => setExportChoice(e.target.value)}
+                  className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500 persian-num"
+                >
+                  <option value="current">
+                    ماه جاری جدول ({getPeriodLabel(currentPeriod)} - {toPersianDigits(filteredRows.length)})
+                  </option>
+                  {karanehPeriods
+                    .filter((p) => p !== currentPeriod)
+                    .map((p) => (
+                      <option key={p} value={p}>
+                        {getPeriodLabel(p)} ({toPersianDigits(recordCountByPeriod.get(p) || 0)} ردیف)
+                      </option>
+                    ))}
+                  <option value="custom">انتخاب ماه و سال دلخواه...</option>
+                  {karanehPeriods.length > 1 && (
+                    <option value="all">
+                      همه ماه‌های کارانه ({toPersianDigits(karanehPeriods.length)} ماه - {toPersianDigits(scopedKaranehList.length)} ردیف)
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              {exportChoice === 'custom' && (
+                <div className="flex items-center gap-1">
+                  <select
+                    value={customExportMonthIndex}
+                    onChange={(e) => setCustomExportMonthIndex(Number(e.target.value))}
+                    className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {PERSIAN_MONTHS.map((m, idx) => (
+                      <option key={m} value={idx}>{m}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={customExportYear}
+                    onChange={(e) => setCustomExportYear(e.target.value)}
+                    className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500 persian-num"
+                  >
+                    {YEARS_LIST.map((y) => (
+                      <option key={y} value={y}>{toPersianDigits(y)}</option>
+                    ))}
+                  </select>
+                </div>
               )}
-              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-bold transition-colors border border-emerald-200"
+
+              <button
+                type="button"
+                onClick={handleDownloadSelectedExport}
+                disabled={exportRowCount === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs disabled:opacity-50 cursor-pointer persian-num"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>
+                  {exportChoice === 'all'
+                    ? `دانلود همه ماه‌ها (${toPersianDigits(exportRowCount)})`
+                    : `دانلود اکسل ${getPeriodLabel(resolvedExportPeriod)} (${toPersianDigits(exportRowCount)})`}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {canExportAnalytics && (
+            <button
+              type="button"
+              onClick={handleDownloadUnitPositionAnalysis}
+              disabled={analyticsInputRows.length === 0 && exportRowCount === 0}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-xl text-xs font-bold transition-colors border border-indigo-200 cursor-pointer disabled:opacity-50"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>خروجی اکسل مقایسه‌ای ({toPersianDigits(filteredRows.length)})</span>
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>دانلود اکسل آنالیز واحد و پست</span>
             </button>
           )}
 
@@ -816,6 +1205,50 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
           </div>
 
         </div>
+
+        {/* Quick Period Selector + 1-Click Excel Export Pills */}
+        {karanehPeriods.length > 0 && (
+          <div className="pt-2.5 border-t border-slate-800 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-slate-400 font-semibold">دوره‌های دارای کارانه:</span>
+            {karanehPeriods.map((p) => {
+              const pCount = recordCountByPeriod.get(p) || 0;
+              return (
+                <div
+                  key={p}
+                  className={`inline-flex items-center rounded-lg overflow-hidden border transition-colors ${
+                    p === currentPeriod
+                      ? 'border-indigo-500 bg-indigo-600 text-white'
+                      : 'border-slate-700 bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPeriodShortcut(p)}
+                    className={`px-2.5 py-1 font-bold transition-colors persian-num cursor-pointer ${
+                      p === currentPeriod ? 'hover:bg-indigo-700' : 'hover:bg-slate-700'
+                    }`}
+                  >
+                    {getPeriodLabel(p)} ({toPersianDigits(pCount)})
+                  </button>
+                  {allowExport && pCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleExportSpecificPeriod(p)}
+                      title={`دانلود مستقیم اکسل کارانه ${getPeriodLabel(p)}`}
+                      className={`px-2 py-1 border-r transition-colors cursor-pointer ${
+                        p === currentPeriod
+                          ? 'border-indigo-500 bg-emerald-600 hover:bg-emerald-500 text-white'
+                          : 'border-slate-700 bg-slate-900/70 hover:bg-emerald-600 text-emerald-400 hover:text-white'
+                      }`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Comparison Statistics Strip */}
@@ -867,6 +1300,407 @@ export const KaranehModule: React.FC<KaranehModuleProps> = ({
         </div>
 
       </div>
+
+      {/* Unit Chart (Average / Max / Min) & Unit/Position Breakdown Analysis */}
+      {canViewAnalytics && analyticsInputRows.length > 0 && (
+        <div className="space-y-4">
+          {/* Chart Panel: Average, Highest, Lowest Karaneh per Unit */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-indigo-600" />
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                    نمودار مقایسه‌ای واحدها بر اساس میانگین، بیشترین و کمترین کارانه ({getPeriodLabel(currentPeriod)})
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5 persian-num">
+                  نمایش آمار واقعی برای {toPersianDigits(unitAnalytics.length)} واحد و {toPersianDigits(analyticsInputRows.length)} نفر (مبالغ به میلیون ریال در محور عمودی)
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {unitAnalytics.length > 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllChartUnits((prev) => !prev)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer persian-num"
+                  >
+                    {showAllChartUnits
+                      ? `نمایش ۱۰ واحد برتر`
+                      : `نمایش همه واحدها (${toPersianDigits(unitAnalytics.length)})`}
+                  </button>
+                )}
+                {filterDepartment !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterDepartment('all')}
+                    className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl text-xs font-bold border border-amber-200 cursor-pointer"
+                  >
+                    حذف فیلتر واحد ({filterDepartment})
+                  </button>
+                )}
+                {canExportAnalytics && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadUnitPositionAnalysis}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>دانلود اکسل آنالیز</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="h-[340px] w-full" dir="ltr">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={unitChartData}
+                  margin={{ top: 14, right: 20, left: 10, bottom: 52 }}
+                  barGap={4}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="name"
+                    interval={0}
+                    angle={-22}
+                    textAnchor="end"
+                    height={68}
+                    tick={{ fontSize: 11, fill: '#334155', fontWeight: 600 }}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => `${toPersianDigits(Math.round(Number(v || 0) / 1_000_000))}م`}
+                    tick={{ fontSize: 11, fill: '#475569' }}
+                    width={64}
+                  />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || payload.length === 0) return null;
+                      const item = payload[0]?.payload as {
+                        fullUnit: string;
+                        avg: number;
+                        max: number;
+                        min: number;
+                        employeesCount: number;
+                        maxPersonName: string;
+                        minPersonName: string;
+                        totalCurrent: number;
+                        diffPercent: number;
+                      };
+                      if (!item) return null;
+                      return (
+                        <div
+                          dir="rtl"
+                          className="bg-slate-900 text-white p-3.5 rounded-xl shadow-xl border border-slate-700 text-xs space-y-1.5 min-w-[230px] persian-num"
+                        >
+                          <div className="font-bold text-amber-300 border-b border-slate-700 pb-1 flex items-center justify-between gap-3">
+                            <span>{item.fullUnit}</span>
+                            <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded-md text-slate-200">
+                              {toPersianDigits(item.employeesCount)} نفر
+                            </span>
+                          </div>
+                          <div className="flex justify-between gap-4">
+                            <span className="text-indigo-300">میانگین کارانه:</span>
+                            <b>{formatRial(item.avg)}</b>
+                          </div>
+                          <div className="flex justify-between gap-4">
+                            <span className="text-emerald-300">بیشترین کارانه:</span>
+                            <b>{formatRial(item.max)}</b>
+                          </div>
+                          {item.maxPersonName && (
+                            <div className="text-[10px] text-emerald-200/90">
+                              نفر برتر: {item.maxPersonName}
+                            </div>
+                          )}
+                          <div className="flex justify-between gap-4">
+                            <span className="text-amber-300">کمترین کارانه:</span>
+                            <b>{formatRial(item.min)}</b>
+                          </div>
+                          {item.minPersonName && (
+                            <div className="text-[10px] text-amber-200/90">
+                              کمترین مبلغ: {item.minPersonName}
+                            </div>
+                          )}
+                          <div className="pt-1 border-t border-slate-800 flex justify-between gap-4 text-[11px]">
+                            <span className="text-slate-400">جمع واحد:</span>
+                            <b className="text-white">{formatRial(item.totalCurrent)}</b>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 12, paddingTop: 4 }}
+                  />
+                  <Bar
+                    dataKey="avg"
+                    name="میانگین کارانه"
+                    fill="#4f46e5"
+                    radius={[5, 5, 0, 0]}
+                    onClick={(data: any) => {
+                      const u = data?.fullUnit;
+                      if (u) setFilterDepartment((prev) => (prev === u ? 'all' : u));
+                    }}
+                    className="cursor-pointer"
+                  />
+                  <Bar
+                    dataKey="max"
+                    name="بیشترین کارانه"
+                    fill="#059669"
+                    radius={[5, 5, 0, 0]}
+                    onClick={(data: any) => {
+                      const u = data?.fullUnit;
+                      if (u) setFilterDepartment((prev) => (prev === u ? 'all' : u));
+                    }}
+                    className="cursor-pointer"
+                  />
+                  <Bar
+                    dataKey="min"
+                    name="کمترین کارانه"
+                    fill="#d97706"
+                    radius={[5, 5, 0, 0]}
+                    onClick={(data: any) => {
+                      const u = data?.fullUnit;
+                      if (u) setFilterDepartment((prev) => (prev === u ? 'all' : u));
+                    }}
+                    className="cursor-pointer"
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Unit & Position Analytical Breakdown Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="p-4 bg-slate-50/90 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  آنالیز جامع کارانه بر اساس واحد سازمانی و پست ({getPeriodLabel(currentPeriod)})
+                </h3>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <div className="inline-flex bg-white border border-slate-200 rounded-xl p-1 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setAnalyticsTab('unit')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-colors cursor-pointer persian-num ${
+                      analyticsTab === 'unit'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    بر اساس واحد ({toPersianDigits(unitAnalytics.length)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAnalyticsTab('position')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-colors cursor-pointer persian-num ${
+                      analyticsTab === 'position'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    بر اساس پست ({toPersianDigits(positionAnalytics.length)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAnalyticsTab('unit_position')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-colors cursor-pointer persian-num ${
+                      analyticsTab === 'unit_position'
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    ترکیب واحد و پست ({toPersianDigits(unitPositionAnalytics.length)})
+                  </button>
+                </div>
+
+                {canExportAnalytics && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadUnitPositionAnalysis}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>خروجی اکسل ۴ شیتی آنالیز</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto max-h-[380px]">
+              {analyticsTab === 'unit' && (
+                <table className="w-full text-right text-xs">
+                  <thead className="sticky top-0 bg-slate-100 text-slate-700 font-bold border-b border-slate-200 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3 w-12 text-center">ردیف</th>
+                      <th className="py-2.5 px-3">نام واحد سازمانی</th>
+                      <th className="py-2.5 px-3 text-center">پرسنل</th>
+                      <th className="py-2.5 px-3 text-indigo-800">میانگین کارانه</th>
+                      <th className="py-2.5 px-3 text-emerald-800">بیشترین کارانه (نفر برتر)</th>
+                      <th className="py-2.5 px-3 text-amber-800">کمترین کارانه</th>
+                      <th className="py-2.5 px-3">جمع ماه قبل</th>
+                      <th className="py-2.5 px-3">جمع ماه جدید</th>
+                      <th className="py-2.5 px-3 text-center">رشد</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 persian-num">
+                    {unitAnalytics.map((u, idx) => (
+                      <tr
+                        key={u.department}
+                        onClick={() => setFilterDepartment((prev) => (prev === u.department ? 'all' : u.department))}
+                        className={`cursor-pointer transition-colors ${
+                          filterDepartment === u.department ? 'bg-indigo-50/70' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        <td className="py-2.5 px-3 text-center text-slate-500">{toPersianDigits(idx + 1)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <Building className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>{u.department}</span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-bold">{toPersianDigits(u.employeesCount)}</td>
+                        <td className="py-2.5 px-3 font-bold text-indigo-700">{formatRial(u.avgKaraneh)}</td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-emerald-700">{formatRial(u.maxKaraneh)}</div>
+                          {u.maxPersonName && <div className="text-[10px] text-slate-500">{u.maxPersonName}</div>}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-amber-700">{formatRial(u.minKaraneh)}</div>
+                          {u.minPersonName && <div className="text-[10px] text-slate-500">{u.minPersonName}</div>}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600">{formatRial(u.totalPrevious)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{formatRial(u.totalCurrent)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-md font-bold text-[11px] ${
+                              u.diffPercent > 0
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : u.diffPercent < 0
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {u.diffPercent > 0 ? `+${formatPercent(u.diffPercent)}` : formatPercent(u.diffPercent)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {analyticsTab === 'position' && (
+                <table className="w-full text-right text-xs">
+                  <thead className="sticky top-0 bg-slate-100 text-slate-700 font-bold border-b border-slate-200 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3 w-12 text-center">ردیف</th>
+                      <th className="py-2.5 px-3">پست سازمانی</th>
+                      <th className="py-2.5 px-3 text-center">واحدها / پرسنل</th>
+                      <th className="py-2.5 px-3 text-indigo-800">میانگین کارانه</th>
+                      <th className="py-2.5 px-3 text-emerald-800">بیشترین کارانه (نفر برتر)</th>
+                      <th className="py-2.5 px-3 text-amber-800">کمترین کارانه</th>
+                      <th className="py-2.5 px-3">جمع ماه قبل</th>
+                      <th className="py-2.5 px-3">جمع ماه جدید</th>
+                      <th className="py-2.5 px-3 text-center">رشد</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 persian-num">
+                    {positionAnalytics.map((p, idx) => (
+                      <tr key={p.position} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-2.5 px-3 text-center text-slate-500">{toPersianDigits(idx + 1)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">
+                          <div className="flex items-center gap-1.5">
+                            <Briefcase className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>{p.position}</span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className="font-bold">{toPersianDigits(p.employeesCount)}</span> نفر
+                          <span className="text-[10px] text-slate-500 block">در {toPersianDigits(p.unitsCount)} واحد</span>
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-indigo-700">{formatRial(p.avgKaraneh)}</td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-emerald-700">{formatRial(p.maxKaraneh)}</div>
+                          {p.maxPersonName && <div className="text-[10px] text-slate-500">{p.maxPersonName}</div>}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-amber-700">{formatRial(p.minKaraneh)}</td>
+                        <td className="py-2.5 px-3 text-slate-600">{formatRial(p.totalPrevious)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{formatRial(p.totalCurrent)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-md font-bold text-[11px] ${
+                              p.diffPercent > 0
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : p.diffPercent < 0
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {p.diffPercent > 0 ? `+${formatPercent(p.diffPercent)}` : formatPercent(p.diffPercent)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {analyticsTab === 'unit_position' && (
+                <table className="w-full text-right text-xs">
+                  <thead className="sticky top-0 bg-slate-100 text-slate-700 font-bold border-b border-slate-200 z-10">
+                    <tr>
+                      <th className="py-2.5 px-3 w-12 text-center">ردیف</th>
+                      <th className="py-2.5 px-3">واحد سازمانی</th>
+                      <th className="py-2.5 px-3">پست سازمانی</th>
+                      <th className="py-2.5 px-3 text-center">پرسنل</th>
+                      <th className="py-2.5 px-3 text-indigo-800">میانگین کارانه</th>
+                      <th className="py-2.5 px-3 text-emerald-800">بیشترین (نفر برتر)</th>
+                      <th className="py-2.5 px-3 text-amber-800">کمترین</th>
+                      <th className="py-2.5 px-3">جمع ماه جدید</th>
+                      <th className="py-2.5 px-3 text-center">رشد</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 persian-num">
+                    {unitPositionAnalytics.map((up, idx) => (
+                      <tr key={`${up.department}__${up.position}`} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-2.5 px-3 text-center text-slate-500">{toPersianDigits(idx + 1)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-800">{up.department}</td>
+                        <td className="py-2.5 px-3 font-semibold text-indigo-900">{up.position}</td>
+                        <td className="py-2.5 px-3 text-center font-bold">{toPersianDigits(up.employeesCount)}</td>
+                        <td className="py-2.5 px-3 font-bold text-indigo-700">{formatRial(up.avgKaraneh)}</td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-emerald-700">{formatRial(up.maxKaraneh)}</div>
+                          {up.maxPersonName && <div className="text-[10px] text-slate-500">{up.maxPersonName}</div>}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-amber-700">{formatRial(up.minKaraneh)}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{formatRial(up.totalCurrent)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-md font-bold text-[11px] ${
+                              up.diffPercent > 0
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : up.diffPercent < 0
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {up.diffPercent > 0 ? `+${formatPercent(up.diffPercent)}` : formatPercent(up.diffPercent)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Duplicate Personnel Warning Banner */}
       {duplicateIndex.totalDuplicateRows > 0 && (

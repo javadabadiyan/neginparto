@@ -2611,9 +2611,12 @@ export default function App() {
   };
 
   // Database tools
-  const handleRestoreBackup = async (backupData: any): Promise<boolean> => {
+  const handleRestoreBackup = async (
+    backupData: any,
+    onProgress?: (info: { stage: string; doneRows: number; totalRows: number }) => void
+  ): Promise<boolean> => {
     try {
-      const res = await api.restoreDatabase(backupData);
+      const res = await api.restoreDatabase(backupData, onProgress);
       if (res.success) {
         showNotification('پایگاه داده با موفقیت بازگردانی شد.');
         await loadAllData();

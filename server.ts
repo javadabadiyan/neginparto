@@ -867,7 +867,7 @@ function isSuperAdminUser(user: any): boolean {
 function getEmptyPermissionsServer() {
   return {
     personnel: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewSalary: false, documents: false },
-    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, submit: false, allowedUnits: [] as string[] },
+    karaneh: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, viewAnalytics: false, exportAnalytics: false, submit: false, allowedUnits: [] as string[] },
     finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
     jobGroups: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
     commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
@@ -891,7 +891,7 @@ function getEmptyPermissionsServer() {
 function getFullAdminPermissionsServer() {
   return {
     personnel: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewSalary: true, documents: true },
-    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, submit: true, allowedUnits: [] as string[] },
+    karaneh: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, viewAnalytics: true, exportAnalytics: true, submit: true, allowedUnits: [] as string[] },
     finalKaraneh: { view: true, edit: true, delete: true, deleteAll: true, exportExcel: true },
     jobGroups: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
     commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
@@ -923,6 +923,7 @@ function syncLegacyPermissionsServer(perms: any) {
     canExportExcel: Boolean(
       perms.personnel.exportExcel ||
       perms.karaneh.exportExcel ||
+      perms.karaneh.exportAnalytics ||
       perms.finalKaraneh?.exportExcel ||
       perms.jobGroups.exportExcel ||
       perms.commitments.exportExcel ||
@@ -975,7 +976,7 @@ function normalizePermissionsServer(raw: any) {
 
     return syncLegacyPermissionsServer({
       personnel: { view: lp, create: lp, edit: lp, delete: lp && lu, deleteAll: false, importExcel: lp && li, exportExcel: lp && le, viewSalary: lp, documents: lp },
-      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le, submit: false, allowedUnits: [] as string[] },
+      karaneh: { view: lk, create: lk, edit: lk, delete: lk && lu, deleteAll: false, importExcel: lk && li, exportExcel: lk && le, viewAnalytics: lk, exportAnalytics: lk && le, submit: false, allowedUnits: [] as string[] },
       finalKaraneh: { view: false, edit: false, delete: false, deleteAll: false, exportExcel: false },
       jobGroups: { view: lj, create: lj, edit: lj, delete: lj && lu, deleteAll: false, importExcel: lj && li, exportExcel: lj && le },
       commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
@@ -1011,6 +1012,8 @@ function normalizePermissionsServer(raw: any) {
       deleteAll: b(k.deleteAll),
       importExcel: b(k.importExcel),
       exportExcel: b(k.exportExcel),
+      viewAnalytics: k.viewAnalytics === undefined ? b(k.view) : b(k.viewAnalytics),
+      exportAnalytics: k.exportAnalytics === undefined ? b(k.exportExcel) : b(k.exportAnalytics),
       submit: b(k.submit),
       allowedUnits: Array.isArray(k.allowedUnits) ? k.allowedUnits.map(String).filter(Boolean) : [],
     },
@@ -1519,7 +1522,7 @@ function buildPresetPermissionsServer(presetName: string) {
   if (p.includes('مشاهده') || p.includes('بیننده') || p.toLowerCase().includes('viewer')) {
     return normalizePermissionsServer({
       personnel: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewSalary: false, documents: false },
-      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, submit: false, allowedUnits: [] as string[] },
+      karaneh: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true, viewAnalytics: true, exportAnalytics: false, submit: false, allowedUnits: [] as string[] },
       finalKaraneh: { view: true, edit: false, delete: false, deleteAll: false, exportExcel: true },
       jobGroups: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
       commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
@@ -3764,6 +3767,9 @@ app.get('/api/database/status', requireAuth, (req: AuthenticatedRequest, res: Re
   const canCmt = canStats || checkPermission(req.authUser, 'commitments', 'view');
   const canMining = canStats || hasMiningOrUnitPerm(req.authUser, 'view');
 
+  const submittedKaraneh = (db.karaneh || []).filter((k: any) => k.status === 'submitted');
+  const submittedKaranehPeriodsCount = new Set(submittedKaraneh.map((k: any) => k.period).filter(Boolean)).size;
+
   res.json({
     success: true,
     data: {
@@ -3771,6 +3777,8 @@ app.get('/api/database/status', requireAuth, (req: AuthenticatedRequest, res: Re
       totalPersonnel: canPers ? (db.personnel || []).length : 0,
       totalRelatives: canPers ? totalRelatives : 0,
       totalKaranehRecords: canKar ? (db.karaneh || []).length : 0,
+      totalSubmittedKaranehRecords: canKar ? submittedKaraneh.length : 0,
+      submittedKaranehPeriodsCount: canKar ? submittedKaranehPeriodsCount : 0,
       totalPayrollRecords: canPay ? (db.payroll || []).length : 0,
       totalUsers: canUsers ? (db.users || []).length : 0,
       totalActiveUsers: canUsers ? totalActiveUsers : 0,
@@ -3792,7 +3800,7 @@ app.get('/api/database/status', requireAuth, (req: AuthenticatedRequest, res: Re
       authProtected: true,
       firebaseProjectId: firebaseConfig.projectId || '',
       firestoreDatabaseId: firebaseConfig.firestoreDatabaseId || '',
-      schemaVersion: '5.0-negin-parto-nasr-units-hub',
+      schemaVersion: '5.1-negin-parto-nasr-full-sync',
     }
   });
 });
@@ -3885,17 +3893,19 @@ app.post('/api/database/merge-firestore', requireAuth, requirePerm('system', 're
 app.get('/api/database/backup', requireAuth, requirePerm('system', 'backupDatabase'), (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const totalRelatives = (db.personnel || []).reduce((sum: number, p: any) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
+  const submittedKaranehCount = (db.karaneh || []).filter((k: any) => k.status === 'submitted').length;
   const backupPayload = {
     ...db,
     _backupMetadata: {
-      version: '5.0-negin-parto-nasr-units-hub',
+      version: '5.1-negin-parto-nasr-full-sync',
       exportedAt: new Date().toISOString(),
-      modules: ['personnel', 'relatives', 'documents', 'karaneh', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
+      modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
       counts: {
         users: (db.users || []).length,
         personnel: (db.personnel || []).length,
         relatives: totalRelatives,
         karaneh: (db.karaneh || []).length,
+        submittedKaraneh: submittedKaranehCount,
         payroll: (db.payroll || []).length,
         jobGroups: (db.jobGroups || []).length,
         jobClassifications: (db.jobClassifications || []).length,

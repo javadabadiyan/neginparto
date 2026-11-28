@@ -153,6 +153,49 @@ function splitKaranehNames(r: Pick<KaranehComparisonRow, 'firstName' | 'lastName
   };
 }
 
+export interface KaranehUnitAnalyticsSummary {
+  department: string;
+  employeesCount: number;
+  submittedCount: number;
+  avgKaraneh: number;
+  maxKaraneh: number;
+  minKaraneh: number;
+  maxPersonName: string;
+  minPersonName: string;
+  totalPrevious: number;
+  totalCurrent: number;
+  diffAmount: number;
+  diffPercent: number;
+}
+
+export interface KaranehPositionAnalyticsSummary {
+  position: string;
+  employeesCount: number;
+  unitsCount: number;
+  avgKaraneh: number;
+  maxKaraneh: number;
+  minKaraneh: number;
+  maxPersonName: string;
+  totalPrevious: number;
+  totalCurrent: number;
+  diffAmount: number;
+  diffPercent: number;
+}
+
+export interface KaranehUnitPositionAnalyticsSummary {
+  department: string;
+  position: string;
+  employeesCount: number;
+  avgKaraneh: number;
+  maxKaraneh: number;
+  minKaraneh: number;
+  maxPersonName: string;
+  totalPrevious: number;
+  totalCurrent: number;
+  diffAmount: number;
+  diffPercent: number;
+}
+
 /**
  * Export Karaneh list to Excel with Month-over-Month comparison
  */
@@ -160,7 +203,11 @@ export function exportKaranehComparisonToExcel(
   rows: KaranehComparisonRow[],
   currentPeriodName: string,
   previousPeriodName: string,
-  fileName = `گزارش_تحلیلی_مقایسه_کارانه_${currentPeriodName}.xlsx`
+  fileName = `گزارش_تحلیلی_مقایسه_کارانه_${currentPeriodName}.xlsx`,
+  analytics?: {
+    unitAnalytics?: KaranehUnitAnalyticsSummary[];
+    positionAnalytics?: KaranehPositionAnalyticsSummary[];
+  }
 ) {
   const data = rows.map((r, index) => {
     const { firstName, lastName } = splitKaranehNames(r);
@@ -176,6 +223,7 @@ export function exportKaranehComparisonToExcel(
       'اختلاف مبلغ (ریال)': r.diffAmount,
       'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
       'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+      'وضعیت ارسال': r.status === 'submitted' ? 'ارسال‌شده' : 'پیش‌نویس واحد',
       'توضیحات و علت تغییر': r.notes || ''
     };
   });
@@ -193,11 +241,306 @@ export function exportKaranehComparisonToExcel(
     { wch: 20 },
     { wch: 14 },
     { wch: 14 },
+    { wch: 14 },
     { wch: 25 }
   ];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'تحلیل کارانه');
+
+  if (analytics?.unitAnalytics && analytics.unitAnalytics.length > 0) {
+    const unitRows = analytics.unitAnalytics.map((u, idx) => ({
+      'ردیف': idx + 1,
+      'نام واحد': u.department,
+      'تعداد پرسنل': u.employeesCount,
+      'تعداد ارسال‌شده': u.submittedCount,
+      'میانگین کارانه (ریال)': u.avgKaraneh,
+      'بیشترین کارانه (ریال)': u.maxKaraneh,
+      'نفر دارای بیشترین کارانه': u.maxPersonName || '—',
+      'کمترین کارانه (ریال)': u.minKaraneh,
+      'نفر دارای کمترین کارانه': u.minPersonName || '—',
+      [`جمع ${previousPeriodName} (ریال)`]: u.totalPrevious,
+      [`جمع ${currentPeriodName} (ریال)`]: u.totalCurrent,
+      'اختلاف مبلغ (ریال)': u.diffAmount,
+      'درصد تغییر': `${u.diffPercent.toFixed(1)}%`,
+    }));
+    const unitSheet = XLSX.utils.json_to_sheet(unitRows);
+    unitSheet['!cols'] = [
+      { wch: 6 }, { wch: 26 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 20 },
+      { wch: 22 }, { wch: 20 }, { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, unitSheet, 'خلاصه_واحدها');
+  }
+
+  if (analytics?.positionAnalytics && analytics.positionAnalytics.length > 0) {
+    const posRows = analytics.positionAnalytics.map((p, idx) => ({
+      'ردیف': idx + 1,
+      'پست سازمانی': p.position,
+      'تعداد واحد': p.unitsCount,
+      'تعداد پرسنل': p.employeesCount,
+      'میانگین کارانه (ریال)': p.avgKaraneh,
+      'بیشترین کارانه (ریال)': p.maxKaraneh,
+      'نفر دارای بیشترین کارانه': p.maxPersonName || '—',
+      'کمترین کارانه (ریال)': p.minKaraneh,
+      [`جمع ${previousPeriodName} (ریال)`]: p.totalPrevious,
+      [`جمع ${currentPeriodName} (ریال)`]: p.totalCurrent,
+      'اختلاف مبلغ (ریال)': p.diffAmount,
+      'درصد تغییر': `${p.diffPercent.toFixed(1)}%`,
+    }));
+    const posSheet = XLSX.utils.json_to_sheet(posRows);
+    posSheet['!cols'] = [
+      { wch: 6 }, { wch: 26 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
+      { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, posSheet, 'خلاصه_پست‌ها');
+  }
+
+  XLSX.writeFile(workbook, fileName);
+}
+
+/**
+ * Export detailed Unit & Position Karaneh Analysis workbook (4 sheets)
+ */
+export function exportKaranehUnitPositionAnalysisToExcel(params: {
+  periodLabel: string;
+  previousPeriodLabel: string;
+  unitAnalytics: KaranehUnitAnalyticsSummary[];
+  positionAnalytics: KaranehPositionAnalyticsSummary[];
+  unitPositionAnalytics: KaranehUnitPositionAnalyticsSummary[];
+  rows: KaranehComparisonRow[];
+  fileName?: string;
+}) {
+  const {
+    periodLabel,
+    previousPeriodLabel,
+    unitAnalytics,
+    positionAnalytics,
+    unitPositionAnalytics,
+    rows,
+    fileName = `آنالیز_کارانه_واحد_و_پست_${periodLabel}.xlsx`,
+  } = params;
+
+  const unitData = unitAnalytics.map((u, idx) => ({
+    'ردیف': idx + 1,
+    'نام واحد': u.department,
+    'تعداد پرسنل': u.employeesCount,
+    'ارسال‌شده به کارانه نهایی': u.submittedCount,
+    'میانگین کارانه (ریال)': u.avgKaraneh,
+    'بیشترین کارانه (ریال)': u.maxKaraneh,
+    'نفر برتر واحد': u.maxPersonName || '—',
+    'کمترین کارانه (ریال)': u.minKaraneh,
+    'نفر دارای کمترین کارانه': u.minPersonName || '—',
+    [`جمع ${previousPeriodLabel} (ریال)`]: u.totalPrevious,
+    [`جمع ${periodLabel} (ریال)`]: u.totalCurrent,
+    'تغییر مبلغ (ریال)': u.diffAmount,
+    'درصد رشد / تغییر': `${u.diffPercent.toFixed(1)}%`,
+  }));
+
+  const posData = positionAnalytics.map((p, idx) => ({
+    'ردیف': idx + 1,
+    'پست سازمانی': p.position,
+    'تعداد واحدهای دارای این پست': p.unitsCount,
+    'تعداد پرسنل': p.employeesCount,
+    'میانگین کارانه (ریال)': p.avgKaraneh,
+    'بیشترین کارانه (ریال)': p.maxKaraneh,
+    'نفر برتر پست': p.maxPersonName || '—',
+    'کمترین کارانه (ریال)': p.minKaraneh,
+    [`جمع ${previousPeriodLabel} (ریال)`]: p.totalPrevious,
+    [`جمع ${periodLabel} (ریال)`]: p.totalCurrent,
+    'تغییر مبلغ (ریال)': p.diffAmount,
+    'درصد رشد / تغییر': `${p.diffPercent.toFixed(1)}%`,
+  }));
+
+  const unitPosData = unitPositionAnalytics.map((up, idx) => ({
+    'ردیف': idx + 1,
+    'نام واحد': up.department,
+    'پست سازمانی': up.position,
+    'تعداد پرسنل': up.employeesCount,
+    'میانگین کارانه (ریال)': up.avgKaraneh,
+    'بیشترین کارانه (ریال)': up.maxKaraneh,
+    'نفر برتر': up.maxPersonName || '—',
+    'کمترین کارانه (ریال)': up.minKaraneh,
+    [`جمع ${previousPeriodLabel} (ریال)`]: up.totalPrevious,
+    [`جمع ${periodLabel} (ریال)`]: up.totalCurrent,
+    'تغییر مبلغ (ریال)': up.diffAmount,
+    'درصد رشد / تغییر': `${up.diffPercent.toFixed(1)}%`,
+  }));
+
+  const detailData = rows.map((r, idx) => {
+    const { firstName, lastName } = splitKaranehNames(r);
+    return {
+      'ردیف': idx + 1,
+      'کد پرسنلی': r.personnelCode,
+      'نام': firstName,
+      'نام خانوادگی': lastName,
+      'واحد اداری': r.department || '',
+      'پست سازمانی': r.position || '',
+      [`کارانه ${previousPeriodLabel} (ریال)`]: r.previousKaraneh,
+      [`کارانه ${periodLabel} (ریال)`]: r.currentKaraneh,
+      'تغییر مبلغ (ریال)': r.diffAmount,
+      'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+      'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+      'وضعیت ارسال': r.status === 'submitted' ? 'ارسال‌شده' : 'پیش‌نویس واحد',
+      'توضیحات': r.notes || '',
+    };
+  });
+
+  const workbook = XLSX.utils.book_new();
+
+  const unitSheet = XLSX.utils.json_to_sheet(unitData);
+  unitSheet['!cols'] = [
+    { wch: 6 }, { wch: 26 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 20 },
+    { wch: 22 }, { wch: 20 }, { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 16 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, unitSheet, 'آنالیز_بر_اساس_واحد');
+
+  const posSheet = XLSX.utils.json_to_sheet(posData);
+  posSheet['!cols'] = [
+    { wch: 6 }, { wch: 26 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
+    { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 16 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, posSheet, 'آنالیز_بر_اساس_پست');
+
+  const unitPosSheet = XLSX.utils.json_to_sheet(unitPosData);
+  unitPosSheet['!cols'] = [
+    { wch: 6 }, { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
+    { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 16 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, unitPosSheet, 'ترکیب_واحد_و_پست');
+
+  const detailsSheet = XLSX.utils.json_to_sheet(detailData);
+  detailsSheet['!cols'] = [
+    { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 20 }, { wch: 22 }, { wch: 22 },
+    { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 24 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, detailsSheet, 'جزئیات_پرسنل_دوره');
+
+  XLSX.writeFile(workbook, fileName);
+}
+
+/**
+ * Export All Karaneh Months (all stored periods) with unit & position analytics
+ */
+export function exportAllKaranehMonthsToExcel(
+  periodsData: Array<{
+    periodId: string;
+    periodLabel: string;
+    previousPeriodLabel: string;
+    rows: KaranehComparisonRow[];
+    unitAnalytics: KaranehUnitAnalyticsSummary[];
+    positionAnalytics: KaranehPositionAnalyticsSummary[];
+  }>,
+  fileName = 'گزارش_جامع_کارانه_همه_ماهها.xlsx'
+) {
+  const monthSummaryData = periodsData.map((p, idx) => {
+    const totalPrev = p.rows.reduce((s, r) => s + r.previousKaraneh, 0);
+    const totalCurr = p.rows.reduce((s, r) => s + r.currentKaraneh, 0);
+    const diff = totalCurr - totalPrev;
+    const growth = totalPrev > 0 ? Number(((diff / totalPrev) * 100).toFixed(1)) : totalCurr > 0 ? 100 : 0;
+    const amounts = p.rows.map((r) => r.currentKaraneh);
+    const avg = amounts.length > 0 ? Math.round(totalCurr / amounts.length) : 0;
+    const maxVal = amounts.length > 0 ? Math.max(...amounts) : 0;
+    const minVal = amounts.length > 0 ? Math.min(...amounts) : 0;
+    return {
+      'ردیف': idx + 1,
+      'دوره (ماه)': p.periodLabel,
+      'مبنای مقایسه': p.previousPeriodLabel,
+      'تعداد واحدها': p.unitAnalytics.length,
+      'تعداد پرسنل': p.rows.length,
+      'میانگین کارانه (ریال)': avg,
+      'بیشترین کارانه (ریال)': maxVal,
+      'کمترین کارانه (ریال)': minVal,
+      'جمع ماه قبل (ریال)': totalPrev,
+      'جمع ماه جدید (ریال)': totalCurr,
+      'اختلاف مبلغ (ریال)': diff,
+      'درصد رشد / تغییر': `${growth.toFixed(1)}%`,
+    };
+  });
+
+  const allUnitsData: Record<string, any>[] = [];
+  let uIdx = 1;
+  for (const p of periodsData) {
+    for (const u of p.unitAnalytics) {
+      allUnitsData.push({
+        'ردیف': uIdx++,
+        'دوره (ماه)': p.periodLabel,
+        'نام واحد': u.department,
+        'تعداد پرسنل': u.employeesCount,
+        'ارسال‌شده': u.submittedCount,
+        'میانگین کارانه (ریال)': u.avgKaraneh,
+        'بیشترین کارانه (ریال)': u.maxKaraneh,
+        'نفر برتر': u.maxPersonName || '—',
+        'کمترین کارانه (ریال)': u.minKaraneh,
+        'جمع ماه قبل (ریال)': u.totalPrevious,
+        'جمع ماه جدید (ریال)': u.totalCurrent,
+        'اختلاف مبلغ (ریال)': u.diffAmount,
+        'درصد تغییر': `${u.diffPercent.toFixed(1)}%`,
+      });
+    }
+  }
+
+  const allPositionsData: Record<string, any>[] = [];
+  let pIdx = 1;
+  for (const p of periodsData) {
+    for (const pos of p.positionAnalytics) {
+      allPositionsData.push({
+        'ردیف': pIdx++,
+        'دوره (ماه)': p.periodLabel,
+        'پست سازمانی': pos.position,
+        'تعداد پرسنل': pos.employeesCount,
+        'میانگین کارانه (ریال)': pos.avgKaraneh,
+        'بیشترین کارانه (ریال)': pos.maxKaraneh,
+        'نفر برتر': pos.maxPersonName || '—',
+        'کمترین کارانه (ریال)': pos.minKaraneh,
+        'جمع ماه قبل (ریال)': pos.totalPrevious,
+        'جمع ماه جدید (ریال)': pos.totalCurrent,
+        'اختلاف مبلغ (ریال)': pos.diffAmount,
+        'درصد تغییر': `${pos.diffPercent.toFixed(1)}%`,
+      });
+    }
+  }
+
+  const allDetailsData: Record<string, any>[] = [];
+  let rIdx = 1;
+  for (const p of periodsData) {
+    for (const r of p.rows) {
+      const { firstName, lastName } = splitKaranehNames(r);
+      allDetailsData.push({
+        'ردیف': rIdx++,
+        'دوره (ماه)': p.periodLabel,
+        'کد پرسنلی': r.personnelCode,
+        'نام': firstName,
+        'نام خانوادگی': lastName,
+        'واحد اداری': r.department || '',
+        'پست سازمانی': r.position || '',
+        'کارانه ماه قبل (ریال)': r.previousKaraneh,
+        'کارانه ماه جدید (ریال)': r.currentKaraneh,
+        'اختلاف مبلغ (ریال)': r.diffAmount,
+        'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+        'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+        'وضعیت ارسال': r.status === 'submitted' ? 'ارسال‌شده' : 'پیش‌نویس واحد',
+        'توضیحات': r.notes || '',
+      });
+    }
+  }
+
+  const workbook = XLSX.utils.book_new();
+  const s1 = XLSX.utils.json_to_sheet(monthSummaryData);
+  s1['!cols'] = Array.from({ length: 12 }, () => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(workbook, s1, 'خلاصه_ماه‌ها');
+
+  const s2 = XLSX.utils.json_to_sheet(allUnitsData);
+  s2['!cols'] = Array.from({ length: 13 }, () => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(workbook, s2, 'آنالیز_واحدها');
+
+  const s3 = XLSX.utils.json_to_sheet(allPositionsData);
+  s3['!cols'] = Array.from({ length: 12 }, () => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(workbook, s3, 'آنالیز_پست‌ها');
+
+  const s4 = XLSX.utils.json_to_sheet(allDetailsData);
+  s4['!cols'] = Array.from({ length: 14 }, () => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(workbook, s4, 'جزئیات_همه_ماه‌ها');
+
   XLSX.writeFile(workbook, fileName);
 }
 

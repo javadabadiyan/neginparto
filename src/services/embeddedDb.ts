@@ -2358,11 +2358,15 @@ export const embeddedDb = {
     const totalRelatives = db.personnel.reduce((sum, p) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
     const payrollPeriodsCount = new Set(db.payroll.map((p) => p.period).filter(Boolean)).size;
     const karanehPeriodsCount = new Set(db.karaneh.map((k) => k.period).filter(Boolean)).size;
+    const submittedKaraneh = db.karaneh.filter((k) => k.status === 'submitted');
+    const submittedKaranehPeriodsCount = new Set(submittedKaraneh.map((k) => k.period).filter(Boolean)).size;
     return {
       storageLocation: 'پایگاه داده دائمی داخلی مرورگر (IndexedDB)',
       totalPersonnel: canPers ? db.personnel.length : 0,
       totalRelatives: canPers ? totalRelatives : 0,
       totalKaranehRecords: canKar ? db.karaneh.length : 0,
+      totalSubmittedKaranehRecords: canKar ? submittedKaraneh.length : 0,
+      submittedKaranehPeriodsCount: canKar ? submittedKaranehPeriodsCount : 0,
       totalPayrollRecords: canPay ? db.payroll.length : 0,
       totalUsers: canUsers ? db.users.length : 0,
       totalActiveUsers: canUsers ? totalActiveUsers : 0,
@@ -2384,7 +2388,7 @@ export const embeddedDb = {
       authProtected: true,
       firebaseProjectId: 'modern-xyston-gv0ns',
       firestoreDatabaseId: 'ai-studio-b445490f-35ad-4b58-ad86-c952f46a7166',
-      schemaVersion: '5.0-negin-parto-nasr-units-hub',
+      schemaVersion: '5.1-negin-parto-nasr-full-sync',
     };
   },
 
@@ -2393,17 +2397,19 @@ export const embeddedDb = {
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'system', 'backupDatabase')) return false;
     const totalRelatives = db.personnel.reduce((sum, p) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
+    const submittedKaranehCount = db.karaneh.filter((k) => k.status === 'submitted').length;
     const backupPayload = {
       ...db,
       _backupMetadata: {
-        version: '5.0-negin-parto-nasr-units-hub',
+        version: '5.1-negin-parto-nasr-full-sync',
         exportedAt: new Date().toISOString(),
-        modules: ['personnel', 'relatives', 'documents', 'karaneh', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
+        modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
         counts: {
           users: db.users.length,
           personnel: db.personnel.length,
           relatives: totalRelatives,
           karaneh: db.karaneh.length,
+          submittedKaraneh: submittedKaranehCount,
           payroll: db.payroll.length,
           jobGroups: db.jobGroups.length,
           jobClassifications: db.jobClassifications.length,
