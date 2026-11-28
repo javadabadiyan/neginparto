@@ -1620,12 +1620,12 @@ export default {
         const canUsers = checkPermission(authUser, 'users', 'view');
         const isCeoOrSuper = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
 
-        const persLimit = 250;
-        const karLimit = 400;
+        const persLimit = isLite ? 80 : 250;
+        const karLimit = isLite ? 100 : 400;
         const payLimit = canPay ? 150 : undefined;
-        const jcLimit = 300;
-        const cmtLimit = 300;
-        const urLimit = 300;
+        const jcLimit = isLite ? 80 : 300;
+        const cmtLimit = isLite ? 80 : 300;
+        const urLimit = isLite ? 80 : 300;
 
         const [
           personnelJson,

@@ -88,6 +88,7 @@ export default function App() {
   const loadedForUserIdRef = useRef<string | null>(null);
   const lastSyncVersionRef = useRef<string | null>(null);
   const isReloadingDataRef = useRef<boolean>(false);
+  const hasLoadedOnceRef = useRef<boolean>(false);
 
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mirrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -326,6 +327,7 @@ export default function App() {
       // ignore storage errors
     }
     loadedForUserIdRef.current = null;
+    hasLoadedOnceRef.current = false;
     setCurrentUser(null);
     setActiveTab('dashboard');
   };
@@ -442,9 +444,12 @@ export default function App() {
     setUsers(bundle.users || []);
     setDbStatus(bundle.dbStatus || null);
 
-    const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
+      const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
     if (nextSync) {
       lastSyncVersionRef.current = String(nextSync);
+    }
+    if (!bundle.partialErrors?.length) {
+      hasLoadedOnceRef.current = true;
     }
   };
 
@@ -455,6 +460,7 @@ export default function App() {
     if (isReloadingDataRef.current && silent && !force) return;
     isReloadingDataRef.current = true;
     const activeUserId = loadedForUserIdRef.current;
+    let firstPaintApplied = false;
     try {
       if (!silent) {
         setSyncingData(true);
@@ -462,16 +468,59 @@ export default function App() {
       }
 
       const useLiteFirst = true;
-      const bundle = await api.getBootstrapData({ lite: useLiteFirst });
+      const bundle = await api.getBootstrapData({
+        lite: useLiteFirst,
+        priorityDomain: activeTab,
+        onFirstPaint: (firstBundle) => {
+          if (loadedForUserIdRef.current !== activeUserId || (isBatchImportActive() && !force)) return;
+          firstPaintApplied = true;
+          applyBundleToState(firstBundle, useLiteFirst && payrollList.length > 0);
+          if (!firstBundle.partialErrors?.length) {
+            setSyncError(null);
+          }
+          if (!silent) {
+            setSyncingData(false);
+          }
+        },
+        onDomainProgress: (domain, items) => {
+          if (loadedForUserIdRef.current !== activeUserId || (isBatchImportActive() && !force)) return;
+          if (!Array.isArray(items)) return;
+          if (domain === 'personnel') setPersonnelList(items);
+          else if (domain === 'karaneh') setKaranehList(items);
+          else if (domain === 'payroll') setPayrollList(items);
+          else if (domain === 'jobClassifications') setJobClassifications(items);
+          else if (domain === 'commitments') setCommitments(items);
+          else if (domain === 'unitReports') setUnitReports(items);
+        },
+      });
       if (loadedForUserIdRef.current !== activeUserId || (isBatchImportActive() && !force)) return;
 
-      applyBundleToState(bundle, useLiteFirst && payrollList.length > 0);
-      setSyncError(null);
+      if (!firstPaintApplied) {
+        applyBundleToState(bundle, useLiteFirst && payrollList.length > 0);
+      } else {
+        setPersonnelList(bundle.personnel || []);
+        setKaranehList(bundle.karaneh || []);
+        if (!useLiteFirst || (bundle.payroll || []).length > 0) {
+          setPayrollList(bundle.payroll || []);
+        }
+        setJobClassifications(bundle.jobClassifications || []);
+        setCommitments(bundle.commitments || []);
+        setUnitReports(bundle.unitReports || []);
+        if (!bundle.partialErrors?.length) {
+          hasLoadedOnceRef.current = true;
+        }
+      }
+
+      if (bundle.partialErrors && bundle.partialErrors.length > 0) {
+        setSyncError(`برخی جداول به طور کامل دریافت نشدند (${bundle.partialErrors[0]}). برای تکمیل روی «تلاش مجدد» کلیک کنید.`);
+      } else {
+        setSyncError(null);
+      }
       if (!silent) {
         setSyncingData(false);
       }
 
-      // Phase 2: Hydrate ONLY skipped heavy slices (payroll / scanned docs) in background without colliding with active Excel uploads
+      // Phase 2: Hydrate ONLY skipped heavy slices (payroll / scanned docs) in background without blocking main tables
       if (bundle.isLite && !isBatchImportActive()) {
         const isAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
         const perms = currentUser
@@ -485,23 +534,39 @@ export default function App() {
           Number(bundle.dbStatus?.totalPersonnelWithDocs || 0) > 0 && Boolean(isAdmin || perms?.personnel?.documents);
 
         if (needPayroll || needDocs) {
-          Promise.all([
-            needPayroll ? api.getPayroll() : Promise.resolve(null),
-            needDocs ? api.getPersonnel({ lite: false }) : Promise.resolve(null),
-          ])
-            .then(([payData, fullPersData]) => {
-              if (loadedForUserIdRef.current !== activeUserId || isBatchImportActive()) return;
-              if (Array.isArray(payData)) setPayrollList(payData);
-              if (Array.isArray(fullPersData) && fullPersData.length > 0) setPersonnelList(fullPersData);
-            })
-            .catch((err: any) => {
-              if (isBatchImportActive()) return;
-              if (activeTab === 'payroll' || activeTab === 'ceo-dashboard') {
-                const msg = err?.message || 'خطا در دریافت اطلاعات حقوق از پایگاه داده';
-                setSyncError(msg);
-                showNotification(msg, 'error');
-              }
-            });
+          Promise.allSettled([
+            needPayroll
+              ? api.getPayroll(undefined, {
+                  onProgress: (itemsSoFar) => {
+                    if (loadedForUserIdRef.current === activeUserId && !isBatchImportActive()) {
+                      setPayrollList(itemsSoFar);
+                    }
+                  },
+                })
+              : Promise.resolve(null),
+            needDocs
+              ? api.getPersonnel({
+                  lite: false,
+                  onProgress: (itemsSoFar) => {
+                    if (loadedForUserIdRef.current === activeUserId && !isBatchImportActive() && itemsSoFar.length >= (bundle.personnel?.length || 0)) {
+                      setPersonnelList(itemsSoFar);
+                    }
+                  },
+                })
+              : Promise.resolve(null),
+          ]).then(([payRes, docsRes]) => {
+            if (loadedForUserIdRef.current !== activeUserId || isBatchImportActive()) return;
+            if (payRes.status === 'fulfilled' && Array.isArray(payRes.value)) {
+              setPayrollList(payRes.value);
+            } else if (payRes.status === 'rejected' && (activeTab === 'payroll' || activeTab === 'ceo-dashboard')) {
+              const msg = payRes.reason?.message || 'خطا در دریافت اطلاعات حقوق از پایگاه داده';
+              setSyncError(msg);
+              showNotification(msg, 'error');
+            }
+            if (docsRes.status === 'fulfilled' && Array.isArray(docsRes.value) && docsRes.value.length > 0) {
+              setPersonnelList(docsRes.value);
+            }
+          });
         }
       }
     } catch (err: any) {
@@ -644,9 +709,12 @@ export default function App() {
         const incoming = String(meta.syncVersion);
         if (lastSyncVersionRef.current === null) {
           lastSyncVersionRef.current = incoming;
+          if (!hasLoadedOnceRef.current) {
+            await loadAllData({ silent: true });
+          }
           return;
         }
-        if (incoming !== lastSyncVersionRef.current) {
+        if (incoming !== lastSyncVersionRef.current || !hasLoadedOnceRef.current) {
           lastSyncVersionRef.current = incoming;
           await loadAllData({ silent: true });
           if (!disposed) {
@@ -884,6 +952,7 @@ export default function App() {
     lockGitHubSession();
     githubAutoPulledRef.current = false;
     loadedForUserIdRef.current = null;
+    hasLoadedOnceRef.current = false;
     signOut(auth).catch(() => {});
     setCurrentUser(null);
     setActiveTab('dashboard');
@@ -2646,7 +2715,7 @@ export default function App() {
             <span>{syncError}</span>
             <button
               type="button"
-              onClick={() => loadAllData()}
+              onClick={() => loadAllData({ force: true })}
               className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold transition cursor-pointer"
             >
               تلاش مجدد دریافت اطلاعات

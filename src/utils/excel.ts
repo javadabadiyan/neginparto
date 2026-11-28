@@ -290,6 +290,143 @@ export function exportFinalKaranehToExcel(
 }
 
 /**
+ * Export All Submitted Final Karaneh Months in one multi-sheet workbook
+ */
+export function exportAllFinalKaranehMonthsToExcel(
+  periodsData: Array<{
+    periodId: string;
+    periodLabel: string;
+    previousPeriodLabel: string;
+    rows: KaranehComparisonRow[];
+    unitSummaries: Array<{
+      department: string;
+      employeesCount: number;
+      totalPrevious: number;
+      totalCurrent: number;
+      diffAmount: number;
+      diffPercent: number;
+      submittedAt?: string;
+      submittedByName?: string;
+    }>;
+  }>,
+  fileName = 'کارانه_نهایی_ارسالی_همه_ماهها.xlsx'
+) {
+  const monthSummaryData = periodsData.map((p, idx) => {
+    const totalPrev = p.rows.reduce((s, r) => s + r.previousKaraneh, 0);
+    const totalCurr = p.rows.reduce((s, r) => s + r.currentKaraneh, 0);
+    const diff = totalCurr - totalPrev;
+    const growth = totalPrev > 0 ? Number(((diff / totalPrev) * 100).toFixed(1)) : totalCurr > 0 ? 100 : 0;
+    return {
+      'ردیف': idx + 1,
+      'دوره (ماه)': p.periodLabel,
+      'مبنای مقایسه': p.previousPeriodLabel,
+      'تعداد واحدها': p.unitSummaries.length,
+      'تعداد پرسنل': p.rows.length,
+      'جمع ماه قبل (ریال)': totalPrev,
+      'جمع کارانه نهایی (ریال)': totalCurr,
+      'تغییر مبلغ (ریال)': diff,
+      'درصد رشد / تغییر': `${growth.toFixed(1)}%`,
+    };
+  });
+
+  const allUnitsData: Record<string, any>[] = [];
+  let unitIdx = 1;
+  for (const p of periodsData) {
+    for (const u of p.unitSummaries) {
+      allUnitsData.push({
+        'ردیف': unitIdx++,
+        'دوره (ماه)': p.periodLabel,
+        'نام واحد': u.department,
+        'تعداد پرسنل': u.employeesCount,
+        'جمع ماه قبل (ریال)': u.totalPrevious,
+        'جمع کارانه نهایی (ریال)': u.totalCurrent,
+        'اختلاف مبلغ (ریال)': u.diffAmount,
+        'درصد افزایش / تغییر': `${u.diffPercent.toFixed(1)}%`,
+        'ارسال‌کننده': u.submittedByName || '—',
+        'تاریخ ارسال نهایی': u.submittedAt || '—',
+      });
+    }
+  }
+
+  const allDetailsData: Record<string, any>[] = [];
+  let rowIdx = 1;
+  for (const p of periodsData) {
+    for (const r of p.rows) {
+      const { firstName, lastName } = splitKaranehNames(r);
+      allDetailsData.push({
+        'ردیف': rowIdx++,
+        'دوره (ماه)': p.periodLabel,
+        'کد پرسنلی': r.personnelCode,
+        'نام': firstName,
+        'نام خانوادگی': lastName,
+        'واحد': r.department || '',
+        'پست': r.position || '',
+        'کارانه ماه قبل (ریال)': r.previousKaraneh,
+        'کارانه نهایی (ریال)': r.currentKaraneh,
+        'تغییر مبلغ (ریال)': r.diffAmount,
+        'درصد تغییر': r.diffPercent ? `${r.diffPercent.toFixed(1)}%` : '۰%',
+        'وضعیت روند': r.trend === 'increase' ? 'افزایشی' : r.trend === 'decrease' ? 'کاهشی' : r.trend === 'new' ? 'جدید' : 'بدون تغییر',
+        'تأییدکننده واحد': r.submittedByName || '—',
+        'زمان ارسال': r.submittedAt || '—',
+        'توضیحات': r.notes || '',
+      });
+    }
+  }
+
+  const monthSheet = XLSX.utils.json_to_sheet(monthSummaryData);
+  monthSheet['!cols'] = [
+    { wch: 6 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 18 },
+  ];
+
+  const unitSheet = XLSX.utils.json_to_sheet(allUnitsData);
+  unitSheet['!cols'] = [
+    { wch: 6 },
+    { wch: 16 },
+    { wch: 24 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 20 },
+  ];
+
+  const detailsSheet = XLSX.utils.json_to_sheet(allDetailsData);
+  detailsSheet['!cols'] = [
+    { wch: 6 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 20 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 25 },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, monthSheet, 'خلاصه_ماه‌ها');
+  XLSX.utils.book_append_sheet(workbook, unitSheet, 'تحلیل_واحدهای_هر_ماه');
+  XLSX.utils.book_append_sheet(workbook, detailsSheet, 'جزئیات_همه_ماه‌ها');
+  XLSX.writeFile(workbook, fileName);
+}
+
+/**
  * Generate sample Excel template for Personnel import (Full exact 28 columns + optional salary/status)
  */
 export function downloadPersonnelTemplate() {

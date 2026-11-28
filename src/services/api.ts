@@ -422,7 +422,7 @@ async function callBackendOnce(
     }
   }
 
-  const timeoutMs = options.timeoutMs ?? 25000;
+  const timeoutMs = options.timeoutMs ?? 35000;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timerId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
@@ -432,6 +432,7 @@ async function callBackendOnce(
     res = await fetch(url, {
       method: fetchMethod,
       headers,
+      cache: 'no-store',
       ...(requestBody !== undefined ? { body: requestBody } : {}),
       ...(controller ? { signal: controller.signal } : {}),
     });
@@ -483,14 +484,14 @@ async function callBackend(
   options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: any; skipAuthRedirect?: boolean; timeoutMs?: number; retries?: number; compress?: boolean } = {}
 ): Promise<any> {
   const method = options.method || 'GET';
-  const maxRetries = options.retries ?? (method === 'GET' ? 1 : 0);
+  const maxRetries = options.retries ?? (method === 'GET' ? 2 : 0);
   let lastRes: any;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     lastRes = await callBackendOnce(route, options);
     if (lastRes && lastRes.success !== false) return lastRes;
     const retryable = Boolean(lastRes?.networkError || lastRes?.timeout || (lastRes?.status && lastRes.status >= 502));
     if (!retryable || attempt >= maxRetries) return lastRes;
-    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
   }
   return lastRes;
 }
@@ -937,38 +938,110 @@ async function fetchPaginatedCloudflareList<T>(
   fallbackError: string,
   startOffset = 0,
   initialItems: T[] = [],
-  knownTotal?: number
+  knownTotal?: number,
+  options?: {
+    concurrency?: number;
+    timeoutMs?: number;
+    retries?: number;
+    onProgress?: (itemsSoFar: T[], total: number) => void;
+  }
 ): Promise<T[]> {
   const sep = baseRoute.includes('?') ? '&' : '?';
+  const reqTimeout = options?.timeoutMs ?? 42000;
+  const reqRetries = options?.retries ?? 3;
   let results = [...initialItems];
-  let offset = startOffset;
+  const offset = startOffset;
 
-  const first = await callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${offset}`, { timeoutMs: 32000, retries: 2 });
-  const firstBatch = unwrapArrayResponse<T>(first, fallbackError);
-  results = results.concat(firstBatch);
+  const fetchSingleSlice = async (off: number, lim: number): Promise<{ items: T[]; raw: any }> => {
+    const res = await callBackend(`${baseRoute}${sep}limit=${lim}&offset=${off}`, {
+      timeoutMs: reqTimeout,
+      retries: reqRetries,
+    });
+    const items = unwrapArrayResponse<T>(res, fallbackError);
+    return { items, raw: res };
+  };
 
-  const total = typeof first?.total === 'number' ? first.total : knownTotal ?? results.length;
-  const hasMore = first?.hasMore !== undefined ? Boolean(first.hasMore) : firstBatch.length === pageSize && results.length < total;
+  let firstRes: { items: T[]; raw: any };
+  try {
+    firstRes = await fetchSingleSlice(offset, pageSize);
+  } catch (err: any) {
+    if (pageSize > 80) {
+      const half = Math.max(40, Math.floor(pageSize / 2));
+      const p1 = await fetchSingleSlice(offset, half);
+      results = results.concat(p1.items);
+      const t1 = typeof p1.raw?.total === 'number' ? p1.raw.total : knownTotal ?? results.length;
+      options?.onProgress?.(results, t1);
+      const p1More = p1.raw?.hasMore !== undefined ? Boolean(p1.raw.hasMore) : p1.items.length === half && results.length < t1;
+      if (!p1More || p1.items.length === 0) return results;
+      firstRes = { items: p1.items, raw: p1.raw };
+      pageSize = half;
+    } else {
+      if (results.length > 0 && err && typeof err === 'object') {
+        (err as any).partialItems = results;
+      }
+      throw err;
+    }
+  }
+
+  const firstBatch = firstRes.items;
+  if (results.length === initialItems.length) {
+    results = results.concat(firstBatch);
+  }
+  const total = typeof firstRes.raw?.total === 'number' ? firstRes.raw.total : knownTotal ?? results.length;
+  options?.onProgress?.(results, total);
+  const hasMore =
+    firstRes.raw?.hasMore !== undefined
+      ? Boolean(firstRes.raw.hasMore)
+      : firstBatch.length === pageSize && results.length < total;
   if (!hasMore || firstBatch.length === 0) return results;
 
   const offsets: number[] = [];
   for (let next = offset + firstBatch.length; next < total; next += pageSize) {
     offsets.push(next);
   }
-  // Fetch remaining pages in pairs so high-latency uplinks don't stall on too many concurrent streams
-  for (let i = 0; i < offsets.length; i += 2) {
-    const wave = offsets.slice(i, i + 2);
-    const pages = await Promise.all(
-      wave.map((off) =>
-        callBackend(`${baseRoute}${sep}limit=${pageSize}&offset=${off}`, { timeoutMs: 32000, retries: 2 }).then((r) =>
-          unwrapArrayResponse<T>(r, fallbackError)
-        )
-      )
-    );
-    for (const p of pages) {
-      results = results.concat(p);
+
+  let waveSize = Math.max(1, Math.min(2, options?.concurrency ?? 2));
+  let idx = 0;
+  while (idx < offsets.length) {
+    const wave = offsets.slice(idx, idx + waveSize);
+    const settled = await Promise.allSettled(wave.map((off) => fetchSingleSlice(off, pageSize)));
+
+    for (let w = 0; w < settled.length; w++) {
+      const outcome = settled[w];
+      const off = wave[w];
+      if (outcome.status === 'fulfilled') {
+        results = results.concat(outcome.value.items);
+        options?.onProgress?.(results, total);
+        continue;
+      }
+
+      // Drop wave size to 1 so flaky mobile connections don't choke on concurrent streams
+      waveSize = 1;
+      const sliceLimit = Math.min(pageSize, Math.max(1, total - off));
+      const subStep = Math.max(40, Math.floor(sliceLimit / 2));
+      try {
+        if (sliceLimit > subStep) {
+          for (let subOff = off; subOff < off + sliceLimit; subOff += subStep) {
+            const take = Math.min(subStep, off + sliceLimit - subOff);
+            const subRes = await fetchSingleSlice(subOff, take);
+            results = results.concat(subRes.items);
+            options?.onProgress?.(results, total);
+          }
+        } else {
+          const retryRes = await fetchSingleSlice(off, sliceLimit);
+          results = results.concat(retryRes.items);
+          options?.onProgress?.(results, total);
+        }
+      } catch (sliceErr: any) {
+        if (sliceErr && typeof sliceErr === 'object') {
+          sliceErr.partialItems = results;
+        }
+        throw sliceErr;
+      }
     }
+    idx += wave.length;
   }
+
   return results;
 }
 
@@ -1058,12 +1131,28 @@ export const api = {
   },
 
   // Personnel
-  async getPersonnel(options?: { lite?: boolean }): Promise<Personnel[]> {
+  async getPersonnel(options?: {
+    lite?: boolean;
+    onProgress?: (itemsSoFar: Personnel[], total: number) => void;
+  }): Promise<Personnel[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPersonnel();
     if (engine === 'cloudflare') {
       const route = options?.lite ? '/personnel?lite=1' : '/personnel';
-      return fetchPaginatedCloudflareList<Personnel>(route, options?.lite ? 250 : 150, 'خطا در دریافت اطلاعات پرسنل');
+      return fetchPaginatedCloudflareList<Personnel>(
+        route,
+        options?.lite ? 180 : 100,
+        'خطا در دریافت اطلاعات پرسنل',
+        0,
+        [],
+        undefined,
+        {
+          concurrency: options?.lite ? 2 : 1,
+          timeoutMs: 42000,
+          retries: 3,
+          onProgress: options?.onProgress,
+        }
+      );
     }
     const json = await callBackend('/personnel');
     return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت اطلاعات پرسنل');
@@ -1400,14 +1489,30 @@ export const api = {
   },
 
   // Payroll (حقوق و دستمزد)
-  async getPayroll(period?: string): Promise<PayrollRecord[]> {
+  async getPayroll(
+    period?: string,
+    options?: { onProgress?: (itemsSoFar: PayrollRecord[], total: number) => void }
+  ): Promise<PayrollRecord[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getPayroll(period);
     const route = period ? `/payroll?period=${encodeURIComponent(period)}` : '/payroll';
     if (engine === 'cloudflare') {
-      return fetchPaginatedCloudflareList<PayrollRecord>(route, 150, 'خطا در دریافت لیست حقوق و دستمزد');
+      return fetchPaginatedCloudflareList<PayrollRecord>(
+        route,
+        140,
+        'خطا در دریافت لیست حقوق و دستمزد',
+        0,
+        [],
+        undefined,
+        {
+          concurrency: 2,
+          timeoutMs: 42000,
+          retries: 3,
+          onProgress: options?.onProgress,
+        }
+      );
     }
-    const json = await callBackend(route, { timeoutMs: 32000 });
+    const json = await callBackend(route, { timeoutMs: 35000 });
     return unwrapArrayResponse<PayrollRecord>(json, 'خطا در دریافت لیست حقوق و دستمزد');
   },
 
@@ -1648,7 +1753,32 @@ export const api = {
     return null;
   },
 
-  async getBootstrapData(options?: { lite?: boolean }): Promise<{
+  async getBootstrapData(options?: {
+    lite?: boolean;
+    priorityDomain?: string;
+    onFirstPaint?: (bundle: {
+      personnel: Personnel[];
+      karaneh: KaranehRecord[];
+      karanehPersonnel?: Personnel[];
+      payroll: PayrollRecord[];
+      jobGroups: JobGroup[];
+      jobClassifications: JobClassificationRecord[];
+      commitments: PersonnelCommitment[];
+      miningVolumes: MiningVolumeRecord[];
+      miningMachinery: MiningMachineryRecord[];
+      unitReports: UnitOperationalReport[];
+      users: User[];
+      dbStatus: DatabaseStatus | null;
+      syncVersion?: string;
+      isLite?: boolean;
+      partialErrors?: string[];
+    }) => void;
+    onDomainProgress?: (
+      domain: 'personnel' | 'karaneh' | 'payroll' | 'jobClassifications' | 'commitments' | 'unitReports',
+      items: any[],
+      isComplete: boolean
+    ) => void;
+  }): Promise<{
     personnel: Personnel[];
     karaneh: KaranehRecord[];
     karanehPersonnel?: Personnel[];
@@ -1663,16 +1793,89 @@ export const api = {
     dbStatus: DatabaseStatus | null;
     syncVersion?: string;
     isLite?: boolean;
+    partialErrors?: string[];
   }> {
     const engine = await detectStorageEngine();
     const wantLite = Boolean(options?.lite);
+
     if (engine === 'cloudflare') {
       const json = await callBackend(wantLite ? '/bootstrap?lite=1' : '/bootstrap', {
-        timeoutMs: wantLite ? 35000 : 55000,
+        timeoutMs: wantLite ? 40000 : 60000,
         retries: 2,
       });
+
+      let d: any = null;
+      const partialErrors: string[] = [];
+
       if (json?.success && json?.data) {
-        const d = json.data;
+        d = json.data;
+      } else if (json?.status === 401 || json?.status === 403) {
+        throw new Error(json?.message || 'نشست کاربری معتبر نیست.');
+      } else if (json?.status !== 404) {
+        // Resilient mobile fallback: if /bootstrap itself timed out, pull initial lightweight endpoints individually via allSettled
+        const [sRes, pRes, kRes, kpRes, jgRes, jcRes, cRes, mvRes, mmRes, urRes, uRes] = await Promise.allSettled([
+          callBackend('/database/status', { timeoutMs: 25000, retries: 2 }),
+          callBackend('/personnel?lite=1&limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
+          callBackend('/karaneh?limit=100&offset=0', { timeoutMs: 32000, retries: 2 }),
+          callBackend('/karaneh/unit-personnel', { timeoutMs: 25000, retries: 1 }),
+          callBackend('/job-groups', { timeoutMs: 25000, retries: 2 }),
+          callBackend('/job-classifications?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
+          callBackend('/commitments?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
+          callBackend('/mining-volumes', { timeoutMs: 25000, retries: 2 }),
+          callBackend('/mining-machinery', { timeoutMs: 25000, retries: 2 }),
+          callBackend('/unit-reports?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
+          callBackend('/users', { timeoutMs: 25000, retries: 2 }),
+        ]);
+
+        const okVal = (r: PromiseSettledResult<any>) =>
+          r.status === 'fulfilled' && r.value && r.value.success !== false ? r.value : null;
+
+        const sOk = okVal(sRes);
+        const pOk = okVal(pRes);
+        const kOk = okVal(kRes);
+        const kpOk = okVal(kpRes);
+        const jgOk = okVal(jgRes);
+        const jcOk = okVal(jcRes);
+        const cOk = okVal(cRes);
+        const mvOk = okVal(mvRes);
+        const mmOk = okVal(mmRes);
+        const urOk = okVal(urRes);
+        const uOk = okVal(uRes);
+
+        const anyOk = Boolean(sOk || pOk || kOk || jgOk || jcOk || cOk || mvOk || mmOk || urOk || uOk);
+        if (!anyOk) {
+          throw new Error(json?.message || 'خطا در اتصال به سرور کلودفلر');
+        }
+
+        if (!pOk) partialErrors.push('خطا در دریافت لیست پرسنل');
+        if (!kOk) partialErrors.push('خطا در دریافت لیست کارانه');
+
+        const statusData = sOk?.data || null;
+        d = {
+          personnel: Array.isArray(pOk?.data) ? pOk.data : [],
+          karaneh: Array.isArray(kOk?.data) ? kOk.data : [],
+          karanehPersonnel: Array.isArray(kpOk?.data) ? kpOk.data : [],
+          payroll: [],
+          jobGroups: Array.isArray(jgOk?.data) ? jgOk.data : [],
+          jobClassifications: Array.isArray(jcOk?.data) ? jcOk.data : [],
+          commitments: Array.isArray(cOk?.data) ? cOk.data : [],
+          miningVolumes: Array.isArray(mvOk?.data) ? mvOk.data : [],
+          miningMachinery: Array.isArray(mmOk?.data) ? mmOk.data : [],
+          unitReports: Array.isArray(urOk?.data) ? urOk.data : [],
+          users: Array.isArray(uOk?.data) ? uOk.data : [],
+          dbStatus: statusData,
+          syncVersion: statusData?.syncVersion,
+          lite: wantLite,
+          personnelTotal: Number(pOk?.total ?? statusData?.totalPersonnel ?? (Array.isArray(pOk?.data) ? pOk.data.length : 0)),
+          karanehTotal: Number(kOk?.total ?? statusData?.totalKaranehRecords ?? (Array.isArray(kOk?.data) ? kOk.data.length : 0)),
+          payrollTotal: Number(statusData?.totalPayrollRecords ?? 0),
+          jobClassificationsTotal: Number(jcOk?.total ?? statusData?.totalJobClassifications ?? (Array.isArray(jcOk?.data) ? jcOk.data.length : 0)),
+          commitmentsTotal: Number(cOk?.total ?? statusData?.totalCommitments ?? (Array.isArray(cOk?.data) ? cOk.data.length : 0)),
+          unitReportsTotal: Number(urOk?.total ?? statusData?.totalUnitReports ?? (Array.isArray(urOk?.data) ? urOk.data.length : 0)),
+        };
+      }
+
+      if (d) {
         let personnelList: Personnel[] = Array.isArray(d.personnel) ? d.personnel : [];
         let karanehList: KaranehRecord[] = Array.isArray(d.karaneh) ? d.karaneh : [];
         let payrollList: PayrollRecord[] = Array.isArray(d.payroll) ? d.payroll : [];
@@ -1687,93 +1890,265 @@ export const api = {
         const cmtTotal = Number(d.commitmentsTotal ?? d.dbStatus?.totalCommitments ?? cmtList.length);
         const urTotal = Number(d.unitReportsTotal ?? d.dbStatus?.totalUnitReports ?? urList.length);
 
-        const extraLoads: Promise<void>[] = [];
+        // First-paint UI immediately with initial compact bundle so tables never sit empty waiting for remaining pages
+        options?.onFirstPaint?.({
+          ...d,
+          personnel: personnelList,
+          karaneh: karanehList,
+          payroll: payrollList,
+          jobClassifications: jcList,
+          commitments: cmtList,
+          unitReports: urList,
+          isLite: Boolean(d.lite),
+          partialErrors: partialErrors.length > 0 ? [...partialErrors] : undefined,
+        });
+
+        type DomainKey = 'personnel' | 'karaneh' | 'payroll' | 'jobClassifications' | 'commitments' | 'unitReports';
+        interface HydrationTask {
+          domain: DomainKey;
+          priority: number;
+          run: () => Promise<void>;
+        }
+
+        const pri = options?.priorityDomain || '';
+        const priorityOf = (domain: DomainKey): number => {
+          if (
+            (pri === 'personnel' && domain === 'personnel') ||
+            ((pri === 'karaneh' || pri === 'final-karaneh') && domain === 'karaneh') ||
+            (pri === 'payroll' && domain === 'payroll') ||
+            (pri === 'job-groups' && domain === 'jobClassifications') ||
+            (pri === 'commitments' && domain === 'commitments') ||
+            ((pri === 'unit-operations' || pri === 'ceo-dashboard') && domain === 'unitReports')
+          ) {
+            return 0;
+          }
+          if (domain === 'personnel') return 1;
+          if (domain === 'karaneh') return 2;
+          return 3;
+        };
+
+        const tasks: HydrationTask[] = [];
+
         if (personnelTotal > personnelList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<Personnel>(
-              wantLite ? '/personnel?lite=1' : '/personnel',
-              wantLite ? 250 : 150,
-              'خطا در دریافت ادامه لیست پرسنل',
-              personnelList.length,
-              personnelList,
-              personnelTotal
-            ).then((full) => {
-              personnelList = full;
-            })
-          );
+          tasks.push({
+            domain: 'personnel',
+            priority: priorityOf('personnel'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<Personnel>(
+                  wantLite ? '/personnel?lite=1' : '/personnel',
+                  180,
+                  'خطا در دریافت ادامه لیست پرسنل',
+                  personnelList.length,
+                  personnelList,
+                  personnelTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      personnelList = itemsSoFar;
+                      options?.onDomainProgress?.('personnel', itemsSoFar, false);
+                    },
+                  }
+                );
+                personnelList = full;
+                options?.onDomainProgress?.('personnel', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > personnelList.length) {
+                  personnelList = err.partialItems;
+                  options?.onDomainProgress?.('personnel', personnelList, false);
+                }
+                partialErrors.push(err?.message || 'بخش پرسنل به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
+
         if (karanehTotal > karanehList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<KaranehRecord>(
-              '/karaneh',
-              400,
-              'خطا در دریافت ادامه لیست کارانه',
-              karanehList.length,
-              karanehList,
-              karanehTotal
-            ).then((full) => {
-              karanehList = full;
-            })
-          );
+          tasks.push({
+            domain: 'karaneh',
+            priority: priorityOf('karaneh'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<KaranehRecord>(
+                  '/karaneh',
+                  220,
+                  'خطا در دریافت ادامه لیست کارانه',
+                  karanehList.length,
+                  karanehList,
+                  karanehTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      karanehList = itemsSoFar;
+                      options?.onDomainProgress?.('karaneh', itemsSoFar, false);
+                    },
+                  }
+                );
+                karanehList = full;
+                options?.onDomainProgress?.('karaneh', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > karanehList.length) {
+                  karanehList = err.partialItems;
+                  options?.onDomainProgress?.('karaneh', karanehList, false);
+                }
+                partialErrors.push(err?.message || 'بخش کارانه به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
+
         if (!wantLite && payrollTotal > payrollList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<PayrollRecord>(
-              '/payroll',
-              150,
-              'خطا در دریافت ادامه لیست حقوق',
-              payrollList.length,
-              payrollList,
-              payrollTotal
-            ).then((full) => {
-              payrollList = full;
-            })
-          );
+          tasks.push({
+            domain: 'payroll',
+            priority: priorityOf('payroll'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<PayrollRecord>(
+                  '/payroll',
+                  140,
+                  'خطا در دریافت ادامه لیست حقوق',
+                  payrollList.length,
+                  payrollList,
+                  payrollTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      payrollList = itemsSoFar;
+                      options?.onDomainProgress?.('payroll', itemsSoFar, false);
+                    },
+                  }
+                );
+                payrollList = full;
+                options?.onDomainProgress?.('payroll', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > payrollList.length) {
+                  payrollList = err.partialItems;
+                  options?.onDomainProgress?.('payroll', payrollList, false);
+                }
+                partialErrors.push(err?.message || 'بخش حقوق به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
+
         if (jcTotal > jcList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<JobClassificationRecord>(
-              '/job-classifications',
-              300,
-              'خطا در دریافت ادامه لیست طبقه‌بندی مشاغل',
-              jcList.length,
-              jcList,
-              jcTotal
-            ).then((full) => {
-              jcList = full;
-            })
-          );
+          tasks.push({
+            domain: 'jobClassifications',
+            priority: priorityOf('jobClassifications'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<JobClassificationRecord>(
+                  '/job-classifications',
+                  200,
+                  'خطا در دریافت ادامه لیست طبقه‌بندی مشاغل',
+                  jcList.length,
+                  jcList,
+                  jcTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      jcList = itemsSoFar;
+                      options?.onDomainProgress?.('jobClassifications', itemsSoFar, false);
+                    },
+                  }
+                );
+                jcList = full;
+                options?.onDomainProgress?.('jobClassifications', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > jcList.length) {
+                  jcList = err.partialItems;
+                  options?.onDomainProgress?.('jobClassifications', jcList, false);
+                }
+                partialErrors.push(err?.message || 'بخش طبقه‌بندی مشاغل به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
+
         if (cmtTotal > cmtList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<PersonnelCommitment>(
-              '/commitments',
-              300,
-              'خطا در دریافت ادامه لیست تعهدات',
-              cmtList.length,
-              cmtList,
-              cmtTotal
-            ).then((full) => {
-              cmtList = full;
-            })
-          );
+          tasks.push({
+            domain: 'commitments',
+            priority: priorityOf('commitments'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<PersonnelCommitment>(
+                  '/commitments',
+                  200,
+                  'خطا در دریافت ادامه لیست تعهدات',
+                  cmtList.length,
+                  cmtList,
+                  cmtTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      cmtList = itemsSoFar;
+                      options?.onDomainProgress?.('commitments', itemsSoFar, false);
+                    },
+                  }
+                );
+                cmtList = full;
+                options?.onDomainProgress?.('commitments', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > cmtList.length) {
+                  cmtList = err.partialItems;
+                  options?.onDomainProgress?.('commitments', cmtList, false);
+                }
+                partialErrors.push(err?.message || 'بخش تعهدات به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
+
         if (urTotal > urList.length) {
-          extraLoads.push(
-            fetchPaginatedCloudflareList<UnitOperationalReport>(
-              '/unit-reports',
-              300,
-              'خطا در دریافت ادامه گزارش واحدها',
-              urList.length,
-              urList,
-              urTotal
-            ).then((full) => {
-              urList = full;
-            })
-          );
+          tasks.push({
+            domain: 'unitReports',
+            priority: priorityOf('unitReports'),
+            run: async () => {
+              try {
+                const full = await fetchPaginatedCloudflareList<UnitOperationalReport>(
+                  '/unit-reports',
+                  200,
+                  'خطا در دریافت ادامه گزارش واحدها',
+                  urList.length,
+                  urList,
+                  urTotal,
+                  {
+                    concurrency: 2,
+                    timeoutMs: 42000,
+                    retries: 3,
+                    onProgress: (itemsSoFar) => {
+                      urList = itemsSoFar;
+                      options?.onDomainProgress?.('unitReports', itemsSoFar, false);
+                    },
+                  }
+                );
+                urList = full;
+                options?.onDomainProgress?.('unitReports', full, true);
+              } catch (err: any) {
+                if (Array.isArray(err?.partialItems) && err.partialItems.length > urList.length) {
+                  urList = err.partialItems;
+                  options?.onDomainProgress?.('unitReports', urList, false);
+                }
+                partialErrors.push(err?.message || 'بخش گزارش واحدها به صورت ناقص بارگذاری شد');
+              }
+            },
+          });
         }
-        if (extraLoads.length > 0) {
-          await Promise.all(extraLoads);
+
+        // Run domain hydration sequentially in priority order so mobile connections never choke on 10 concurrent streams
+        tasks.sort((a, b) => a.priority - b.priority);
+        for (const task of tasks) {
+          await task.run();
         }
 
         return {
@@ -1785,10 +2160,8 @@ export const api = {
           commitments: cmtList,
           unitReports: urList,
           isLite: Boolean(d.lite),
+          partialErrors: partialErrors.length > 0 ? partialErrors : undefined,
         };
-      }
-      if (json?.status !== 404) {
-        throw new Error(json?.message || 'خطا در اتصال به سرور کلودفلر');
       }
     }
 
@@ -1807,7 +2180,7 @@ export const api = {
       api.getDatabaseStatus(),
     ]);
 
-    return {
+    const fallbackBundle = {
       personnel: pData || [],
       karaneh: kData || [],
       karanehPersonnel: kpData || [],
@@ -1823,6 +2196,8 @@ export const api = {
       syncVersion: (sData as any)?.syncVersion,
       isLite: wantLite,
     };
+    options?.onFirstPaint?.(fallbackBundle);
+    return fallbackBundle;
   },
 
   async getDatabaseStatus(): Promise<DatabaseStatus> {

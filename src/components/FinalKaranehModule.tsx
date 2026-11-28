@@ -34,7 +34,7 @@ import {
   getPreviousPeriodId,
   numberToPersianWords
 } from '../utils/persian';
-import { exportFinalKaranehToExcel } from '../utils/excel';
+import { exportFinalKaranehToExcel, exportAllFinalKaranehMonthsToExcel } from '../utils/excel';
 import { TablePagination } from './TablePagination';
 import { buildDuplicateIndex, normalizeDuplicateKey } from '../utils/duplicates';
 
@@ -116,6 +116,20 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
   const currentPeriod = buildPeriod(currentYear, currentMonthIndex);
   const previousPeriod = buildPeriod(prevYear, prevMonthIndex);
 
+  // Export month selector ('current' | 'all' | 'custom' | 'YYYY-MM')
+  const [exportChoice, setExportChoice] = useState<string>('current');
+  const [customExportYear, setCustomExportYear] = useState<string>(initialParsed.year);
+  const [customExportMonthIndex, setCustomExportMonthIndex] = useState<number>(initialParsed.monthIndex);
+
+  const submittedCountByPeriod = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of allSubmittedRecords) {
+      if (!r.period) continue;
+      counts.set(r.period, (counts.get(r.period) || 0) + 1);
+    }
+    return counts;
+  }, [allSubmittedRecords]);
+
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDepartment, setFilterDepartment] = useState<string>('all');
@@ -171,14 +185,6 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     setSelectedIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [currentSubmittedRecords]);
 
-  const prevMap = useMemo(() => {
-    const map = new Map<string, KaranehRecord>();
-    karanehList
-      .filter((k) => k.period === previousPeriod)
-      .forEach((p) => map.set(String(p.personnelCode).trim(), p));
-    return map;
-  }, [karanehList, previousPeriod]);
-
   const personnelByCode = useMemo(() => {
     const map = new Map<string, Personnel>();
     personnelList.forEach((p) => {
@@ -188,10 +194,22 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     return map;
   }, [personnelList]);
 
-  const comparisonRows: KaranehComparisonRow[] = useMemo(() => {
-    return currentSubmittedRecords.map((curr) => {
+  const computePeriodComparison = (
+    targetPeriod: string,
+    comparePeriod: string,
+    deptFilter = 'all'
+  ): { rows: KaranehComparisonRow[]; unitSummaries: UnitSummaryRow[] } => {
+    const submittedForPeriod = allSubmittedRecords.filter(
+      (k) => k.period === targetPeriod && (deptFilter === 'all' || (k.department || 'عمومی') === deptFilter)
+    );
+    const compareMap = new Map<string, KaranehRecord>();
+    karanehList
+      .filter((k) => k.period === comparePeriod)
+      .forEach((p) => compareMap.set(String(p.personnelCode).trim(), p));
+
+    const rows: KaranehComparisonRow[] = submittedForPeriod.map((curr) => {
       const code = String(curr.personnelCode).trim();
-      const prev = prevMap.get(code);
+      const prev = compareMap.get(code);
       const pMatch = personnelByCode.get(normalizeDuplicateKey(code));
       const prevFinal = prev ? Number(prev.finalKaraneh || 0) : 0;
       const currFinal = Number(curr.finalKaraneh || 0);
@@ -234,12 +252,9 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
         submittedByName: curr.submittedByName
       };
     });
-  }, [currentSubmittedRecords, prevMap, personnelByCode]);
 
-  // Unit Summary & Analysis grouped by department
-  const unitSummaries: UnitSummaryRow[] = useMemo(() => {
     const grouped = new Map<string, UnitSummaryRow>();
-    comparisonRows.forEach((row) => {
+    rows.forEach((row) => {
       const dept = row.department || 'عمومی';
       const existing = grouped.get(dept) || {
         department: dept,
@@ -259,7 +274,7 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
       grouped.set(dept, existing);
     });
 
-    return Array.from(grouped.values())
+    const summaries = Array.from(grouped.values())
       .map((u) => {
         const diffAmount = u.totalCurrent - u.totalPrevious;
         const diffPercent =
@@ -271,7 +286,14 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
         return { ...u, diffAmount, diffPercent };
       })
       .sort((a, b) => b.totalCurrent - a.totalCurrent);
-  }, [comparisonRows]);
+
+    return { rows, unitSummaries: summaries };
+  };
+
+  const { rows: comparisonRows, unitSummaries } = useMemo(
+    () => computePeriodComparison(currentPeriod, previousPeriod),
+    [allSubmittedRecords, karanehList, personnelByCode, currentPeriod, previousPeriod]
+  );
 
   const departments = useMemo(
     () => Array.from(new Set(comparisonRows.map((r) => r.department))).filter(Boolean),
@@ -441,17 +463,67 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
     setReopeningUnit(null);
   };
 
-  const handleExportAll = () => {
-    const activeUnitSummaries =
-      filterDepartment === 'all'
-        ? unitSummaries
-        : unitSummaries.filter((u) => u.department === filterDepartment);
-    exportFinalKaranehToExcel(
-      filteredRows,
-      activeUnitSummaries,
-      getPeriodLabel(currentPeriod),
-      getPeriodLabel(previousPeriod)
+  const resolvedExportPeriod =
+    exportChoice === 'current'
+      ? currentPeriod
+      : exportChoice === 'custom'
+      ? buildPeriod(customExportYear, customExportMonthIndex)
+      : exportChoice;
+
+  const exportRowCount =
+    exportChoice === 'all'
+      ? allSubmittedRecords.length
+      : exportChoice === 'current' || resolvedExportPeriod === currentPeriod
+      ? filteredRows.length
+      : submittedCountByPeriod.get(resolvedExportPeriod) || 0;
+
+  const handleExportSpecificPeriod = (targetPeriod: string) => {
+    if (targetPeriod === currentPeriod) {
+      const activeUnitSummaries =
+        filterDepartment === 'all'
+          ? unitSummaries
+          : unitSummaries.filter((u) => u.department === filterDepartment);
+      exportFinalKaranehToExcel(
+        filteredRows,
+        activeUnitSummaries,
+        getPeriodLabel(currentPeriod),
+        getPeriodLabel(previousPeriod)
+      );
+      return;
+    }
+
+    const compPrev = getPreviousPeriodId(targetPeriod);
+    const { rows, unitSummaries: summaries } = computePeriodComparison(
+      targetPeriod,
+      compPrev,
+      filterDepartment
     );
+    exportFinalKaranehToExcel(
+      rows,
+      summaries,
+      getPeriodLabel(targetPeriod),
+      getPeriodLabel(compPrev)
+    );
+  };
+
+  const handleExportAll = () => {
+    if (exportChoice === 'all') {
+      const periodsPayload = submittedPeriods.map((pId) => {
+        const compPrev = getPreviousPeriodId(pId);
+        const { rows, unitSummaries: summaries } = computePeriodComparison(pId, compPrev, filterDepartment);
+        return {
+          periodId: pId,
+          periodLabel: getPeriodLabel(pId),
+          previousPeriodLabel: getPeriodLabel(compPrev),
+          rows,
+          unitSummaries: summaries,
+        };
+      });
+      exportAllFinalKaranehMonthsToExcel(periodsPayload);
+      return;
+    }
+
+    handleExportSpecificPeriod(resolvedExportPeriod);
   };
 
   const handleExportSingleUnit = (unit: UnitSummaryRow) => {
@@ -498,14 +570,72 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
             </button>
           )}
           {canExportExcel && (
-            <button
-              onClick={handleExportAll}
-              disabled={filteredRows.length === 0}
-              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs disabled:opacity-50"
-            >
-              <Download className="w-4 h-4" />
-              <span>خروجی اکسل جامع کارانه نهایی ({toPersianDigits(filteredRows.length)})</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5 bg-emerald-50/70 border border-emerald-200 p-1.5 rounded-xl">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-emerald-950 px-1 whitespace-nowrap">
+                  ماه خروجی:
+                </span>
+                <select
+                  value={exportChoice}
+                  onChange={(e) => setExportChoice(e.target.value)}
+                  className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500 persian-num"
+                >
+                  <option value="current">
+                    ماه جاری جدول ({getPeriodLabel(currentPeriod)} - {toPersianDigits(filteredRows.length)})
+                  </option>
+                  {submittedPeriods
+                    .filter((p) => p !== currentPeriod)
+                    .map((p) => (
+                      <option key={p} value={p}>
+                        {getPeriodLabel(p)} ({toPersianDigits(submittedCountByPeriod.get(p) || 0)} ردیف)
+                      </option>
+                    ))}
+                  <option value="custom">انتخاب ماه و سال دلخواه...</option>
+                  {submittedPeriods.length > 1 && (
+                    <option value="all">
+                      همه ماه‌های ارسالی ({toPersianDigits(submittedPeriods.length)} ماه - {toPersianDigits(allSubmittedRecords.length)} ردیف)
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              {exportChoice === 'custom' && (
+                <div className="flex items-center gap-1">
+                  <select
+                    value={customExportMonthIndex}
+                    onChange={(e) => setCustomExportMonthIndex(Number(e.target.value))}
+                    className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {PERSIAN_MONTHS.map((m, idx) => (
+                      <option key={m} value={idx}>{m}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={customExportYear}
+                    onChange={(e) => setCustomExportYear(e.target.value)}
+                    className="bg-white text-slate-900 border border-emerald-300 rounded-lg px-2 py-1.5 text-xs font-bold focus:outline-hidden focus:ring-2 focus:ring-emerald-500 persian-num"
+                  >
+                    {YEARS_LIST.map((y) => (
+                      <option key={y} value={y}>{toPersianDigits(y)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleExportAll}
+                disabled={exportRowCount === 0}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs disabled:opacity-50 cursor-pointer persian-num"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>
+                  {exportChoice === 'all'
+                    ? `دانلود خروجی جامع همه ماه‌ها (${toPersianDigits(exportRowCount)})`
+                    : `دانلود خروجی ${getPeriodLabel(resolvedExportPeriod)} (${toPersianDigits(exportRowCount)})`}
+                </span>
+              </button>
+            </div>
           )}
 
           {canDeleteAll && onDeleteAllKaraneh && allSubmittedRecords.length > 0 && (
@@ -599,20 +729,43 @@ export const FinalKaranehModule: React.FC<FinalKaranehModuleProps> = ({
         {submittedPeriods.length > 0 && (
           <div className="pt-2.5 border-t border-slate-800 flex flex-wrap items-center gap-2 text-[11px]">
             <span className="text-slate-400 font-semibold">دوره‌های دارای کارانه ارسالی:</span>
-            {submittedPeriods.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => handleSelectPeriodShortcut(p)}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-colors persian-num ${
-                  p === currentPeriod
-                    ? 'bg-violet-600 text-white'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                {getPeriodLabel(p)}
-              </button>
-            ))}
+            {submittedPeriods.map((p) => {
+              const pCount = submittedCountByPeriod.get(p) || 0;
+              return (
+                <div
+                  key={p}
+                  className={`inline-flex items-center rounded-lg overflow-hidden border transition-colors ${
+                    p === currentPeriod
+                      ? 'border-violet-500 bg-violet-600 text-white'
+                      : 'border-slate-700 bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPeriodShortcut(p)}
+                    className={`px-2.5 py-1 font-bold transition-colors persian-num cursor-pointer ${
+                      p === currentPeriod ? 'hover:bg-violet-700' : 'hover:bg-slate-700'
+                    }`}
+                  >
+                    {getPeriodLabel(p)} ({toPersianDigits(pCount)})
+                  </button>
+                  {canExportExcel && pCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleExportSpecificPeriod(p)}
+                      title={`دانلود مستقیم خروجی اکسل ${getPeriodLabel(p)}`}
+                      className={`px-2 py-1 border-r transition-colors cursor-pointer ${
+                        p === currentPeriod
+                          ? 'border-violet-500 bg-emerald-600 hover:bg-emerald-500 text-white'
+                          : 'border-slate-700 bg-slate-900/70 hover:bg-emerald-600 text-emerald-400 hover:text-white'
+                      }`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
