@@ -111,6 +111,262 @@ function verifyAuthToken(token: string): { uid: string; usr: string; exp: number
   }
 }
 
+function faDateOnlyServer(dateInput?: Date | number | string): string {
+  try {
+    const d = dateInput instanceof Date ? dateInput : dateInput ? new Date(dateInput) : new Date();
+    return new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  } catch {
+    return new Date().toLocaleDateString('fa-IR');
+  }
+}
+
+function faDateTimeServer(dateInput?: Date | number | string): string {
+  try {
+    const d = dateInput instanceof Date ? dateInput : dateInput ? new Date(dateInput) : new Date();
+    const datePart = new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+    const timePart = new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(d);
+    return `${datePart} - ${timePart}`;
+  } catch {
+    return new Date().toLocaleString('fa-IR');
+  }
+}
+
+function buildEditorMetaServer(authUser: any) {
+  return {
+    updatedByUserId: String(authUser?.id || ''),
+    updatedByUsername: String(authUser?.username || ''),
+    updatedByName: String(authUser?.fullName || authUser?.username || ''),
+    updatedAt: faDateTimeServer(),
+  };
+}
+
+const AUDIT_LABELS_SERVER: Record<string, Record<string, string>> = {
+  users: {
+    username: 'نام کاربری',
+    fullName: 'نام و نام خانوادگی',
+    role: 'نقش سازمانی',
+    department: 'واحد اداری',
+    email: 'ایمیل',
+    isActive: 'وضعیت فعال بودن',
+    permissions: 'سطوح دسترسی',
+  },
+  personnel: {
+    personnelCode: 'کد پرسنلی',
+    employeeId: 'شناسه کارمند',
+    firstName: 'نام',
+    lastName: 'نام خانوادگی',
+    fullName: 'نام و نام خانوادگی',
+    nationalId: 'کد ملی',
+    department: 'واحد سازمانی',
+    position: 'پست سازمانی',
+    jobTitle: 'شغل',
+    employmentType: 'نوع استخدام',
+    status: 'وضعیت همکاری',
+    baseSalary: 'حقوق پایه (ریال)',
+    phone: 'تلفن همراه',
+    education: 'مدرک تحصیلی',
+    workLocation: 'محل خدمت',
+    notes: 'توضیحات',
+  },
+  karaneh: {
+    personnelCode: 'کد پرسنلی',
+    fullName: 'نام و نام خانوادگی',
+    department: 'واحد اداری',
+    position: 'پست سازمانی',
+    period: 'دوره',
+    baseKaraneh: 'کارانه پایه',
+    overtimeBonus: 'پاداش اضافه‌کاری',
+    deductions: 'کسورات',
+    finalKaraneh: 'کارانه نهایی',
+    status: 'وضعیت ارسال',
+    notes: 'توضیحات',
+  },
+  jobGroups: {
+    code: 'کد گروه',
+    title: 'عنوان گروه',
+    grade: 'رتبه',
+    minBaseSalary: 'حداقل حقوق پایه',
+    maxBaseSalary: 'حداکثر حقوق پایه',
+    maxKaranehCeiling: 'سقف کارانه',
+    requiredExperienceYears: 'سابقه مورد نیاز',
+    requiredDegree: 'مدرک مورد نیاز',
+    description: 'توضیحات',
+  },
+  jobClassifications: {
+    personnelCode: 'کد پرسنلی',
+    firstName: 'نام',
+    lastName: 'نام خانوادگی',
+    department: 'واحد',
+    workLocation: 'محل خدمت',
+    jobGroup: 'گروه شغلی',
+    jobTitle: 'شغل',
+    position: 'پست',
+    education: 'مدرک تحصیلی',
+  },
+  commitments: {
+    personnelCode: 'کد پرسنلی',
+    personnelName: 'نام پرسنل',
+    commitmentType: 'نوع تعهد',
+    amount: 'مبلغ تعهد',
+    previouslyTakenAmount: 'مبلغ قبلی',
+    maxAllowedAmount: 'سقف مجاز کل',
+    status: 'وضعیت',
+    isArchived: 'بایگانی شده',
+    guarantorName: 'ضامن',
+    startDate: 'تاریخ شروع',
+    endDate: 'تاریخ پایان',
+    notes: 'توضیحات',
+  },
+  miningVolumes: {
+    period: 'دوره',
+    unitName: 'نام واحد',
+    activityType: 'نوع عملیات',
+    metricTitle: 'عنوان شاخص',
+    volumeValue: 'حجم محقق‌شده',
+    targetVolume: 'برنامه ماه',
+    unitLabel: 'یکا',
+    status: 'وضعیت',
+    notes: 'توضیحات',
+  },
+  miningMachinery: {
+    machineCode: 'کد دستگاه',
+    machineName: 'نام تجهیز',
+    machineType: 'نوع تجهیز',
+    unitName: 'واحد مستقر',
+    status: 'وضعیت دستگاه',
+    issueDescription: 'شرح خرابی',
+    stoppedSince: 'تاریخ توقف',
+    estimatedReadyDate: 'تخمین آماده‌به‌کار',
+    operatorName: 'اپراتور / مسئول',
+    notes: 'توضیحات',
+  },
+  unitReports: {
+    period: 'دوره',
+    unitName: 'نام واحد',
+    reportCategory: 'دسته‌بندی گزارش',
+    metricName: 'عنوان شاخص',
+    actualValue: 'مقدار محقق‌شده',
+    previousValue: 'مقدار ماه قبل',
+    targetValue: 'هدف ماه',
+    unitLabel: 'یکا',
+    status: 'وضعیت',
+    submittedBy: 'ثبت‌کننده',
+    notes: 'توضیحات',
+  },
+};
+
+function formatAuditValServer(v: any): string {
+  if (v === undefined || v === null || v === '') return '—';
+  if (typeof v === 'boolean') return v ? 'بله' : 'خیر';
+  if (typeof v === 'number') return Number.isFinite(v) ? v.toLocaleString('fa-IR') : '0';
+  if (Array.isArray(v)) return `${v.length} مورد`;
+  if (typeof v === 'object') return '[ساختاری]';
+  const s = String(v).trim();
+  return s.length > 90 ? `${s.slice(0, 87)}...` : s;
+}
+
+function computeAuditDiffServer(
+  oldObj: any,
+  newObj: any,
+  moduleKey: string,
+  maxChanges = 15
+): Array<{ field: string; label: string; oldValue: string; newValue: string }> {
+  if (!oldObj || !newObj || typeof oldObj !== 'object' || typeof newObj !== 'object') return [];
+  const labels = AUDIT_LABELS_SERVER[moduleKey] || {};
+  const ignored = new Set([
+    'id', 'password', 'documents', 'rawFields', 'updatedAt', 'updatedByUserId', 'updatedByUsername',
+    'updatedByName', 'createdAt', 'createdByUserId', 'createdByUsername', 'createdByName', 'lastLogin',
+  ]);
+  const keys = Array.from(new Set([...Object.keys(labels), ...Object.keys(newObj)]));
+  const diffs: Array<{ field: string; label: string; oldValue: string; newValue: string }> = [];
+  for (const key of keys) {
+    if (ignored.has(key)) continue;
+    if (key === 'permissions') {
+      if (JSON.stringify(oldObj.permissions || {}) !== JSON.stringify(newObj.permissions || {})) {
+        diffs.push({
+          field: 'permissions',
+          label: labels.permissions || 'سطوح دسترسی',
+          oldValue: 'دسترسی قبلی',
+          newValue: 'تغییر سطوح دسترسی',
+        });
+      }
+      continue;
+    }
+    const prevRaw = oldObj[key];
+    const nextRaw = newObj[key];
+    const prevStr = prevRaw === undefined || prevRaw === null ? '' : String(prevRaw).trim();
+    const nextStr = nextRaw === undefined || nextRaw === null ? '' : String(nextRaw).trim();
+    if (prevStr === nextStr) continue;
+    diffs.push({
+      field: key,
+      label: labels[key] || key,
+      oldValue: formatAuditValServer(prevRaw),
+      newValue: formatAuditValServer(nextRaw),
+    });
+    if (diffs.length >= maxChanges) break;
+  }
+  return diffs;
+}
+
+function recordAuditLogServer(
+  db: any,
+  authUser: any,
+  entry: {
+    module: string;
+    action: string;
+    targetId?: string;
+    targetLabel?: string;
+    summary: string;
+    changes?: Array<{ field: string; label: string; oldValue: string; newValue: string }>;
+    recordCount?: number;
+  }
+) {
+  try {
+    if (!db || typeof db !== 'object') return;
+    if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+    const nowIso = new Date().toISOString();
+    const logItem = {
+      id: `aud-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      createdAtIso: nowIso,
+      timestampIso: nowIso,
+      persianDateTime: faDateTimeServer(),
+      userId: String(authUser?.id || ''),
+      username: String(authUser?.username || ''),
+      userFullName: String(authUser?.fullName || authUser?.username || 'سیستم'),
+      userRole: String(authUser?.role || ''),
+      module: String(entry.module || 'system'),
+      action: String(entry.action || 'update'),
+      targetId: String(entry.targetId || ''),
+      targetLabel: String(entry.targetLabel || ''),
+      summary: String(entry.summary || ''),
+      changes: Array.isArray(entry.changes) ? entry.changes.slice(0, 20) : [],
+      recordCount: Number(entry.recordCount ?? 1),
+    };
+    db.auditLogs.unshift(logItem);
+    if (db.auditLogs.length > 5000) {
+      db.auditLogs = db.auditLogs.slice(0, 5000);
+    }
+  } catch {
+    // Non-blocking audit safeguard
+  }
+}
+
 // Initial default seed database (only used if hr_database.json does NOT exist)
 function getInitialDatabase() {
   return {
@@ -695,6 +951,7 @@ function getInitialDatabase() {
         updatedAt: '1403/08/29',
       },
     ],
+    auditLogs: [] as any[],
   };
 }
 
@@ -758,6 +1015,9 @@ function loadDatabase() {
     if (!Array.isArray(parsed.unitReports)) {
       parsed.unitReports = [];
     }
+    if (!Array.isArray(parsed.auditLogs)) {
+      parsed.auditLogs = [];
+    }
     return parsed;
   } catch (err) {
     console.error('Error reading local database file:', err);
@@ -811,6 +1071,7 @@ async function ensurePostgresHydrated(): Promise<void> {
             miningVolumes: (pgSnap.miningVolumes && pgSnap.miningVolumes.length > 0) ? pgSnap.miningVolumes : (localDb.miningVolumes || []),
             miningMachinery: (pgSnap.miningMachinery && pgSnap.miningMachinery.length > 0) ? pgSnap.miningMachinery : (localDb.miningMachinery || []),
             unitReports: (pgSnap.unitReports && pgSnap.unitReports.length > 0) ? pgSnap.unitReports : (localDb.unitReports || []),
+            auditLogs: Array.isArray(localDb.auditLogs) ? localDb.auditLogs : [],
           });
         } else {
           // Non-destructive initial migration from existing local JSON baseline into PostgreSQL
@@ -873,7 +1134,7 @@ function getEmptyPermissionsServer() {
     commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
     payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
     users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false, securityLogs: false },
     smartDashboard: { view: false, exportExcel: false, print: false },
     ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
     unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] as string[] },
@@ -897,7 +1158,7 @@ function getFullAdminPermissionsServer() {
     commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
     payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
     users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
+    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true, securityLogs: true },
     smartDashboard: { view: true, exportExcel: true, print: true },
     ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
     unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] as string[] },
@@ -982,7 +1243,7 @@ function normalizePermissionsServer(raw: any) {
       commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
       payroll: { view: lk || lp, create: lk || lp, edit: lk || lp, delete: (lk || lp) && lu, deleteAll: false, importExcel: (lk || lp) && li, exportExcel: (lk || lp) && le },
       users: { view: lu, create: lu, edit: lu, delete: lu, deleteAll: false, importExcel: lu && li, exportExcel: lu && le },
-      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb },
+      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
@@ -1028,7 +1289,7 @@ function normalizePermissionsServer(raw: any) {
     commitments: { view: b(c.view), create: b(c.create), edit: b(c.edit), delete: b(c.delete), deleteAll: b(c.deleteAll), print: b(c.print), archive: b(c.archive), importExcel: b(c.importExcel), exportExcel: b(c.exportExcel) },
     payroll: { view: b(pr.view), create: b(pr.create), edit: b(pr.edit), delete: b(pr.delete), deleteAll: b(pr.deleteAll), importExcel: b(pr.importExcel), exportExcel: b(pr.exportExcel) },
     users: { view: b(u.view), create: b(u.create), edit: b(u.edit), delete: b(u.delete), deleteAll: b(u.deleteAll), importExcel: b(u.importExcel), exportExcel: b(u.exportExcel) },
-    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase) },
+    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase), securityLogs: b(s.securityLogs) },
     smartDashboard: { view: b(sd.view), exportExcel: b(sd.exportExcel), print: b(sd.print) },
     ceoDashboard: { view: b(cd.view), create: b(cd.create), edit: b(cd.edit), delete: b(cd.delete), deleteAll: b(cd.deleteAll), importExcel: b(cd.importExcel), exportExcel: b(cd.exportExcel), print: b(cd.print) },
     unitOperations: { view: b(uo.view), create: b(uo.create), edit: b(uo.edit), delete: b(uo.delete), deleteAll: b(uo.deleteAll), importExcel: b(uo.importExcel), exportExcel: b(uo.exportExcel), allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [] },
@@ -1203,7 +1464,14 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (check.needsMigration) {
       user.password = hashPassword(String(password));
     }
-    user.lastLogin = new Date().toLocaleString('fa-IR');
+    user.lastLogin = faDateTimeServer();
+    recordAuditLogServer(db, user, {
+      module: 'auth',
+      action: 'login',
+      targetId: user.id,
+      targetLabel: user.username,
+      summary: `ورود موفق کاربر «${user.fullName || user.username}» به سامانه`,
+    });
     await persistDatabase(db);
 
     return res.json({
@@ -1261,7 +1529,14 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
 
     user.uid = decoded.uid;
     user.email = email;
-    user.lastLogin = new Date().toLocaleString('fa-IR');
+    user.lastLogin = faDateTimeServer();
+    recordAuditLogServer(db, user, {
+      module: 'auth',
+      action: 'login',
+      targetId: user.id,
+      targetLabel: user.username,
+      summary: `ورود با حساب گوگل توسط «${user.fullName || user.username}»`,
+    });
     await persistDatabase(db);
     await linkUserFirebaseUid(user.id, decoded.uid, email).catch(() =>
       getOrCreateUserByUid(decoded.uid, email, {
@@ -1289,6 +1564,44 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
 
 app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   res.json({ success: true, data: sanitizeUserServer(req.authUser) });
+});
+
+// 1b. Security Audit Logs (Append-only read endpoint with fail-closed RBAC)
+app.get('/api/audit-logs', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  if (!isSuperAdminUser(req.authUser) && !checkPermission(req.authUser, 'system', 'securityLogs')) {
+    return res.status(403).json({ success: false, message: 'شما مجوز مشاهده گزارش امنیت و عملکرد کاربران را ندارید.' });
+  }
+  const db = loadDatabase();
+  const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit || '100'), 10) || 100));
+  const offset = Math.max(0, parseInt(String(req.query.offset || '0'), 10) || 0);
+  const filterUserId = String(req.query.userId || '').trim();
+  const filterModule = String(req.query.module || '').trim();
+  const filterAction = String(req.query.action || '').trim();
+  const search = String(req.query.search || '').trim().toLowerCase();
+
+  let logs: any[] = Array.isArray(db.auditLogs) ? [...db.auditLogs] : [];
+  logs.sort((a, b) => String(b.createdAtIso || b.timestampIso || '').localeCompare(String(a.createdAtIso || a.timestampIso || '')));
+
+  if (filterUserId) logs = logs.filter((l) => String(l.userId || '') === filterUserId);
+  if (filterModule) logs = logs.filter((l) => String(l.module || '') === filterModule);
+  if (filterAction) logs = logs.filter((l) => String(l.action || '') === filterAction);
+  if (search) {
+    logs = logs.filter((l) => {
+      const hay = `${l.username || ''} ${l.userFullName || ''} ${l.targetLabel || ''} ${l.summary || ''} ${JSON.stringify(l.changes || [])}`.toLowerCase();
+      return hay.includes(search);
+    });
+  }
+
+  const total = logs.length;
+  const data = logs.slice(offset, offset + limit);
+  res.json({
+    success: true,
+    data,
+    total,
+    limit,
+    offset,
+    hasMore: offset + limit < total,
+  });
 });
 
 // 2. Users Management
@@ -1333,10 +1646,18 @@ app.post('/api/users', requireAuth, requirePerm('users', 'create'), async (req: 
     department: department || '',
     permissions: normalizedPermissions,
     isActive: true,
-    createdAt: new Date().toLocaleDateString('fa-IR'),
+    createdAt: faDateOnlyServer(),
+    ...buildEditorMetaServer(req.authUser),
   };
 
   db.users.push(newUser);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'users',
+    action: 'create',
+    targetId: newUser.id,
+    targetLabel: `${newUser.fullName} (${newUser.username})`,
+    summary: `ایجاد حساب کاربری جدید «${newUser.fullName}» (${newUser.username})`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, data: sanitizeUserServer(newUser), message: 'کاربر جدید با موفقیت ذخیره شد.' });
@@ -1373,7 +1694,7 @@ app.put('/api/users/:id', requireAuth, requirePerm('users', 'edit'), async (req:
     ? normalizePermissionsServer(permissions)
     : normalizePermissionsServer(existing.permissions);
 
-  db.users[index] = {
+  const updatedUser = {
     ...existing,
     fullName: fullName ?? existing.fullName,
     email: email !== undefined ? String(email).trim().toLowerCase() : existing.email,
@@ -1382,7 +1703,21 @@ app.put('/api/users/:id', requireAuth, requirePerm('users', 'edit'), async (req:
     permissions: nextPermissions,
     isActive: isActive ?? existing.isActive,
     password: password ? hashPassword(String(password)) : existing.password,
+    ...buildEditorMetaServer(req.authUser),
   };
+  db.users[index] = updatedUser;
+  const diffs = computeAuditDiffServer(existing, updatedUser, 'users');
+  if (password) {
+    diffs.push({ field: 'password', label: 'رمز عبور', oldValue: '••••••', newValue: 'تغییر رمز عبور' });
+  }
+  recordAuditLogServer(db, req.authUser, {
+    module: 'users',
+    action: 'update',
+    targetId: updatedUser.id,
+    targetLabel: `${updatedUser.fullName} (${updatedUser.username})`,
+    summary: `ویرایش حساب و دسترسی‌های «${updatedUser.fullName}»`,
+    changes: diffs,
+  });
 
   try {
     await persistDatabase(db);
@@ -1407,6 +1742,13 @@ app.delete('/api/users/:id', requireAuth, requirePerm('users', 'delete'), async 
   }
 
   db.users = db.users.filter((u: any) => u.id !== id);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'users',
+    action: 'delete',
+    targetId: id,
+    targetLabel: `${user.fullName || ''} (${user.username || ''})`,
+    summary: `حذف حساب کاربری «${user.fullName || user.username}»`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'کاربر با موفقیت حذف گردید.' });
@@ -1552,7 +1894,8 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
     const k = String(u.username || '').trim().toLowerCase();
     if (k && !userIdxMap.has(k)) userIdxMap.set(k, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const todayFa = faDateOnlyServer();
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   let updated = 0;
@@ -1585,6 +1928,7 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
           ? normalizePermissionsServer(buildPresetPermissionsServer(presetLabel))
           : normalizePermissionsServer(existing.permissions),
         password: rawPass ? hashPassword(rawPass) : existing.password,
+        ...editorMeta,
       };
       updated++;
     } else {
@@ -1600,10 +1944,20 @@ app.post('/api/users/batch-import', requireAuth, async (req: AuthenticatedReques
         isActive,
         permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissionsServer(buildPresetPermissionsServer(presetLabel)) : getEmptyPermissionsServer(),
         createdAt: todayFa,
+        ...editorMeta,
       });
       userIdxMap.set(unameKey, newIdx);
       added++;
     }
+  }
+
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'users',
+      action: 'import_excel',
+      summary: `بارگذاری اکسل کاربران (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
 
   try {
@@ -1635,6 +1989,14 @@ app.post('/api/users/batch-delete', requireAuth, requirePerm('users', 'delete'),
     return false;
   });
   const deletedCount = before - db.users.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'users',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} حساب کاربری`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} کاربر با موفقیت حذف گردید.` });
@@ -1652,6 +2014,12 @@ app.post('/api/users/delete-all', requireAuth, requirePerm('users', 'deleteAll')
     (u: any) => u.username === 'javadabadiyan' || u.id === req.authUser?.id
   );
   const deletedCount = before - db.users.length;
+  recordAuditLogServer(db, req.authUser, {
+    module: 'users',
+    action: 'delete_all',
+    summary: `پاکسازی جدول کاربران (${deletedCount} حساب کاربری)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({
@@ -1693,16 +2061,26 @@ app.post('/api/personnel', requireAuth, requirePerm('personnel', 'create'), asyn
     return res.status(400).json({ success: false, message: `کد پرسنلی ${pData.personnelCode} قبلاً برای پرسنل دیگری ثبت شده است.` });
   }
 
+  const editorMeta = buildEditorMetaServer(req.authUser);
   const newPersonnel = {
     id: `p-${Date.now()}`,
     ...pData,
     fullName: `${pData.firstName} ${pData.lastName}`.trim() || String(pData.fullName || ''),
-    relatives: Array.isArray(pData.relatives) ? pData.relatives : [],
-    createdAt: pData.createdAt || new Date().toLocaleDateString('fa-IR'),
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    relatives: Array.isArray(pData.relatives)
+      ? pData.relatives.map((r: any) => ({ ...r, ...editorMeta }))
+      : [],
+    createdAt: pData.createdAt || faDateOnlyServer(),
+    ...editorMeta,
   };
 
   db.personnel.push(newPersonnel);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'personnel',
+    action: 'create',
+    targetId: newPersonnel.id,
+    targetLabel: `${newPersonnel.fullName} (${newPersonnel.personnelCode})`,
+    summary: `ایجاد پرونده پرسنلی «${newPersonnel.fullName}» (کد ${newPersonnel.personnelCode})`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, data: newPersonnel, message: 'پرسنل جدید با موفقیت در پرونده‌های سازمانی ثبت گردید.' });
@@ -1729,13 +2107,37 @@ app.put('/api/personnel/:id', requireAuth, requirePerm('personnel', 'edit'), asy
   }
 
   const prev = db.personnel[index];
-  db.personnel[index] = {
+  const editorMeta = buildEditorMetaServer(req.authUser);
+  const nextRelatives =
+    pData.relatives !== undefined
+      ? (Array.isArray(pData.relatives)
+          ? pData.relatives.map((r: any) => ({
+              ...r,
+              updatedAt: r.updatedAt || editorMeta.updatedAt,
+              updatedByUserId: r.updatedByUserId || editorMeta.updatedByUserId,
+              updatedByUsername: r.updatedByUsername || editorMeta.updatedByUsername,
+              updatedByName: r.updatedByName || editorMeta.updatedByName,
+            }))
+          : [])
+      : (prev.relatives || []);
+  const updatedPersonnel = {
     ...prev,
     ...pData,
     fullName: (pData.firstName && pData.lastName) ? `${pData.firstName} ${pData.lastName}`.trim() : (pData.fullName || prev.fullName),
-    relatives: pData.relatives !== undefined ? (Array.isArray(pData.relatives) ? pData.relatives : []) : (prev.relatives || []),
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    relatives: nextRelatives,
+    createdAt: prev.createdAt || faDateOnlyServer(),
+    ...editorMeta,
   };
+  db.personnel[index] = updatedPersonnel;
+  const diffs = computeAuditDiffServer(prev, updatedPersonnel, 'personnel');
+  recordAuditLogServer(db, req.authUser, {
+    module: 'personnel',
+    action: 'update',
+    targetId: updatedPersonnel.id,
+    targetLabel: `${updatedPersonnel.fullName} (${updatedPersonnel.personnelCode})`,
+    summary: `ویرایش پرونده پرسنلی «${updatedPersonnel.fullName}»`,
+    changes: diffs,
+  });
 
   try {
     await persistDatabase(db);
@@ -1757,6 +2159,13 @@ app.delete('/api/personnel/:id', requireAuth, requirePerm('personnel', 'delete')
 
   db.personnel = db.personnel.filter((item: any) => item.id !== id);
   db.commitments = db.commitments.filter((c: any) => c.personnelId !== id && c.personnelCode !== p.personnelCode);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'personnel',
+    action: 'delete',
+    targetId: id,
+    targetLabel: `${p.fullName || ''} (${p.personnelCode || ''})`,
+    summary: `حذف پرونده پرسنلی «${p.fullName || p.personnelCode}»`,
+  });
 
   try {
     await persistDatabase(db);
@@ -1780,7 +2189,8 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
     const k = String(p.personnelCode || '').trim();
     if (k && !pIdxMap.has(k)) pIdxMap.set(k, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const todayFa = faDateOnlyServer();
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let addedCount = 0;
   let updatedCount = 0;
@@ -1831,7 +2241,7 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
       status: String(getPayrollVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
       baseSalary: Number(getPayrollVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
       notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
-      updatedAt: todayFa,
+      ...editorMeta,
     };
 
     if (existingIndex >= 0) {
@@ -1851,6 +2261,15 @@ app.post('/api/personnel/batch-import', requireAuth, requirePerm('personnel', 'i
       pIdxMap.set(code, newIdx);
       addedCount++;
     }
+  }
+
+  if (addedCount + updatedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'personnel',
+      action: 'import_excel',
+      summary: `بارگذاری اکسل پرسنل (${addedCount} جدید، ${updatedCount} به‌روزرسانی)`,
+      recordCount: addedCount + updatedCount,
+    });
   }
 
   try {
@@ -1878,6 +2297,14 @@ app.post('/api/personnel/batch-delete', requireAuth, requirePerm('personnel', 'd
   const before = (db.personnel || []).length;
   db.personnel = (db.personnel || []).filter((p: any) => !idSet.has(p.id));
   const deletedCount = before - db.personnel.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'personnel',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} پرونده پرسنلی`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} پرونده پرسنلی با موفقیت حذف شد.` });
@@ -1887,11 +2314,17 @@ app.post('/api/personnel/batch-delete', requireAuth, requirePerm('personnel', 'd
   }
 });
 
-app.post('/api/personnel/delete-all', requireAuth, requirePerm('personnel', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/personnel/delete-all', requireAuth, requirePerm('personnel', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_personnel');
   const db = loadDatabase();
   const deletedCount = (db.personnel || []).length;
   db.personnel = [];
+  recordAuditLogServer(db, req.authUser, {
+    module: 'personnel',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول پرسنل (${deletedCount} پرونده)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `کل جدول پرسنل (${deletedCount} پرونده) با موفقیت پاکسازی شد.` });
@@ -1922,7 +2355,8 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
     if (nid && !byNatId.has(nid)) byNatId.set(nid, p);
     if (fn && !byName.has(fn)) byName.set(fn, p);
   }
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const todayFa = faDateOnlyServer();
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   let updated = 0;
@@ -1980,8 +2414,8 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
       isDependent,
       insuranceCovered,
       notes: String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
-      updatedAt: todayFa,
       createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : todayFa,
+      ...editorMeta,
     };
 
     if (existingIdx >= 0) {
@@ -1991,7 +2425,19 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
       parent.relatives.push(relPayload);
       added++;
     }
-    parent.updatedAt = todayFa;
+    parent.updatedAt = editorMeta.updatedAt;
+    parent.updatedByUserId = editorMeta.updatedByUserId;
+    parent.updatedByUsername = editorMeta.updatedByUsername;
+    parent.updatedByName = editorMeta.updatedByName;
+  }
+
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'relatives',
+      action: 'import_excel',
+      summary: `بارگذاری اکسل بستگان پرسنل (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
 
   try {
@@ -2010,7 +2456,7 @@ app.post('/api/personnel/relatives/batch-import', requireAuth, requirePerm('pers
   }
 });
 
-app.post('/api/personnel/relatives/delete-all', requireAuth, requirePerm('personnel', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/personnel/relatives/delete-all', requireAuth, requirePerm('personnel', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_relatives');
   const db = loadDatabase();
   let deletedCount = 0;
@@ -2020,6 +2466,12 @@ app.post('/api/personnel/relatives/delete-all', requireAuth, requirePerm('person
       p.relatives = [];
     }
   }
+  recordAuditLogServer(db, req.authUser, {
+    module: 'relatives',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول بستگان پرسنل (${deletedCount} رکورد)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({
@@ -2158,6 +2610,10 @@ app.get('/api/karaneh/comparison', requireAuth, (req: AuthenticatedRequest, res:
       submittedAt: curr.submittedAt || '',
       submittedBy: curr.submittedBy || '',
       submittedByName: curr.submittedByName || '',
+      updatedAt: curr.updatedAt || '',
+      updatedByUserId: curr.updatedByUserId || '',
+      updatedByUsername: curr.updatedByUsername || '',
+      updatedByName: curr.updatedByName || '',
     };
   });
 
@@ -2250,7 +2706,7 @@ app.post('/api/karaneh', requireAuth, async (req: AuthenticatedRequest, res: Res
     submittedAt: resolvedStatus === 'submitted' ? (kData.submittedAt || existing?.submittedAt || '') : '',
     submittedBy: resolvedStatus === 'submitted' ? (kData.submittedBy || existing?.submittedBy || '') : '',
     submittedByName: resolvedStatus === 'submitted' ? (kData.submittedByName || existing?.submittedByName || '') : '',
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
 
   if (existingIndex >= 0) {
@@ -2258,6 +2714,14 @@ app.post('/api/karaneh', requireAuth, async (req: AuthenticatedRequest, res: Res
   } else {
     db.karaneh.push(record);
   }
+  recordAuditLogServer(db, req.authUser, {
+    module: 'karaneh',
+    action: existing ? 'update' : 'create',
+    targetId: record.id,
+    targetLabel: `${record.fullName} (${record.personnelCode} - ${record.period})`,
+    summary: `${existing ? 'ویرایش' : 'ثبت'} کارانه «${record.fullName}» دوره ${record.period}`,
+    changes: existing ? computeAuditDiffServer(existing, record, 'karaneh') : [],
+  });
 
   try {
     await persistDatabase(db);
@@ -2290,7 +2754,7 @@ app.post('/api/karaneh/batch-import', requireAuth, requirePerm('karaneh', 'impor
     const key = `${String(k.personnelCode || '').trim()}::${k.period}`;
     if (!kIdxMap.has(key)) kIdxMap.set(key, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   let updated = 0;
@@ -2341,7 +2805,7 @@ app.post('/api/karaneh/batch-import', requireAuth, requirePerm('karaneh', 'impor
       submittedAt: existing?.status === 'submitted' && fullScope ? (existing.submittedAt || '') : '',
       submittedBy: existing?.status === 'submitted' && fullScope ? (existing.submittedBy || '') : '',
       submittedByName: existing?.status === 'submitted' && fullScope ? (existing.submittedByName || '') : '',
-      updatedAt: todayFa,
+      ...editorMeta,
     };
 
     if (existingIndex >= 0) {
@@ -2356,6 +2820,15 @@ app.post('/api/karaneh/batch-import', requireAuth, requirePerm('karaneh', 'impor
   }
 
   const count = added + updated;
+  if (count > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'karaneh',
+      action: 'import_excel',
+      targetLabel: `دوره ${period}`,
+      summary: `بارگذاری اکسل کارانه دوره ${period} (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: count,
+    });
+  }
   try {
     if (count > 0) await persistDatabase(db);
     return res.json({
@@ -2393,8 +2866,8 @@ app.post('/api/karaneh/submit', requireAuth, async (req: AuthenticatedRequest, r
   }
 
   const fullScope = hasFullKaranehScope(req.authUser);
-  const nowTime = new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
-  const nowDate = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
+  const nowTime = editorMeta.updatedAt;
   let submittedCount = 0;
 
   db.karaneh = (db.karaneh || []).map((r: any) => {
@@ -2408,13 +2881,20 @@ app.post('/api/karaneh/submit', requireAuth, async (req: AuthenticatedRequest, r
       submittedAt: nowTime,
       submittedBy: req.authUser.username,
       submittedByName: req.authUser.fullName,
-      updatedAt: nowDate,
+      ...editorMeta,
     };
   });
 
   if (submittedCount === 0) {
     return res.status(400).json({ success: false, message: 'رکورد کارانه‌ای برای ارسال در این دوره و واحد یافت نشد.' });
   }
+  recordAuditLogServer(db, req.authUser, {
+    module: 'karaneh',
+    action: 'submit',
+    targetLabel: targetDept ? `${period} - ${targetDept}` : period,
+    summary: `ارسال نهایی کارانه دوره ${period}${targetDept ? ` (${targetDept})` : ''} برای ${submittedCount} نفر`,
+    recordCount: submittedCount,
+  });
   await persistDatabase(db);
   return res.json({
     success: true,
@@ -2431,7 +2911,7 @@ app.post('/api/karaneh/reopen', requireAuth, async (req: AuthenticatedRequest, r
   const { period, department } = req.body || {};
   const targetDept = String(department || '').trim();
   if (!period) return res.status(400).json({ success: false, message: 'دوره کارانه الزامی است.' });
-  const nowDate = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
   let reopenedCount = 0;
 
   db.karaneh = (db.karaneh || []).map((r: any) => {
@@ -2444,10 +2924,19 @@ app.post('/api/karaneh/reopen', requireAuth, async (req: AuthenticatedRequest, r
       submittedAt: '',
       submittedBy: '',
       submittedByName: '',
-      updatedAt: nowDate,
+      ...editorMeta,
     };
   });
 
+  if (reopenedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'finalKaraneh',
+      action: 'reopen',
+      targetLabel: targetDept ? `${period} - ${targetDept}` : period,
+      summary: `بازگرداندن کارانه دوره ${period}${targetDept ? ` (${targetDept})` : ''} به پیش‌نویس (${reopenedCount} نفر)`,
+      recordCount: reopenedCount,
+    });
+  }
   await persistDatabase(db);
   return res.json({
     success: true,
@@ -2463,13 +2952,22 @@ app.delete('/api/karaneh/:id', requireAuth, async (req: AuthenticatedRequest, re
   }
   const db = loadDatabase();
   const { id } = req.params;
+  const target = (db.karaneh || []).find((k: any) => k.id === id);
   if (!hasFullKaranehScope(req.authUser)) {
-    const target = (db.karaneh || []).find((k: any) => k.id === id);
     if (target && !isKaranehUnitAllowedForUser(req.authUser, target.department)) {
       return res.status(403).json({ success: false, message: 'شما مجاز به حذف کارانه سایر واحدها نیستید.' });
     }
   }
   db.karaneh = db.karaneh.filter((k: any) => k.id !== id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'karaneh',
+      action: 'delete',
+      targetId: id,
+      targetLabel: `${target.fullName || ''} (${target.personnelCode || ''} - ${target.period || ''})`,
+      summary: `حذف رکورد کارانه «${target.fullName || id}»`,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'رکورد کارانه با موفقیت حذف گردید.' });
@@ -2498,6 +2996,14 @@ app.post('/api/karaneh/batch-delete', requireAuth, async (req: AuthenticatedRequ
     return false;
   });
   const deletedCount = before - db.karaneh.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'karaneh',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} رکورد کارانه`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} رکورد کارانه با موفقیت حذف شد.` });
@@ -2528,6 +3034,13 @@ app.post('/api/karaneh/delete-all', requireAuth, async (req: AuthenticatedReques
     return false;
   });
   const deletedCount = before - db.karaneh.length;
+  recordAuditLogServer(db, req.authUser, {
+    module: targetScope === 'submitted' ? 'finalKaraneh' : 'karaneh',
+    action: 'delete_all',
+    targetLabel: period ? `دوره ${period}` : 'کل دوره‌ها',
+    summary: `پاکسازی جدول ${targetScope === 'submitted' ? 'کارانه نهایی ارسالی' : 'کارانه'} (${deletedCount} رکورد)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({
@@ -2568,9 +3081,17 @@ app.post('/api/job-groups', requireAuth, requirePerm('jobGroups', 'create'), asy
     maxBaseSalary: Number(data.maxBaseSalary || 0),
     maxKaranehCeiling: Number(data.maxKaranehCeiling || 0),
     requiredExperienceYears: Number(data.requiredExperienceYears || 0),
+    ...buildEditorMetaServer(req.authUser),
   };
 
   db.jobGroups.push(newGroup);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobGroups',
+    action: 'create',
+    targetId: newGroup.id,
+    targetLabel: `${newGroup.code} - ${newGroup.title}`,
+    summary: `ایجاد گروه شغلی «${newGroup.code} - ${newGroup.title}»`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, data: newGroup, message: 'گروه شغلی جدید ایجاد شد.' });
@@ -2589,10 +3110,21 @@ app.put('/api/job-groups/:id', requireAuth, requirePerm('jobGroups', 'edit'), as
     return res.status(404).json({ success: false, message: 'گروه شغلی یافت نشد.' });
   }
 
+  const prev = db.jobGroups[index];
   db.jobGroups[index] = {
-    ...db.jobGroups[index],
+    ...prev,
     ...req.body,
+    ...buildEditorMetaServer(req.authUser),
   };
+  const changes = computeAuditDiffServer(prev, db.jobGroups[index]);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobGroups',
+    action: 'update',
+    targetId: id,
+    targetLabel: `${db.jobGroups[index].code} - ${db.jobGroups[index].title}`,
+    summary: `ویرایش گروه شغلی «${db.jobGroups[index].code}»`,
+    changes,
+  });
 
   try {
     await persistDatabase(db);
@@ -2606,7 +3138,17 @@ app.put('/api/job-groups/:id', requireAuth, requirePerm('jobGroups', 'edit'), as
 app.delete('/api/job-groups/:id', requireAuth, requirePerm('jobGroups', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const { id } = req.params;
+  const target = (db.jobGroups || []).find((g: any) => g.id === id);
   db.jobGroups = db.jobGroups.filter((g: any) => g.id !== id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'jobGroups',
+      action: 'delete',
+      targetId: id,
+      targetLabel: `${target.code || ''} - ${target.title || ''}`,
+      summary: `حذف گروه شغلی «${target.code || id}»`,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'گروه شغلی حذف شد.' });
@@ -2626,6 +3168,14 @@ app.post('/api/job-groups/batch-delete', requireAuth, requirePerm('jobGroups', '
   const before = (db.jobGroups || []).length;
   db.jobGroups = (db.jobGroups || []).filter((g: any) => !idSet.has(g.id));
   const deletedCount = before - db.jobGroups.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'jobGroups',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} گروه شغلی`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} گروه شغلی با موفقیت حذف شد.` });
@@ -2635,11 +3185,17 @@ app.post('/api/job-groups/batch-delete', requireAuth, requirePerm('jobGroups', '
   }
 });
 
-app.post('/api/job-groups/delete-all', requireAuth, requirePerm('jobGroups', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/job-groups/delete-all', requireAuth, requirePerm('jobGroups', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_job_groups');
   const db = loadDatabase();
   const deletedCount = (db.jobGroups || []).length;
   db.jobGroups = [];
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobGroups',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول گروه‌های شغلی (${deletedCount} رکورد)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `کل جدول گروه‌های شغلی (${deletedCount} رکورد) پاکسازی شد.` });
@@ -2685,10 +3241,17 @@ app.post('/api/job-classifications', requireAuth, requirePerm('jobGroups', 'crea
     nextGroupGap: String(data.nextGroupGap || ''),
     jobTitle: String(data.jobTitle || ''),
     position: String(data.position || ''),
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
 
   db.jobClassifications.push(newRecord);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobClassifications',
+    action: 'create',
+    targetId: newRecord.id,
+    targetLabel: `${newRecord.firstName} ${newRecord.lastName} (${newRecord.personnelCode})`.trim(),
+    summary: `ثبت رکورد طبقه‌بندی شغلی برای کد پرسنلی ${newRecord.personnelCode}`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, data: newRecord, message: 'رکورد طبقه‌بندی شغلی با موفقیت ثبت شد.' });
@@ -2707,11 +3270,21 @@ app.put('/api/job-classifications/:id', requireAuth, requirePerm('jobGroups', 'e
     return res.status(404).json({ success: false, message: 'رکورد طبقه‌بندی یافت نشد.' });
   }
 
+  const prev = db.jobClassifications[index];
   db.jobClassifications[index] = {
-    ...db.jobClassifications[index],
+    ...prev,
     ...req.body,
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
+  const changes = computeAuditDiffServer(prev, db.jobClassifications[index]);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobClassifications',
+    action: 'update',
+    targetId: id,
+    targetLabel: `${db.jobClassifications[index].firstName || ''} ${db.jobClassifications[index].lastName || ''} (${db.jobClassifications[index].personnelCode || ''})`.trim(),
+    summary: `ویرایش طبقه‌بندی شغلی کد ${db.jobClassifications[index].personnelCode || id}`,
+    changes,
+  });
 
   try {
     await persistDatabase(db);
@@ -2725,7 +3298,17 @@ app.put('/api/job-classifications/:id', requireAuth, requirePerm('jobGroups', 'e
 app.delete('/api/job-classifications/:id', requireAuth, requirePerm('jobGroups', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const { id } = req.params;
+  const target = (db.jobClassifications || []).find((item: any) => item.id === id);
   db.jobClassifications = db.jobClassifications.filter((item: any) => item.id !== id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'jobClassifications',
+      action: 'delete',
+      targetId: id,
+      targetLabel: `${target.firstName || ''} ${target.lastName || ''} (${target.personnelCode || ''})`.trim(),
+      summary: `حذف رکورد طبقه‌بندی شغلی کد ${target.personnelCode || id}`,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'رکورد طبقه‌بندی شغلی حذف شد.' });
@@ -2748,7 +3331,7 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
     const k = String(item.personnelCode || '').trim();
     if (k && !jcIdxMap.has(k)) jcIdxMap.set(k, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   let updated = 0;
@@ -2776,7 +3359,7 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
       nextGroupGap: String(row.nextGroupGap ?? row['فاصله گروه بعدی'] ?? ''),
       jobTitle: String(row.jobTitle ?? row['شغل'] ?? ''),
       position: String(row.position ?? row['پست'] ?? row['پست سازمانی'] ?? ''),
-      updatedAt: todayFa,
+      ...editorMeta,
     };
 
     const idx = jcIdxMap.get(code) ?? -1;
@@ -2792,6 +3375,15 @@ app.post('/api/job-classifications/batch-import', requireAuth, requirePerm('jobG
       jcIdxMap.set(code, newIdx);
       added++;
     }
+  }
+
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'jobClassifications',
+      action: 'import_excel',
+      summary: `ورود اکسل طبقه‌بندی شغلی (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
 
   try {
@@ -2819,6 +3411,14 @@ app.post('/api/job-classifications/batch-delete', requireAuth, requirePerm('jobG
   const before = (db.jobClassifications || []).length;
   db.jobClassifications = (db.jobClassifications || []).filter((c: any) => !idSet.has(c.id));
   const deletedCount = before - db.jobClassifications.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'jobClassifications',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} رکورد طبقه‌بندی شغلی`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} ردیف طبقه‌بندی شغلی با موفقیت حذف شد.` });
@@ -2828,11 +3428,17 @@ app.post('/api/job-classifications/batch-delete', requireAuth, requirePerm('jobG
   }
 });
 
-app.post('/api/job-classifications/delete-all', requireAuth, requirePerm('jobGroups', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/job-classifications/delete-all', requireAuth, requirePerm('jobGroups', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_job_classifications');
   const db = loadDatabase();
   const deletedCount = (db.jobClassifications || []).length;
   db.jobClassifications = [];
+  recordAuditLogServer(db, req.authUser, {
+    module: 'jobClassifications',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول طبقه‌بندی مشاغل (${deletedCount} رکورد)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `کل جدول طبقه‌بندی مشاغل ۱۸ ستونی (${deletedCount} رکورد) پاکسازی شد.` });
@@ -2870,12 +3476,20 @@ app.post('/api/commitments', requireAuth, requirePerm('commitments', 'create'), 
     previouslyTakenAmount: Number(data.previouslyTakenAmount || 0),
     maxAllowedAmount: Number(data.maxAllowedAmount || 0),
     isArchived: Boolean(data.isArchived),
-    archivedAt: data.isArchived ? (data.archivedAt || new Date().toLocaleDateString('fa-IR')) : undefined,
+    archivedAt: data.isArchived ? (data.archivedAt || faDateOnlyServer()) : undefined,
     archiveCode: data.isArchived ? (data.archiveCode || `ARC-${Date.now().toString().slice(-5)}`) : undefined,
     status: data.status || 'جاری و معتبر',
+    ...buildEditorMetaServer(req.authUser),
   };
 
   db.commitments.push(newCommitment);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'commitments',
+    action: 'create',
+    targetId: newCommitment.id,
+    targetLabel: `${newCommitment.personnelName} (${newCommitment.personnelCode})`,
+    summary: `ثبت تعهد جدید «${newCommitment.commitmentType}» برای ${newCommitment.personnelName}`,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, data: newCommitment, message: 'تعهد پرسنلی جدید با موفقیت ثبت شد.' });
@@ -2913,9 +3527,19 @@ app.put('/api/commitments/:id', requireAuth, async (req: AuthenticatedRequest, r
     previouslyTakenAmount: req.body.previouslyTakenAmount !== undefined ? Number(req.body.previouslyTakenAmount) : prev.previouslyTakenAmount,
     maxAllowedAmount: req.body.maxAllowedAmount !== undefined ? Number(req.body.maxAllowedAmount) : prev.maxAllowedAmount,
     isArchived: nextArchived,
-    archivedAt: nextArchived ? (req.body.archivedAt || prev.archivedAt || new Date().toLocaleDateString('fa-IR')) : undefined,
+    archivedAt: nextArchived ? (req.body.archivedAt || prev.archivedAt || faDateOnlyServer()) : undefined,
     archiveCode: nextArchived ? (req.body.archiveCode || prev.archiveCode || `ARC-${Date.now().toString().slice(-5)}`) : undefined,
+    ...buildEditorMetaServer(req.authUser),
   };
+  const changes = computeAuditDiffServer(prev, db.commitments[index]);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'commitments',
+    action: 'update',
+    targetId: id,
+    targetLabel: `${db.commitments[index].personnelName || ''} (${db.commitments[index].personnelCode || ''})`.trim(),
+    summary: `${isOnlyArchiveToggle ? 'تغییر وضعیت بایگانی' : 'ویرایش'} سند تعهد «${db.commitments[index].personnelName || id}»`,
+    changes,
+  });
 
   try {
     await persistDatabase(db);
@@ -2929,7 +3553,17 @@ app.put('/api/commitments/:id', requireAuth, async (req: AuthenticatedRequest, r
 app.delete('/api/commitments/:id', requireAuth, requirePerm('commitments', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const { id } = req.params;
+  const target = (db.commitments || []).find((c: any) => c.id === id);
   db.commitments = db.commitments.filter((c: any) => c.id !== id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'commitments',
+      action: 'delete',
+      targetId: id,
+      targetLabel: `${target.personnelName || ''} (${target.personnelCode || ''})`.trim(),
+      summary: `حذف سند تعهد «${target.personnelName || id}»`,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'سند تعهد پرسنلی حذف شد.' });
@@ -2952,7 +3586,8 @@ app.post('/api/commitments/batch-import', requireAuth, requirePerm('commitments'
     const c = String(p.personnelCode || '').trim();
     if (c && !pMap.has(c)) pMap.set(c, p);
   }
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const todayFa = faDateOnlyServer();
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   for (const row of items) {
@@ -2980,10 +3615,20 @@ app.post('/api/commitments/batch-import', requireAuth, requirePerm('commitments'
       archiveCode: isArchived ? `ARC-${Date.now().toString().slice(-5)}` : undefined,
       guarantorName: row.guarantorName || row['نام ضامن'] || '',
       notes: row.notes || row['توضیحات'] || '',
+      ...editorMeta,
     };
 
     db.commitments.push(newCommitment);
     added++;
+  }
+
+  if (added > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'commitments',
+      action: 'import_excel',
+      summary: `ورود اکسل ${added} سند تعهد پرسنلی`,
+      recordCount: added,
+    });
   }
 
   try {
@@ -3005,6 +3650,14 @@ app.post('/api/commitments/batch-delete', requireAuth, requirePerm('commitments'
   const before = (db.commitments || []).length;
   db.commitments = (db.commitments || []).filter((c: any) => !idSet.has(c.id));
   const deletedCount = before - db.commitments.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'commitments',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} سند تعهد پرسنلی`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} سند تعهد پرسنلی با موفقیت حذف شد.` });
@@ -3014,11 +3667,17 @@ app.post('/api/commitments/batch-delete', requireAuth, requirePerm('commitments'
   }
 });
 
-app.post('/api/commitments/delete-all', requireAuth, requirePerm('commitments', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/commitments/delete-all', requireAuth, requirePerm('commitments', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_commitments');
   const db = loadDatabase();
   const deletedCount = (db.commitments || []).length;
   db.commitments = [];
+  recordAuditLogServer(db, req.authUser, {
+    module: 'commitments',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول تعهدات پرسنلی (${deletedCount} سند)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `کل جدول تعهدات پرسنلی (${deletedCount} سند) پاکسازی شد.` });
@@ -3118,7 +3777,7 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
     const key = `${String(r.personnelCode || '').trim()}::${r.period}`;
     if (!payIdxMap.has(key)) payIdxMap.set(key, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
 
   let added = 0;
   let updated = 0;
@@ -3178,7 +3837,7 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
       bankName: String(getPayrollVal(row, 'نام بانک') || ''),
       bankAccount: String(getPayrollVal(row, 'شماره حساب') || ''),
       rawFields: row,
-      updatedAt: todayFa,
+      ...editorMeta,
     };
 
     const payKey = `${code}::${targetPeriod}`;
@@ -3196,6 +3855,16 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
       payIdxMap.set(payKey, newIdx);
       added++;
     }
+  }
+
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'payroll',
+      action: 'import_excel',
+      targetLabel: `دوره ${period}`,
+      summary: `ورود اکسل لیست حقوق دوره ${period} (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
 
   try {
@@ -3216,7 +3885,17 @@ app.post('/api/payroll/batch-import', requireAuth, requirePerm('payroll', 'impor
 app.delete('/api/payroll/:id', requireAuth, requirePerm('payroll', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const { id } = req.params;
+  const target = (db.payroll || []).find((r: any) => r.id === id);
   db.payroll = (db.payroll || []).filter((r: any) => r.id !== id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'payroll',
+      action: 'delete',
+      targetId: id,
+      targetLabel: `${target.fullName || ''} (${target.personnelCode || ''} - ${target.period || ''})`,
+      summary: `حذف فیش حقوق «${target.fullName || id}»`,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'رکورد حقوق حذف گردید.' });
@@ -3229,7 +3908,18 @@ app.delete('/api/payroll/:id', requireAuth, requirePerm('payroll', 'delete'), as
 app.delete('/api/payroll/by-period/:period', requireAuth, requirePerm('payroll', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const { period } = req.params;
+  const before = (db.payroll || []).length;
   db.payroll = (db.payroll || []).filter((r: any) => r.period !== period);
+  const deletedCount = before - db.payroll.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'payroll',
+      action: 'batch_delete',
+      targetLabel: `دوره ${period}`,
+      summary: `حذف تمامی فیش‌های حقوق دوره ${period} (${deletedCount} فیش)`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: `تمام رکوردهای حقوق دوره ${period} حذف شدند.` });
@@ -3249,6 +3939,14 @@ app.post('/api/payroll/batch-delete', requireAuth, requirePerm('payroll', 'delet
   const before = (db.payroll || []).length;
   db.payroll = (db.payroll || []).filter((r: any) => !idSet.has(r.id));
   const deletedCount = before - db.payroll.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'payroll',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} فیش حقوق و دستمزد`,
+      recordCount: deletedCount,
+    });
+  }
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `${deletedCount} رکورد حقوقی با موفقیت حذف شد.` });
@@ -3258,11 +3956,17 @@ app.post('/api/payroll/batch-delete', requireAuth, requirePerm('payroll', 'delet
   }
 });
 
-app.post('/api/payroll/delete-all', requireAuth, requirePerm('payroll', 'deleteAll'), async (_req: AuthenticatedRequest, res: Response) => {
+app.post('/api/payroll/delete-all', requireAuth, requirePerm('payroll', 'deleteAll'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('pre_delete_all_payroll');
   const db = loadDatabase();
   const deletedCount = (db.payroll || []).length;
   db.payroll = [];
+  recordAuditLogServer(db, req.authUser, {
+    module: 'payroll',
+    action: 'delete_all',
+    summary: `پاکسازی کامل جدول حقوق و دستمزد (${deletedCount} فیش)`,
+    recordCount: deletedCount,
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, deletedCount, message: `کل جدول حقوق و دستمزد (${deletedCount} فیش) با موفقیت پاکسازی شد.` });
@@ -3303,6 +4007,7 @@ app.post('/api/mining-volumes', requireAuth, async (req: AuthenticatedRequest, r
   const volumeValue = Number(body.volumeValue || 0);
   const targetVolume = Number(body.targetVolume || 0);
   const idx = body.id ? db.miningVolumes.findIndex((v: any) => v.id === body.id) : -1;
+  const prev = idx >= 0 ? db.miningVolumes[idx] : null;
   const rec = {
     id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     period: String(body.period).trim(),
@@ -3314,9 +4019,17 @@ app.post('/api/mining-volumes', requireAuth, async (req: AuthenticatedRequest, r
     unitLabel: String(body.unitLabel || 'تن').trim(),
     status: String(body.status || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim(),
     notes: String(body.notes || '').trim(),
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
   if (idx >= 0) db.miningVolumes[idx] = rec; else db.miningVolumes.push(rec);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'miningVolumes',
+    action: idx >= 0 ? 'update' : 'create',
+    targetId: rec.id,
+    targetLabel: `${rec.unitName} - ${rec.metricTitle} (${rec.period})`,
+    summary: `${idx >= 0 ? 'ویرایش' : 'ثبت'} آمار حجم عملیات «${rec.metricTitle}» واحد ${rec.unitName}`,
+    changes: prev ? computeAuditDiffServer(prev, rec) : undefined,
+  });
   await persistDatabase(db);
   return res.json({ success: true, data: rec, message: 'آمار حجم عملیات ماهانه با موفقیت ذخیره شد.' });
 });
@@ -3335,7 +4048,7 @@ app.post('/api/mining-volumes/batch-import', requireAuth, async (req: Authentica
     const key = `${v.period}::${normPayrollKey(v.unitName)}::${normPayrollKey(v.metricTitle)}`;
     if (!mvIdxMap.has(key)) mvIdxMap.set(key, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
   let added = 0; let updated = 0;
   for (const row of items || []) {
     const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
@@ -3355,10 +4068,18 @@ app.post('/api/mining-volumes/batch-import', requireAuth, async (req: Authentica
     const rec = {
       id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes,
-      updatedAt: todayFa,
+      ...editorMeta,
     };
     if (idx >= 0) { db.miningVolumes[idx] = rec; updated++; }
     else { const newIdx = db.miningVolumes.length; db.miningVolumes.push(rec); mvIdxMap.set(mvKey, newIdx); added++; }
+  }
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningVolumes',
+      action: 'import_excel',
+      summary: `ورود اکسل آمار حجم عملیات (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
   await persistDatabase(db);
   return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
@@ -3374,6 +4095,15 @@ app.delete('/api/mining-volumes/:id', requireAuth, async (req: AuthenticatedRequ
     return res.status(403).json({ success: false, message: 'دسترسی حذف برای این واحد محدود شده است.' });
   }
   db.miningVolumes = (db.miningVolumes || []).filter((v: any) => v.id !== req.params.id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningVolumes',
+      action: 'delete',
+      targetId: req.params.id,
+      targetLabel: `${target.unitName || ''} - ${target.metricTitle || ''}`,
+      summary: `حذف آمار حجم «${target.metricTitle || req.params.id}»`,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, message: 'ردیف آمار حجم حذف شد.' });
 });
@@ -3391,6 +4121,14 @@ app.post('/api/mining-volumes/batch-delete', requireAuth, async (req: Authentica
     return !canAll && !isDispatchingOrUnitAllowed(req.authUser, v.unitName);
   });
   const deletedCount = before - db.miningVolumes.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningVolumes',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف آمار حجم عملیات`,
+      recordCount: deletedCount,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `${deletedCount} ردیف آمار حجم حذف شد.` });
 });
@@ -3407,6 +4145,12 @@ app.post('/api/mining-volumes/delete-all', requireAuth, async (req: Authenticate
     ? []
     : (db.miningVolumes || []).filter((v: any) => !isDispatchingOrUnitAllowed(req.authUser, v.unitName));
   const deletedCount = before - db.miningVolumes.length;
+  recordAuditLogServer(db, req.authUser, {
+    module: 'miningVolumes',
+    action: 'delete_all',
+    summary: `پاکسازی جدول آمار حجم عملیات (${deletedCount} ردیف)`,
+    recordCount: deletedCount,
+  });
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `جدول آمار حجم عملیات (${deletedCount} ردیف) پاکسازی شد.` });
 });
@@ -3439,6 +4183,7 @@ app.post('/api/mining-machinery', requireAuth, async (req: AuthenticatedRequest,
   const idx = body.id
     ? db.miningMachinery.findIndex((m: any) => m.id === body.id)
     : db.miningMachinery.findIndex((m: any) => String(m.machineCode).trim() === String(body.machineCode).trim());
+  const prev = idx >= 0 ? db.miningMachinery[idx] : null;
   const rawStatus = String(body.status || 'آماده به کار').trim();
   const status = rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
     ? 'خراب / در تعمیرگاه'
@@ -3459,9 +4204,17 @@ app.post('/api/mining-machinery', requireAuth, async (req: AuthenticatedRequest,
     estimatedReadyDate: String(body.estimatedReadyDate || '').trim(),
     operatorName: String(body.operatorName || '').trim(),
     notes: String(body.notes || '').trim(),
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
   if (idx >= 0) db.miningMachinery[idx] = rec; else db.miningMachinery.push(rec);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'miningMachinery',
+    action: idx >= 0 ? 'update' : 'create',
+    targetId: rec.id,
+    targetLabel: `${rec.machineName} (${rec.machineCode})`,
+    summary: `${idx >= 0 ? 'ویرایش' : 'ثبت'} وضعیت تجهیز «${rec.machineName}»`,
+    changes: prev ? computeAuditDiffServer(prev, rec) : undefined,
+  });
   await persistDatabase(db);
   return res.json({ success: true, data: rec, message: 'وضعیت دستگاه و تعمیرگاه ذخیره شد.' });
 });
@@ -3480,7 +4233,7 @@ app.post('/api/mining-machinery/batch-import', requireAuth, async (req: Authenti
     const k = String(m.machineCode || '').trim();
     if (k && !mmIdxMap.has(k)) mmIdxMap.set(k, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
   let added = 0; let updated = 0;
   for (const row of items || []) {
     const machineCode = String(getPayrollVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'کد تجهیز', 'پلاک تجهیز') || '').trim();
@@ -3508,10 +4261,18 @@ app.post('/api/mining-machinery/batch-import', requireAuth, async (req: Authenti
       estimatedReadyDate: String(getPayrollVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تاریخ آماده به کار') || '').trim(),
       operatorName: String(getPayrollVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'اپراتور') || '').trim(),
       notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') || '').trim(),
-      updatedAt: todayFa,
+      ...editorMeta,
     };
     if (idx >= 0) { db.miningMachinery[idx] = rec; updated++; }
     else { const newIdx = db.miningMachinery.length; db.miningMachinery.push(rec); mmIdxMap.set(machineCode, newIdx); added++; }
+  }
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningMachinery',
+      action: 'import_excel',
+      summary: `ورود اکسل لیست ماشین‌آلات (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
   await persistDatabase(db);
   return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
@@ -3527,6 +4288,15 @@ app.delete('/api/mining-machinery/:id', requireAuth, async (req: AuthenticatedRe
     return res.status(403).json({ success: false, message: 'دسترسی حذف برای این واحد محدود شده است.' });
   }
   db.miningMachinery = (db.miningMachinery || []).filter((m: any) => m.id !== req.params.id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningMachinery',
+      action: 'delete',
+      targetId: req.params.id,
+      targetLabel: `${target.machineName || ''} (${target.machineCode || ''})`,
+      summary: `حذف تجهیز «${target.machineName || req.params.id}»`,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, message: 'دستگاه از فهرست حذف شد.' });
 });
@@ -3544,6 +4314,14 @@ app.post('/api/mining-machinery/batch-delete', requireAuth, async (req: Authenti
     return !canAll && !isWorkshopOrUnitAllowed(req.authUser, m.unitName);
   });
   const deletedCount = before - db.miningMachinery.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'miningMachinery',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} تجهیز از لیست ماشین‌آلات`,
+      recordCount: deletedCount,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `${deletedCount} دستگاه حذف شد.` });
 });
@@ -3560,6 +4338,12 @@ app.post('/api/mining-machinery/delete-all', requireAuth, async (req: Authentica
     ? []
     : (db.miningMachinery || []).filter((m: any) => !isWorkshopOrUnitAllowed(req.authUser, m.unitName));
   const deletedCount = before - db.miningMachinery.length;
+  recordAuditLogServer(db, req.authUser, {
+    module: 'miningMachinery',
+    action: 'delete_all',
+    summary: `پاکسازی لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه)`,
+    recordCount: deletedCount,
+  });
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه) پاکسازی شد.` });
 });
@@ -3597,6 +4381,7 @@ app.post('/api/unit-reports', requireAuth, async (req: AuthenticatedRequest, res
   const previousValue = Number(body.previousValue || 0);
   const targetValue = Number(body.targetValue || 0);
   const idx = body.id ? db.unitReports.findIndex((r: any) => r.id === body.id) : -1;
+  const prev = idx >= 0 ? db.unitReports[idx] : null;
   const sanitizedRaw: Record<string, string | number> = {};
   if (body.rawFields && typeof body.rawFields === 'object') {
     for (const [k, v] of Object.entries(body.rawFields).slice(0, 100)) {
@@ -3619,9 +4404,17 @@ app.post('/api/unit-reports', requireAuth, async (req: AuthenticatedRequest, res
     submittedBy: String(body.submittedBy || req.authUser?.fullName || '').trim(),
     notes: String(body.notes || '').trim(),
     rawFields: sanitizedRaw,
-    updatedAt: new Date().toLocaleDateString('fa-IR'),
+    ...buildEditorMetaServer(req.authUser),
   };
   if (idx >= 0) db.unitReports[idx] = rec; else db.unitReports.push(rec);
+  recordAuditLogServer(db, req.authUser, {
+    module: 'unitReports',
+    action: idx >= 0 ? 'update' : 'create',
+    targetId: rec.id,
+    targetLabel: `${rec.unitName} - ${rec.metricName} (${rec.period})`,
+    summary: `${idx >= 0 ? 'ویرایش' : 'ثبت'} گزارش عملیاتی «${rec.metricName}» واحد ${rec.unitName}`,
+    changes: prev ? computeAuditDiffServer(prev, rec) : undefined,
+  });
   await persistDatabase(db);
   return res.json({ success: true, data: rec, message: 'گزارش عملیاتی واحد با موفقیت ذخیره شد.' });
 });
@@ -3640,7 +4433,7 @@ app.post('/api/unit-reports/batch-import', requireAuth, async (req: Authenticate
     const key = `${r.period}::${normPayrollKey(r.unitName)}::${normPayrollKey(r.metricName)}`;
     if (!urIdxMap.has(key)) urIdxMap.set(key, i);
   });
-  const todayFa = new Date().toLocaleDateString('fa-IR');
+  const editorMeta = buildEditorMetaServer(req.authUser);
   let added = 0; let updated = 0;
   for (const row of items || []) {
     if (!row || typeof row !== 'object') continue;
@@ -3677,10 +4470,18 @@ app.post('/api/unit-reports/batch-import', requireAuth, async (req: Authenticate
     const rec = {
       id: idx >= 0 ? db.unitReports[idx].id : `ur-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       period, unitName, reportCategory, metricName, actualValue, previousValue, targetValue, unitLabel, status, submittedBy, notes, rawFields,
-      updatedAt: todayFa,
+      ...editorMeta,
     };
     if (idx >= 0) { db.unitReports[idx] = rec; updated++; }
     else { const newIdx = db.unitReports.length; db.unitReports.push(rec); urIdxMap.set(urKey, newIdx); added++; }
+  }
+  if (added + updated > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'unitReports',
+      action: 'import_excel',
+      summary: `ورود اکسل گزارش واحدها (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
   }
   await persistDatabase(db);
   return res.json({ success: true, added, updated, data: { inserted: added, updated }, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
@@ -3696,6 +4497,15 @@ app.delete('/api/unit-reports/:id', requireAuth, async (req: AuthenticatedReques
     return res.status(403).json({ success: false, message: 'دسترسی حذف برای این واحد محدود شده است.' });
   }
   db.unitReports = (db.unitReports || []).filter((r: any) => r.id !== req.params.id);
+  if (target) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'unitReports',
+      action: 'delete',
+      targetId: req.params.id,
+      targetLabel: `${target.unitName || ''} - ${target.metricName || ''}`,
+      summary: `حذف گزارش واحد «${target.metricName || req.params.id}»`,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, message: 'ردیف گزارش عملیاتی واحد حذف شد.' });
 });
@@ -3713,6 +4523,14 @@ app.post('/api/unit-reports/batch-delete', requireAuth, async (req: Authenticate
     return !canAll && !isUnitAllowedForUser(req.authUser, r.unitName);
   });
   const deletedCount = before - db.unitReports.length;
+  if (deletedCount > 0) {
+    recordAuditLogServer(db, req.authUser, {
+      module: 'unitReports',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف گزارش واحد`,
+      recordCount: deletedCount,
+    });
+  }
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `${deletedCount} ردیف گزارش واحد حذف شد.` });
 });
@@ -3729,6 +4547,12 @@ app.post('/api/unit-reports/delete-all', requireAuth, async (req: AuthenticatedR
     ? []
     : (db.unitReports || []).filter((r: any) => !isUnitAllowedForUser(req.authUser, r.unitName));
   const deletedCount = before - db.unitReports.length;
+  recordAuditLogServer(db, req.authUser, {
+    module: 'unitReports',
+    action: 'delete_all',
+    summary: `پاکسازی گزارش‌های واحدهای عملیاتی (${deletedCount} ردیف)`,
+    recordCount: deletedCount,
+  });
   await persistDatabase(db);
   return res.json({ success: true, deletedCount, message: `گزارش‌های واحدهای عملیاتی (${deletedCount} ردیف) پاکسازی شد.` });
 });
@@ -3792,6 +4616,7 @@ app.get('/api/database/status', requireAuth, (req: AuthenticatedRequest, res: Re
       totalMiningVolumes: canMining ? (db.miningVolumes || []).length : 0,
       totalMiningMachinery: canMining ? (db.miningMachinery || []).length : 0,
       totalUnitReports: canMining ? (db.unitReports || []).length : 0,
+      totalAuditLogs: (isSuperAdminUser(req.authUser) || checkPermission(req.authUser, 'system', 'securityLogs')) ? (db.auditLogs || []).length : 0,
       storageEngine: isPostgresConfigured() ? 'postgres+disk' : 'node-disk',
       fileSizeBytes: canStats ? fileSize : 0,
       lastSaved,
@@ -3881,6 +4706,12 @@ app.post('/api/database/merge-firestore', requireAuth, requirePerm('system', 're
     db.users = Array.from(userMap.values());
   }
 
+  recordAuditLogServer(db, req.authUser, {
+    module: 'system',
+    action: 'restore',
+    targetLabel: 'ادغام اسنپ‌شات ابری',
+    summary: 'ادغام داده‌های ابری در پایگاه داده مرکزی',
+  });
   try {
     await persistDatabase(db);
     return res.json({ success: true, message: 'اطلاعات ابری با موفقیت در پایگاه داده ادغام و ذخیره شد.' });
@@ -3890,16 +4721,23 @@ app.post('/api/database/merge-firestore', requireAuth, requirePerm('system', 're
   }
 });
 
-app.get('/api/database/backup', requireAuth, requirePerm('system', 'backupDatabase'), (req: AuthenticatedRequest, res: Response) => {
+app.get('/api/database/backup', requireAuth, requirePerm('system', 'backupDatabase'), async (req: AuthenticatedRequest, res: Response) => {
   const db = loadDatabase();
   const totalRelatives = (db.personnel || []).reduce((sum: number, p: any) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
   const submittedKaranehCount = (db.karaneh || []).filter((k: any) => k.status === 'submitted').length;
+  recordAuditLogServer(db, req.authUser, {
+    module: 'system',
+    action: 'backup',
+    targetLabel: 'فایل پشتیبان JSON',
+    summary: 'دریافت فایل پشتیبان کامل از پایگاه داده',
+  });
+  await persistDatabase(db).catch(() => {});
   const backupPayload = {
     ...db,
     _backupMetadata: {
       version: '5.1-negin-parto-nasr-full-sync',
       exportedAt: new Date().toISOString(),
-      modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
+      modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel', 'auditLogs'],
       counts: {
         users: (db.users || []).length,
         personnel: (db.personnel || []).length,
@@ -3913,6 +4751,7 @@ app.get('/api/database/backup', requireAuth, requirePerm('system', 'backupDataba
         miningVolumes: (db.miningVolumes || []).length,
         miningMachinery: (db.miningMachinery || []).length,
         unitReports: (db.unitReports || []).length,
+        auditLogs: (db.auditLogs || []).length,
       },
     },
   };
@@ -3929,6 +4768,7 @@ app.post('/api/database/restore', requireAuth, requirePerm('system', 'restoreDat
 
   createSafetySnapshot('before_restore');
   const { _backupMetadata: _meta, ...backup } = incomingBackup;
+  if (!Array.isArray(backup.auditLogs)) backup.auditLogs = [];
   // Re-hash any legacy plaintext passwords and normalize permissions inside restored backup
   for (const u of backup.users) {
     if (u.password && !String(u.password).startsWith('scrypt$')) {
@@ -3938,6 +4778,12 @@ app.post('/api/database/restore', requireAuth, requirePerm('system', 'restoreDat
       ? getFullAdminPermissionsServer()
       : normalizePermissionsServer(u.permissions);
   }
+  recordAuditLogServer(backup, req.authUser, {
+    module: 'system',
+    action: 'restore',
+    targetLabel: 'بازیابی فایل پشتیبان',
+    summary: 'بازیابی کامل پایگاه داده از فایل پشتیبان',
+  });
   try {
     await persistDatabase(backup);
     return res.json({ success: true, message: 'پایگاه داده سیستم (تمامی ماژول‌ها، مجوزها و اسناد) با موفقیت بازیابی گردید.' });
@@ -3950,6 +4796,12 @@ app.post('/api/database/restore', requireAuth, requirePerm('system', 'restoreDat
 app.post('/api/database/reset-demo', requireAuth, requirePerm('system', 'restoreDatabase'), async (req: AuthenticatedRequest, res: Response) => {
   createSafetySnapshot('before_reset_demo');
   const initial = getInitialDatabase();
+  recordAuditLogServer(initial, req.authUser, {
+    module: 'system',
+    action: 'reset_demo',
+    targetLabel: 'داده‌های اولیه',
+    summary: 'بازنشانی پایگاه داده به حالت اولیه و دمو',
+  });
   try {
     await persistDatabase(initial);
     return res.json({ success: true, message: 'داده‌های اولیه و دمو با موفقیت بازنشانی شدند (بکاپ خودکار از اطلاعات قبلی ذخیره شد).' });
@@ -4099,7 +4951,7 @@ function buildFullBackupPayload() {
         'personnel', 'relatives', 'documents', 'karaneh', 'payroll',
         'jobGroups', 'jobClassifications', 'commitments', 'users',
         'smartDashboard', 'ceoDashboard', 'unitOperations',
-        'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel',
+        'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel', 'auditLogs',
       ],
       counts: {
         users: (db.users || []).length,
@@ -4113,6 +4965,7 @@ function buildFullBackupPayload() {
         miningVolumes: (db.miningVolumes || []).length,
         miningMachinery: (db.miningMachinery || []).length,
         unitReports: (db.unitReports || []).length,
+        auditLogs: (db.auditLogs || []).length,
       },
     },
   };

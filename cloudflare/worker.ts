@@ -117,16 +117,27 @@ const FA_DATE_FMT = (() => {
   }
 })();
 
-const FA_DATETIME_FMT = (() => {
+const FA_DATETIME_TIME_FMT = (() => {
+  try {
+    return new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return null;
+  }
+})();
+
+const FA_DATE_TEHRAN_FMT = (() => {
   try {
     return new Intl.DateTimeFormat('fa-IR', {
       timeZone: 'Asia/Tehran',
       year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
+      month: '2-digit',
+      day: '2-digit',
     });
   } catch {
     return null;
@@ -135,7 +146,11 @@ const FA_DATETIME_FMT = (() => {
 
 function faDate(): string {
   try {
-    return FA_DATE_FMT ? FA_DATE_FMT.format(new Date()) : new Date().toLocaleDateString('fa-IR');
+    return FA_DATE_TEHRAN_FMT
+      ? FA_DATE_TEHRAN_FMT.format(new Date())
+      : FA_DATE_FMT
+      ? FA_DATE_FMT.format(new Date())
+      : new Date().toLocaleDateString('fa-IR');
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
@@ -143,7 +158,10 @@ function faDate(): string {
 
 function faDateTime(): string {
   try {
-    return FA_DATETIME_FMT ? FA_DATETIME_FMT.format(new Date()) : new Date().toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' });
+    const now = new Date();
+    const d = FA_DATE_TEHRAN_FMT ? FA_DATE_TEHRAN_FMT.format(now) : now.toLocaleDateString('fa-IR');
+    const t = FA_DATETIME_TIME_FMT ? FA_DATETIME_TIME_FMT.format(now) : now.toLocaleTimeString('fa-IR');
+    return `${d} - ${t}`;
   } catch {
     return new Date().toISOString();
   }
@@ -395,7 +413,7 @@ function getFullAdminPermissions() {
     commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
     payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
     users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
+    system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true, securityLogs: true },
     smartDashboard: { view: true, exportExcel: true, print: true },
     ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
     unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] },
@@ -411,7 +429,7 @@ function getEmptyPermissions() {
     commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
     payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
     users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+    system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false, securityLogs: false },
     smartDashboard: { view: false, exportExcel: false, print: false },
     ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
     unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
@@ -453,7 +471,7 @@ function normalizePermissions(raw?: any) {
       commitments: { view: lc, create: lc, edit: lc, delete: lc && lu, deleteAll: false, print: lc, archive: lc, importExcel: lc && li, exportExcel: lc && le },
       payroll: { view: lk || lp, create: lk || lp, edit: lk || lp, delete: (lk || lp) && lu, deleteAll: false, importExcel: (lk || lp) && li, exportExcel: (lk || lp) && le },
       users: { view: lu, create: lu, edit: lu, delete: lu, deleteAll: false, importExcel: lu && li, exportExcel: lu && le },
-      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb },
+      system: { dashboardStats: lp || lk || lj || lc || lu, backupDatabase: lb, restoreDatabase: lb, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
@@ -499,7 +517,7 @@ function normalizePermissions(raw?: any) {
     commitments: { view: b(c.view), create: b(c.create), edit: b(c.edit), delete: b(c.delete), deleteAll: b(c.deleteAll), print: b(c.print), archive: b(c.archive), importExcel: b(c.importExcel), exportExcel: b(c.exportExcel) },
     payroll: { view: b(pr.view), create: b(pr.create), edit: b(pr.edit), delete: b(pr.delete), deleteAll: b(pr.deleteAll), importExcel: b(pr.importExcel), exportExcel: b(pr.exportExcel) },
     users: { view: b(u.view), create: b(u.create), edit: b(u.edit), delete: b(u.delete), deleteAll: b(u.deleteAll), importExcel: b(u.importExcel), exportExcel: b(u.exportExcel) },
-    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase) },
+    system: { dashboardStats: b(s.dashboardStats), backupDatabase: b(s.backupDatabase), restoreDatabase: b(s.restoreDatabase), securityLogs: b(s.securityLogs) },
     smartDashboard: { view: b(sd.view), exportExcel: b(sd.exportExcel), print: b(sd.print) },
     ceoDashboard: { view: b(cd.view), create: b(cd.create), edit: b(cd.edit), delete: b(cd.delete), deleteAll: b(cd.deleteAll), importExcel: b(cd.importExcel), exportExcel: b(cd.exportExcel), print: b(cd.print) },
     unitOperations: { view: b(uo.view), create: b(uo.create), edit: b(uo.edit), delete: b(uo.delete), deleteAll: b(uo.deleteAll), importExcel: b(uo.importExcel), exportExcel: b(uo.exportExcel), allowedUnits: Array.isArray(uo.allowedUnits) ? uo.allowedUnits.map(String) : [] },
@@ -788,6 +806,251 @@ function buildPresetPermissions(presetName: string) {
   return getEmptyPermissions();
 }
 
+// ================= AUDIT LOG & EDITOR STAMP HELPERS =================
+
+function buildEditorMeta(authUser: any) {
+  return {
+    updatedByUserId: String(authUser?.id || ''),
+    updatedByUsername: String(authUser?.username || ''),
+    updatedByName: String(authUser?.fullName || authUser?.username || ''),
+    updatedAt: faDateTime(),
+  };
+}
+
+const AUDIT_LABELS: Record<string, Record<string, string>> = {
+  users: {
+    username: 'نام کاربری',
+    fullName: 'نام و نام خانوادگی',
+    role: 'نقش سازمانی',
+    department: 'واحد اداری',
+    email: 'ایمیل',
+    isActive: 'وضعیت فعال بودن',
+    permissions: 'سطوح دسترسی',
+  },
+  personnel: {
+    personnelCode: 'کد پرسنلی',
+    employeeId: 'شناسه کارمند',
+    firstName: 'نام',
+    lastName: 'نام خانوادگی',
+    fullName: 'نام و نام خانوادگی',
+    nationalId: 'کد ملی',
+    department: 'واحد سازمانی',
+    position: 'پست سازمانی',
+    jobTitle: 'شغل',
+    employmentType: 'نوع استخدام',
+    status: 'وضعیت همکاری',
+    baseSalary: 'حقوق پایه (ریال)',
+    phone: 'تلفن همراه',
+    education: 'مدرک تحصیلی',
+    workLocation: 'محل خدمت',
+    notes: 'توضیحات',
+  },
+  karaneh: {
+    personnelCode: 'کد پرسنلی',
+    fullName: 'نام و نام خانوادگی',
+    department: 'واحد اداری',
+    position: 'پست سازمانی',
+    period: 'دوره',
+    baseKaraneh: 'کارانه پایه',
+    overtimeBonus: 'پاداش اضافه‌کاری',
+    deductions: 'کسورات',
+    finalKaraneh: 'کارانه نهایی',
+    status: 'وضعیت ارسال',
+    notes: 'توضیحات',
+  },
+  jobGroups: {
+    code: 'کد گروه',
+    title: 'عنوان گروه',
+    grade: 'رتبه',
+    minBaseSalary: 'حداقل حقوق پایه',
+    maxBaseSalary: 'حداکثر حقوق پایه',
+    maxKaranehCeiling: 'سقف کارانه',
+    requiredExperienceYears: 'سابقه مورد نیاز',
+    requiredDegree: 'مدرک مورد نیاز',
+    description: 'توضیحات',
+  },
+  jobClassifications: {
+    personnelCode: 'کد پرسنلی',
+    firstName: 'نام',
+    lastName: 'نام خانوادگی',
+    department: 'واحد',
+    workLocation: 'محل خدمت',
+    jobGroup: 'گروه شغلی',
+    jobTitle: 'شغل',
+    position: 'پست',
+    education: 'مدرک تحصیلی',
+  },
+  commitments: {
+    personnelCode: 'کد پرسنلی',
+    personnelName: 'نام پرسنل',
+    commitmentType: 'نوع تعهد',
+    amount: 'مبلغ تعهد',
+    previouslyTakenAmount: 'مبلغ قبلی',
+    maxAllowedAmount: 'سقف مجاز کل',
+    status: 'وضعیت',
+    isArchived: 'بایگانی شده',
+    guarantorName: 'ضامن',
+    startDate: 'تاریخ شروع',
+    endDate: 'تاریخ پایان',
+    notes: 'توضیحات',
+  },
+  miningVolumes: {
+    period: 'دوره',
+    unitName: 'نام واحد',
+    activityType: 'نوع عملیات',
+    metricTitle: 'عنوان شاخص',
+    volumeValue: 'حجم محقق‌شده',
+    targetVolume: 'برنامه ماه',
+    unitLabel: 'یکا',
+    status: 'وضعیت',
+    notes: 'توضیحات',
+  },
+  miningMachinery: {
+    machineCode: 'کد دستگاه',
+    machineName: 'نام تجهیز',
+    machineType: 'نوع تجهیز',
+    unitName: 'واحد مستقر',
+    status: 'وضعیت دستگاه',
+    issueDescription: 'شرح خرابی',
+    stoppedSince: 'تاریخ توقف',
+    estimatedReadyDate: 'تخمین آماده‌به‌کار',
+    operatorName: 'اپراتور / مسئول',
+    notes: 'توضیحات',
+  },
+  unitReports: {
+    period: 'دوره',
+    unitName: 'نام واحد',
+    reportCategory: 'دسته‌بندی گزارش',
+    metricName: 'عنوان شاخص',
+    actualValue: 'مقدار محقق‌شده',
+    previousValue: 'مقدار ماه قبل',
+    targetValue: 'هدف ماه',
+    unitLabel: 'یکا',
+    status: 'وضعیت',
+    submittedBy: 'ثبت‌کننده',
+    notes: 'توضیحات',
+  },
+};
+
+function formatAuditVal(v: any): string {
+  if (v === undefined || v === null || v === '') return '—';
+  if (typeof v === 'boolean') return v ? 'بله' : 'خیر';
+  if (typeof v === 'number') return Number.isFinite(v) ? v.toLocaleString('fa-IR') : '0';
+  if (Array.isArray(v)) return `${v.length} مورد`;
+  if (typeof v === 'object') return '[ساختاری]';
+  const s = String(v).trim();
+  return s.length > 90 ? `${s.slice(0, 87)}...` : s;
+}
+
+function computeAuditDiff(oldObj: any, newObj: any, moduleKey: string, maxChanges = 15): Array<{ field: string; label: string; oldValue: string; newValue: string }> {
+  if (!oldObj || !newObj || typeof oldObj !== 'object' || typeof newObj !== 'object') return [];
+  const labels = AUDIT_LABELS[moduleKey] || {};
+  const ignored = new Set([
+    'id', 'password', 'documents', 'rawFields', 'updatedAt', 'updatedByUserId', 'updatedByUsername',
+    'updatedByName', 'createdAt', 'createdByUserId', 'createdByUsername', 'createdByName', 'lastLogin',
+  ]);
+  const keys = Array.from(new Set([...Object.keys(labels), ...Object.keys(newObj)]));
+  const diffs: Array<{ field: string; label: string; oldValue: string; newValue: string }> = [];
+  for (const key of keys) {
+    if (ignored.has(key)) continue;
+    if (key === 'permissions') {
+      if (JSON.stringify(oldObj.permissions || {}) !== JSON.stringify(newObj.permissions || {})) {
+        diffs.push({
+          field: 'permissions',
+          label: labels.permissions || 'سطوح دسترسی',
+          oldValue: 'دسترسی قبلی',
+          newValue: 'تغییر سطوح دسترسی',
+        });
+      }
+      continue;
+    }
+    const prevRaw = oldObj[key];
+    const nextRaw = newObj[key];
+    const prevStr = prevRaw === undefined || prevRaw === null ? '' : String(prevRaw).trim();
+    const nextStr = nextRaw === undefined || nextRaw === null ? '' : String(nextRaw).trim();
+    if (prevStr === nextStr) continue;
+    diffs.push({
+      field: key,
+      label: labels[key] || key,
+      oldValue: formatAuditVal(prevRaw),
+      newValue: formatAuditVal(nextRaw),
+    });
+    if (diffs.length >= maxChanges) break;
+  }
+  return diffs;
+}
+
+async function recordAuditLog(
+  db: D1Database,
+  authUser: any,
+  entry: {
+    module: string;
+    action: string;
+    targetId?: string;
+    targetLabel?: string;
+    summary: string;
+    changes?: Array<{ field: string; label: string; oldValue: string; newValue: string }>;
+    recordCount?: number;
+  }
+): Promise<void> {
+  try {
+    const id = genId('aud');
+    const createdAtIso = new Date().toISOString();
+    const persianDateTime = faDateTime();
+    const changesJson = JSON.stringify(Array.isArray(entry.changes) ? entry.changes.slice(0, 20) : []);
+    await db
+      .prepare(
+        `INSERT INTO audit_logs (
+          id, created_at_iso, persian_date_time, user_id, username, user_full_name, user_role,
+          module, action, target_id, target_label, summary, changes_json, record_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        createdAtIso,
+        persianDateTime,
+        String(authUser?.id || ''),
+        String(authUser?.username || ''),
+        String(authUser?.fullName || authUser?.username || 'سیستم'),
+        String(authUser?.role || ''),
+        String(entry.module || 'system'),
+        String(entry.action || 'update'),
+        String(entry.targetId || ''),
+        String(entry.targetLabel || ''),
+        String(entry.summary || ''),
+        changesJson,
+        Number(entry.recordCount ?? 1)
+      )
+      .run();
+  } catch {
+    // Non-blocking audit logging safeguard
+  }
+}
+
+function escapeSqlLike(s: string): string {
+  return s.replace(/[\\%_]/g, '\\$&');
+}
+
+function buildJsonLikeFilter(allowedValues: string[], extraClauses: string[] = []): { clause: string; binds: string[] } {
+  const likes: string[] = [];
+  const binds: string[] = [];
+  for (const val of allowedValues) {
+    const clean = String(val || '').trim();
+    if (!clean) continue;
+    const pers = escapeSqlLike(clean.replace(/[يئ]/g, 'ی').replace(/ك/g, 'ک'));
+    const arab = escapeSqlLike(clean.replace(/ی/g, 'ي').replace(/ک/g, 'ك'));
+    likes.push(`data_json LIKE ? ESCAPE '\\'`);
+    binds.push(`%${pers}%`);
+    if (arab !== pers) {
+      likes.push(`data_json LIKE ? ESCAPE '\\'`);
+      binds.push(`%${arab}%`);
+    }
+  }
+  const allParts = [...likes, ...extraClauses];
+  if (allParts.length === 0) return { clause: '', binds: [] };
+  return { clause: `(${allParts.join(' OR ')})`, binds };
+}
+
 // ================= D1 DATA ACCESS HELPERS =================
 
 function rowToUser(row: any) {
@@ -810,6 +1073,10 @@ function rowToUser(row: any) {
     isActive: row.is_active !== 0,
     createdAt: row.created_at || '',
     lastLogin: row.last_login || '',
+    updatedAt: row.updated_at || '',
+    updatedByUserId: row.updated_by_user_id || '',
+    updatedByUsername: row.updated_by_username || '',
+    updatedByName: row.updated_by_name || '',
   };
 }
 
@@ -834,8 +1101,8 @@ async function getUserByUsername(db: D1Database, username: string): Promise<any 
 async function upsertUser(db: D1Database, u: any): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO users (id, username, password, full_name, role, department, email, uid, permissions_json, is_active, created_at, last_login, updated_at, updated_by_user_id, updated_by_username, updated_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          username = excluded.username,
          password = excluded.password,
@@ -847,7 +1114,11 @@ async function upsertUser(db: D1Database, u: any): Promise<void> {
          permissions_json = excluded.permissions_json,
          is_active = excluded.is_active,
          created_at = excluded.created_at,
-         last_login = excluded.last_login`
+         last_login = excluded.last_login,
+         updated_at = excluded.updated_at,
+         updated_by_user_id = excluded.updated_by_user_id,
+         updated_by_username = excluded.updated_by_username,
+         updated_by_name = excluded.updated_by_name`
     )
     .bind(
       u.id,
@@ -861,7 +1132,11 @@ async function upsertUser(db: D1Database, u: any): Promise<void> {
       JSON.stringify(u.permissions || {}),
       u.isActive === false ? 0 : 1,
       u.createdAt || '',
-      u.lastLogin || ''
+      u.lastLogin || '',
+      u.updatedAt || '',
+      u.updatedByUserId || '',
+      u.updatedByUsername || '',
+      u.updatedByName || ''
     )
     .run();
 }
@@ -1101,53 +1376,6 @@ async function getSyncMeta(db: D1Database): Promise<{ syncVersion: string; lastS
 }
 
 async function computeDatabaseStatus(db: D1Database, authUser: any) {
-  const [
-    persAgg,
-    karAgg,
-    payAgg,
-    usrAgg,
-    jgRow,
-    jcRow,
-    cmtAgg,
-    mvRow,
-    mmRow,
-    urRow,
-    meta,
-  ] = await Promise.all([
-    db
-      .prepare(
-        `SELECT
-           COUNT(*) as total,
-           COALESCE(SUM(CASE WHEN (data_json LIKE '%"nationalCardImage":"_%' OR data_json LIKE '%"shenasnamehPages":["_%') AND json_valid(data_json) AND (COALESCE(json_extract(data_json, '$.documents.nationalCardImage'), '') != '' OR COALESCE(json_array_length(json_extract(data_json, '$.documents.shenasnamehPages')), 0) > 0) THEN 1 ELSE 0 END), 0) as docsCount,
-           COALESCE(SUM(CASE WHEN data_json LIKE '%"relatives":[{%' AND json_valid(data_json) THEN COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0) ELSE 0 END), 0) as relCount
-         FROM personnel`
-      )
-      .first<any>(),
-    db.prepare(
-      `SELECT
-         COUNT(*) as total,
-         COUNT(DISTINCT NULLIF(period, '')) as periods,
-         COALESCE(SUM(CASE WHEN data_json LIKE '%"status":"submitted"%' THEN 1 ELSE 0 END), 0) as submittedTotal,
-         COUNT(DISTINCT CASE WHEN data_json LIKE '%"status":"submitted"%' THEN NULLIF(period, '') ELSE NULL END) as submittedPeriods
-       FROM karaneh`
-    ).first<any>(),
-    db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM payroll').first<any>(),
-    db.prepare('SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN is_active != 0 THEN 1 ELSE 0 END), 0) as activeTotal FROM users').first<any>(),
-    db.prepare('SELECT COUNT(*) as total FROM job_groups').first<any>(),
-    db.prepare('SELECT COUNT(*) as total FROM job_classifications').first<any>(),
-    db
-      .prepare(
-        `SELECT COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN (data_json LIKE '%"isArchived":true%' OR data_json LIKE '%"isArchived":1%') AND json_valid(data_json) AND json_extract(data_json, '$.isArchived') = 1 THEN 1 ELSE 0 END), 0) as archivedTotal
-         FROM commitments`
-      )
-      .first<any>(),
-    db.prepare('SELECT COUNT(*) as total FROM mining_volumes').first<any>(),
-    db.prepare('SELECT COUNT(*) as total FROM mining_machinery').first<any>(),
-    db.prepare('SELECT COUNT(*) as total FROM unit_reports').first<any>(),
-    getSyncMeta(db),
-  ]);
-
   const canStats =
     isSuperAdminUser(authUser) ||
     checkPermission(authUser, 'system', 'dashboardStats') ||
@@ -1160,19 +1388,97 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
   const canJg = canStats || checkPermission(authUser, 'jobGroups', 'view');
   const canCmt = canStats || checkPermission(authUser, 'commitments', 'view');
   const canMining = canStats || hasMiningOrUnitPerm(authUser, 'view');
+  const canSecurityLogs = isSuperAdminUser(authUser) || checkPermission(authUser, 'system', 'securityLogs');
+
+  const [
+    persTotalRow,
+    persDocsRow,
+    persRelRow,
+    karAgg,
+    payAgg,
+    usrAgg,
+    jgRow,
+    jcRow,
+    cmtAgg,
+    mvRow,
+    mmRow,
+    urRow,
+    auditRow,
+    meta,
+  ] = await Promise.all([
+    canPers ? db.prepare('SELECT COUNT(*) as total FROM personnel').first<any>().catch(() => null) : Promise.resolve(null),
+    canPers
+      ? db
+          .prepare(
+            `SELECT COUNT(*) as docsCount FROM personnel
+             WHERE data_json LIKE '%"nationalCardImage":"data:%'
+                OR data_json LIKE '%"nationalCardImage":"http%'
+                OR data_json LIKE '%"shenasnamehPages":["data:%'
+                OR data_json LIKE '%"shenasnamehPages":["http%'`
+          )
+          .first<any>()
+          .catch(() => null)
+      : Promise.resolve(null),
+    canPers
+      ? db
+          .prepare(
+            `SELECT COALESCE(SUM(json_array_length(json_extract(data_json, '$.relatives'))), 0) as relCount
+             FROM personnel
+             WHERE data_json LIKE '%"relatives":[{%' AND json_valid(data_json)`
+          )
+          .first<any>()
+          .catch(() => null)
+      : Promise.resolve(null),
+    canKar
+      ? db
+          .prepare(
+            `SELECT
+               COUNT(*) as total,
+               COUNT(DISTINCT NULLIF(period, '')) as periods,
+               COALESCE(SUM(CASE WHEN data_json LIKE '%"status":"submitted"%' THEN 1 ELSE 0 END), 0) as submittedTotal,
+               COUNT(DISTINCT CASE WHEN data_json LIKE '%"status":"submitted"%' THEN NULLIF(period, '') ELSE NULL END) as submittedPeriods
+             FROM karaneh`
+          )
+          .first<any>()
+          .catch(() => null)
+      : Promise.resolve(null),
+    canPay
+      ? db.prepare('SELECT COUNT(*) as total, COUNT(DISTINCT NULLIF(period, \'\')) as periods FROM payroll').first<any>().catch(() => null)
+      : Promise.resolve(null),
+    canUsers
+      ? db.prepare('SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN is_active != 0 THEN 1 ELSE 0 END), 0) as activeTotal FROM users').first<any>().catch(() => null)
+      : Promise.resolve(null),
+    canJg ? db.prepare('SELECT COUNT(*) as total FROM job_groups').first<any>().catch(() => null) : Promise.resolve(null),
+    canJg ? db.prepare('SELECT COUNT(*) as total FROM job_classifications').first<any>().catch(() => null) : Promise.resolve(null),
+    canCmt
+      ? db
+          .prepare(
+            `SELECT COUNT(*) as total,
+                    COALESCE(SUM(CASE WHEN (data_json LIKE '%"isArchived":true%' OR data_json LIKE '%"isArchived":1%') THEN 1 ELSE 0 END), 0) as archivedTotal
+             FROM commitments`
+          )
+          .first<any>()
+          .catch(() => null)
+      : Promise.resolve(null),
+    canMining ? db.prepare('SELECT COUNT(*) as total FROM mining_volumes').first<any>().catch(() => null) : Promise.resolve(null),
+    canMining ? db.prepare('SELECT COUNT(*) as total FROM mining_machinery').first<any>().catch(() => null) : Promise.resolve(null),
+    canMining ? db.prepare('SELECT COUNT(*) as total FROM unit_reports').first<any>().catch(() => null) : Promise.resolve(null),
+    canSecurityLogs ? db.prepare('SELECT COUNT(*) as total FROM audit_logs').first<any>().catch(() => null) : Promise.resolve(null),
+    getSyncMeta(db).catch(() => ({ syncVersion: '1', lastSaved: faDateTime() })),
+  ]);
 
   return {
     storageLocation: 'دیتابیس ابری دائمی و رایگان Cloudflare D1',
     storageEngine: 'cloudflare-d1',
-    totalPersonnel: canPers ? Number(persAgg?.total || 0) : 0,
-    totalRelatives: canPers ? Number(persAgg?.relCount || 0) : 0,
+    totalPersonnel: canPers ? Number(persTotalRow?.total || 0) : 0,
+    totalRelatives: canPers ? Number(persRelRow?.relCount || 0) : 0,
     totalKaranehRecords: canKar ? Number(karAgg?.total || 0) : 0,
     totalSubmittedKaranehRecords: canKar ? Number(karAgg?.submittedTotal || 0) : 0,
     submittedKaranehPeriodsCount: canKar ? Number(karAgg?.submittedPeriods || 0) : 0,
     totalPayrollRecords: canPay ? Number(payAgg?.total || 0) : 0,
     totalUsers: canUsers ? Number(usrAgg?.total || 0) : 0,
     totalActiveUsers: canUsers ? Number(usrAgg?.activeTotal || 0) : 0,
-    totalPersonnelWithDocs: canPers ? Number(persAgg?.docsCount || 0) : 0,
+    totalPersonnelWithDocs: canPers ? Number(persDocsRow?.docsCount || 0) : 0,
     payrollPeriodsCount: canPay ? Number(payAgg?.periods || 0) : 0,
     karanehPeriodsCount: canKar ? Number(karAgg?.periods || 0) : 0,
     totalJobGroups: canJg ? Number(jgRow?.total || 0) : 0,
@@ -1182,13 +1488,14 @@ async function computeDatabaseStatus(db: D1Database, authUser: any) {
     totalMiningVolumes: canMining ? Number(mvRow?.total || 0) : 0,
     totalMiningMachinery: canMining ? Number(mmRow?.total || 0) : 0,
     totalUnitReports: canMining ? Number(urRow?.total || 0) : 0,
+    totalAuditLogs: canSecurityLogs ? Number(auditRow?.total || 0) : 0,
     fileSizeBytes: 0,
     lastSaved: meta.lastSaved,
     syncVersion: meta.syncVersion,
     isLocalHost: false,
     hostPlatform: 'cloudflare-workers-d1',
     authProtected: true,
-    schemaVersion: '5.1-negin-parto-nasr-full-sync',
+    schemaVersion: '5.2-negin-parto-nasr-audit-sync',
   };
 }
 
@@ -1348,14 +1655,18 @@ async function upsertChunkIntoD1(db: D1Database, table: string, items: any[]): P
         u.isActive === false ? 0 : 1,
         u.createdAt || prev?.createdAt || '',
         u.lastLogin || prev?.lastLogin || '',
+        u.updatedAt || prev?.updatedAt || '',
+        u.updatedByUserId || prev?.updatedByUserId || '',
+        u.updatedByUsername || prev?.updatedByUsername || '',
+        u.updatedByName || prev?.updatedByName || '',
       ]);
     }
     stmts = buildMultiRowUpsertStmts(
       db,
       'users',
-      ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+      ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login', 'updated_at', 'updated_by_user_id', 'updated_by_username', 'updated_by_name'],
       'id',
-      ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+      ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login', 'updated_at', 'updated_by_user_id', 'updated_by_username', 'updated_by_name'],
       rows
     );
   } else if (table === 'personnel') {
@@ -1385,6 +1696,33 @@ async function upsertChunkIntoD1(db: D1Database, table: string, items: any[]): P
   } else if (table === 'unitReports') {
     const rows = items.filter((ur) => ur?.id).map((ur) => [String(ur.id), String(ur.period || ''), String(ur.unitName || ''), JSON.stringify(ur)]);
     stmts = buildMultiRowUpsertStmts(db, 'unit_reports', ['id', 'period', 'unit_name', 'data_json'], 'id', ['period', 'unit_name', 'data_json'], rows);
+  } else if (table === 'auditLogs') {
+    const rows = items
+      .filter((a) => a?.id)
+      .map((a) => [
+        String(a.id),
+        String(a.createdAtIso || new Date().toISOString()),
+        String(a.persianDateTime || ''),
+        String(a.userId || ''),
+        String(a.username || ''),
+        String(a.userFullName || ''),
+        String(a.userRole || ''),
+        String(a.module || ''),
+        String(a.action || ''),
+        String(a.targetId || ''),
+        String(a.targetLabel || ''),
+        String(a.summary || ''),
+        JSON.stringify(Array.isArray(a.changes) ? a.changes : []),
+        Number(a.recordCount ?? 1),
+      ]);
+    stmts = buildMultiRowUpsertStmts(
+      db,
+      'audit_logs',
+      ['id', 'created_at_iso', 'persian_date_time', 'user_id', 'username', 'user_full_name', 'user_role', 'module', 'action', 'target_id', 'target_label', 'summary', 'changes_json', 'record_count'],
+      'id',
+      ['created_at_iso', 'persian_date_time', 'user_id', 'username', 'user_full_name', 'user_role', 'module', 'action', 'target_id', 'target_label', 'summary', 'changes_json', 'record_count'],
+      rows
+    );
   }
   if (stmts.length > 0) {
     await batchExecuteChunked(db, stmts);
@@ -1404,6 +1742,7 @@ async function clearAllSnapshotTablesInD1(db: D1Database): Promise<void> {
     'mining_volumes',
     'mining_machinery',
     'unit_reports',
+    'audit_logs',
   ];
   await db.batch(clearTables.map((t) => db.prepare(`DELETE FROM ${t}`)));
 }
@@ -1420,6 +1759,9 @@ async function replaceAllSnapshotInD1(db: D1Database, data: any): Promise<void> 
   await upsertChunkIntoD1(db, 'miningVolumes', data.miningVolumes || []);
   await upsertChunkIntoD1(db, 'miningMachinery', data.miningMachinery || []);
   await upsertChunkIntoD1(db, 'unitReports', data.unitReports || []);
+  if (Array.isArray(data.auditLogs) && data.auditLogs.length > 0) {
+    await upsertChunkIntoD1(db, 'auditLogs', data.auditLogs);
+  }
   await touchLastSaved(db);
 }
 
@@ -1430,15 +1772,17 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
 
   let seededFlag = false;
   let indexesV6Flag = false;
+  let auditV7Flag = false;
   try {
     const { results } = await db
-      .prepare("SELECT key, value FROM app_meta WHERE key IN ('seeded_v1', 'schema_v6_indexes')")
+      .prepare("SELECT key, value FROM app_meta WHERE key IN ('seeded_v1', 'schema_v6_indexes', 'schema_v7_audit')")
       .all<{ key: string; value: string }>();
     for (const r of results || []) {
       if (r.key === 'seeded_v1' && r.value === 'true') seededFlag = true;
       if (r.key === 'schema_v6_indexes' && r.value === 'true') indexesV6Flag = true;
+      if (r.key === 'schema_v7_audit' && r.value === 'true') auditV7Flag = true;
     }
-    if (seededFlag && indexesV6Flag) {
+    if (seededFlag && indexesV6Flag && auditV7Flag) {
       isBootstrappedInIsolate = true;
       return;
     }
@@ -1455,7 +1799,11 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
         department TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
         uid TEXT NOT NULL DEFAULT '', permissions_json TEXT NOT NULL DEFAULT '{}',
         is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '',
-        last_login TEXT NOT NULL DEFAULT ''
+        last_login TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT '',
+        updated_by_user_id TEXT NOT NULL DEFAULT '',
+        updated_by_username TEXT NOT NULL DEFAULT '',
+        updated_by_name TEXT NOT NULL DEFAULT ''
       )`
     ),
     db.prepare('CREATE TABLE IF NOT EXISTS personnel (id TEXT PRIMARY KEY, personnel_code TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT \'\')'),
@@ -1478,6 +1826,27 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_mining_machinery_code ON mining_machinery(machine_code)'),
     db.prepare('CREATE TABLE IF NOT EXISTS unit_reports (id TEXT PRIMARY KEY, period TEXT NOT NULL DEFAULT \'\', unit_name TEXT NOT NULL DEFAULT \'\', data_json TEXT NOT NULL)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_unit_reports_period_unit ON unit_reports(period, unit_name)'),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        created_at_iso TEXT NOT NULL,
+        persian_date_time TEXT NOT NULL DEFAULT '',
+        user_id TEXT NOT NULL DEFAULT '',
+        username TEXT NOT NULL DEFAULT '',
+        user_full_name TEXT NOT NULL DEFAULT '',
+        user_role TEXT NOT NULL DEFAULT '',
+        module TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL DEFAULT '',
+        target_id TEXT NOT NULL DEFAULT '',
+        target_label TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        changes_json TEXT NOT NULL DEFAULT '[]',
+        record_count INTEGER NOT NULL DEFAULT 1
+      )`
+    ),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_iso ON audit_logs(created_at_iso DESC)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_logs_module ON audit_logs(module)'),
   ]);
 
   if (!indexesV6Flag) {
@@ -1490,6 +1859,23 @@ async function ensureBootstrapped(db: D1Database): Promise<void> {
       db.prepare('UPDATE mining_machinery SET machine_code = TRIM(machine_code) WHERE machine_code != TRIM(machine_code)'),
       db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('schema_v6_indexes', 'true')"),
     ]);
+  }
+
+  if (!auditV7Flag) {
+    const alterStmts = [
+      "ALTER TABLE users ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN updated_by_user_id TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN updated_by_username TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN updated_by_name TEXT NOT NULL DEFAULT ''",
+    ];
+    for (const sql of alterStmts) {
+      try {
+        await db.prepare(sql).run();
+      } catch {
+        // Column already exists
+      }
+    }
+    await db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('schema_v7_audit', 'true')").run();
   }
 
   if (!seededFlag) {
@@ -1593,6 +1979,13 @@ export default {
         }
         user.lastLogin = faDateTime();
         await upsertUser(env.DB, user);
+        await recordAuditLog(env.DB, user, {
+          module: 'auth',
+          action: 'login',
+          targetId: user.id,
+          targetLabel: user.fullName || user.username,
+          summary: `ورود موفق کاربر «${user.fullName || user.username}» به سامانه`,
+        });
         const token = await createAuthToken(user, env);
         return jsonRes(request, env, {
           success: true,
@@ -1639,10 +2032,38 @@ export default {
         const cmtLimit = isLite ? 80 : 300;
         const urLimit = isLite ? 80 : 300;
 
+        const karFilter = (() => {
+          if (!canAnyKar || canKarFull) return { clause: '', binds: [] as string[] };
+          if (!canKar && canFinalKar) {
+            return { clause: `data_json LIKE '%"status":"submitted"%'`, binds: [] as string[] };
+          }
+          const allowed = getKaranehAllowedUnitsForUser(authUser);
+          return buildJsonLikeFilter(
+            allowed,
+            canFinalKar ? [`data_json LIKE '%"status":"submitted"%'`] : []
+          );
+        })();
+
+        const mvFilter = (() => {
+          if (!canMining || isCeoOrSuper) return { clause: '', binds: [] as string[] };
+          const units = [...getAllowedUnitsForUser(authUser), 'واحد دیسپچینگ و کنترل تولید', 'دیسپچینگ'];
+          return buildJsonLikeFilter(units);
+        })();
+
+        const mmFilter = (() => {
+          if (!canMining || isCeoOrSuper) return { clause: '', binds: [] as string[] };
+          const units = [...getAllowedUnitsForUser(authUser), 'واحد تعمیرگاه و ماشین‌آلات سنگین', 'تعمیرگاه'];
+          return buildJsonLikeFilter(units);
+        })();
+
+        const urFilter = (() => {
+          if (!canMining || isCeoOrSuper) return { clause: '', binds: [] as string[] };
+          return buildJsonLikeFilter(getAllowedUnitsForUser(authUser));
+        })();
+
         const [
           personnelJson,
           karanehResult,
-          karanehPersJson,
           payrollJson,
           jobGroupsJson,
           jobClassificationsJson,
@@ -1690,56 +2111,32 @@ export default {
             ? Promise.resolve({ json: '[]', total: 0 })
             : canKarFull
             ? getRawJsonArrayString(env.DB, 'karaneh', '', [], 'data_json', karLimit, 0).then((json) => ({ json, total: -1 }))
-            : getJsonRows(env.DB, 'karaneh').then((rows) => {
-                const filtered = rows.filter(
-                  (k: any) =>
-                    (canKar && isKaranehUnitAllowedForUser(authUser, k.department)) ||
-                    (canFinalKar && k.status === 'submitted')
-                );
-                return { json: JSON.stringify(filtered.slice(0, karLimit)), total: filtered.length };
-              }),
-          !canKar || canPers
-            ? Promise.resolve('[]')
-            : env.DB.prepare(
-                `SELECT id,
-                        TRIM(personnel_code) as personnelCode,
-                        COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
-                        COALESCE(json_extract(data_json, '$.department'), '') as department,
-                        COALESCE(json_extract(data_json, '$.position'), '') as position
-                 FROM personnel`
-              )
-                .all<any>()
-                .then(({ results }) =>
-                  JSON.stringify(
-                    (results || []).filter((p: any) => isKaranehUnitAllowedForUser(authUser, p.department))
-                  )
-                ),
+            : Promise.all([
+                env.DB.prepare(karFilter.clause ? `SELECT COUNT(*) as total FROM karaneh WHERE ${karFilter.clause}` : 'SELECT COUNT(*) as total FROM karaneh')
+                  .bind(...karFilter.binds)
+                  .first<{ total: number }>(),
+                getRawJsonArrayString(env.DB, 'karaneh', karFilter.clause, karFilter.binds, 'data_json', karLimit, 0),
+              ]).then(([cnt, json]) => ({ json, total: Number(cnt?.total || 0) })),
           canPay ? getRawJsonArrayString(env.DB, 'payroll', '', [], 'data_json', payLimit, 0) : Promise.resolve('[]'),
           canJg ? getRawJsonArrayString(env.DB, 'job_groups') : Promise.resolve('[]'),
           canJg ? getRawJsonArrayString(env.DB, 'job_classifications', '', [], 'data_json', jcLimit, 0) : Promise.resolve('[]'),
           canCmt ? getRawJsonArrayString(env.DB, 'commitments', '', [], 'data_json', cmtLimit, 0) : Promise.resolve('[]'),
           !canMining
             ? Promise.resolve('[]')
-            : isCeoOrSuper
-            ? getRawJsonArrayString(env.DB, 'mining_volumes')
-            : getJsonRows(env.DB, 'mining_volumes').then((rows) =>
-                JSON.stringify(rows.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName)))
-              ),
+            : getRawJsonArrayString(env.DB, 'mining_volumes', mvFilter.clause, mvFilter.binds, 'data_json', isLite ? 150 : 400, 0),
           !canMining
             ? Promise.resolve('[]')
-            : isCeoOrSuper
-            ? getRawJsonArrayString(env.DB, 'mining_machinery')
-            : getJsonRows(env.DB, 'mining_machinery').then((rows) =>
-                JSON.stringify(rows.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName)))
-              ),
+            : getRawJsonArrayString(env.DB, 'mining_machinery', mmFilter.clause, mmFilter.binds, 'data_json', isLite ? 150 : 400, 0),
           !canMining
             ? Promise.resolve({ json: '[]', total: 0 })
             : isCeoOrSuper
             ? getRawJsonArrayString(env.DB, 'unit_reports', '', [], 'data_json', urLimit, 0).then((json) => ({ json, total: -1 }))
-            : getJsonRows(env.DB, 'unit_reports').then((rows) => {
-                const filtered = rows.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
-                return { json: JSON.stringify(filtered.slice(0, urLimit)), total: filtered.length };
-              }),
+            : Promise.all([
+                env.DB.prepare(urFilter.clause ? `SELECT COUNT(*) as total FROM unit_reports WHERE ${urFilter.clause}` : 'SELECT COUNT(*) as total FROM unit_reports')
+                  .bind(...urFilter.binds)
+                  .first<{ total: number }>(),
+                getRawJsonArrayString(env.DB, 'unit_reports', urFilter.clause, urFilter.binds, 'data_json', urLimit, 0),
+              ]).then(([cnt, json]) => ({ json, total: Number(cnt?.total || 0) })),
           canUsers ? getAllUsers(env.DB) : Promise.resolve([]),
           computeDatabaseStatus(env.DB, authUser),
         ]);
@@ -1758,11 +2155,13 @@ export default {
             ? rawReportsResult.total
             : Number(dbStatus.totalUnitReports || 0);
 
+        // NOTE: Never run full-table SELECT over personnel inside /bootstrap;
+        // restricted karaneh users load paginated /karaneh/unit-personnel lazily in background.
         const payloadStr =
           `{"success":true,"data":{` +
           `"personnel":${personnelJson},` +
           `"karaneh":${karanehResult.json},` +
-          `"karanehPersonnel":${karanehPersJson},` +
+          `"karanehPersonnel":[],` +
           `"payroll":${payrollJson},` +
           `"jobGroups":${jobGroupsJson},` +
           `"jobClassifications":${jobClassificationsJson},` +
@@ -1785,10 +2184,84 @@ export default {
         return rawJsonResponse(request, env, payloadStr);
       }
 
+      // ================= AUDIT LOGS ROUTE =================
+      if (path === '/audit-logs' && method === 'GET') {
+        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'system', 'securityLogs')) {
+          return forbidden(request, env, 'شما مجوز مشاهده گزارش امنیت و عملکرد کاربران را ندارید.');
+        }
+        const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '100', 10) || 100));
+        const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+        const filterUserId = String(url.searchParams.get('userId') || '').trim();
+        const filterModule = String(url.searchParams.get('module') || '').trim();
+        const filterAction = String(url.searchParams.get('action') || '').trim();
+        const search = String(url.searchParams.get('search') || '').trim();
+
+        const conds: string[] = [];
+        const binds: any[] = [];
+        if (filterUserId) {
+          conds.push('user_id = ?');
+          binds.push(filterUserId);
+        }
+        if (filterModule) {
+          conds.push('module = ?');
+          binds.push(filterModule);
+        }
+        if (filterAction) {
+          conds.push('action = ?');
+          binds.push(filterAction);
+        }
+        if (search) {
+          const like = `%${escapeSqlLike(search)}%`;
+          conds.push(`(username LIKE ? ESCAPE '\\' OR user_full_name LIKE ? ESCAPE '\\' OR target_label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR changes_json LIKE ? ESCAPE '\\')`);
+          binds.push(like, like, like, like, like);
+        }
+        const whereSql = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
+        const countStmt = binds.length > 0
+          ? env.DB.prepare(`SELECT COUNT(*) as total FROM audit_logs ${whereSql}`).bind(...binds)
+          : env.DB.prepare(`SELECT COUNT(*) as total FROM audit_logs`);
+        const rowsStmt = env.DB
+          .prepare(`SELECT * FROM audit_logs ${whereSql} ORDER BY created_at_iso DESC, rowid DESC LIMIT ? OFFSET ?`)
+          .bind(...binds, limit, offset);
+        const [countRow, { results }] = await Promise.all([countStmt.first<{ total: number }>(), rowsStmt.all<any>()]);
+        const total = Number(countRow?.total || 0);
+        const data = (results || []).map((r: any) => {
+          let changes: any[] = [];
+          try {
+            changes = JSON.parse(r.changes_json || '[]');
+          } catch {
+            changes = [];
+          }
+          return {
+            id: r.id,
+            createdAtIso: r.created_at_iso,
+            persianDateTime: r.persian_date_time,
+            userId: r.user_id,
+            username: r.username,
+            userFullName: r.user_full_name,
+            userRole: r.user_role,
+            module: r.module,
+            action: r.action,
+            targetId: r.target_id,
+            targetLabel: r.target_label,
+            summary: r.summary,
+            changes,
+            recordCount: Number(r.record_count ?? 1),
+          };
+        });
+        return jsonRes(request, env, {
+          success: true,
+          data,
+          total,
+          limit,
+          offset,
+          hasMore: offset + limit < total,
+        });
+      }
+
       // ================= USERS ROUTES =================
       if (path === '/users' && method === 'GET') {
         if (!checkPermission(authUser, 'users', 'view')) {
-          return jsonRes(request, env, { success: true, data: [] });
+          return jsonRes(request, env, { success: true, data: [], total: 0, limit: 0, offset: 0, hasMore: false });
         }
         const users = await getAllUsers(env.DB);
         return jsonRes(request, env, { success: true, data: users.map(sanitizeUser) });
@@ -1828,8 +2301,16 @@ export default {
           isActive: true,
           createdAt: faDate(),
           lastLogin: '',
+          ...buildEditorMeta(authUser),
         };
         await upsertUser(env.DB, newUser);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'users',
+          action: 'create',
+          targetId: newUser.id,
+          targetLabel: `${newUser.fullName} (${newUser.username})`,
+          summary: `ایجاد حساب کاربری جدید برای «${newUser.fullName}» با نقش «${newUser.role}»`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: sanitizeUser(newUser), message: 'کاربر جدید با موفقیت ذخیره شد.' });
       }
@@ -1864,8 +2345,21 @@ export default {
             permissions: nextPermissions,
             isActive: body.isActive ?? existing.isActive,
             password: body.password ? await hashPassword(String(body.password)) : existing.password,
+            ...buildEditorMeta(authUser),
           };
           await upsertUser(env.DB, updated);
+          const changes = computeAuditDiff(existing, updated, 'users');
+          if (body.password) {
+            changes.push({ field: 'password', label: 'رمز عبور', oldValue: '••••••', newValue: 'تغییر رمز عبور' });
+          }
+          await recordAuditLog(env.DB, authUser, {
+            module: 'users',
+            action: 'update',
+            targetId: updated.id,
+            targetLabel: `${updated.fullName} (${updated.username})`,
+            summary: `ویرایش مشخصات یا سطوح دسترسی کاربر «${updated.fullName}»`,
+            changes,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: sanitizeUser(updated), message: 'اطلاعات و دسترسی‌های کاربر با موفقیت به‌روزرسانی شد.' });
         }
@@ -1878,6 +2372,13 @@ export default {
             return jsonRes(request, env, { success: false, message: 'امکان حذف کاربر ارشد سامانه (javadabadiyan) وجود ندارد.' }, 400);
           }
           await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'users',
+            action: 'delete',
+            targetId: id,
+            targetLabel: `${existing.fullName} (${existing.username})`,
+            summary: `حذف حساب کاربری «${existing.fullName}» (${existing.username})`,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, message: 'کاربر با موفقیت حذف گردید.' });
         }
@@ -1920,6 +2421,7 @@ export default {
         let updated = 0;
         let skipped = 0;
         const todayStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const username = String(getVal(row, 'username', 'نام کاربری', 'کاربر') || '').trim();
@@ -1956,6 +2458,7 @@ export default {
                     : presetLabel
                     ? buildPresetPermissions(presetLabel)
                     : normalizePermissions(existing.permissions),
+                ...editorMeta,
               }
             : {
                 id: genId('u'),
@@ -1975,6 +2478,7 @@ export default {
                 isActive,
                 createdAt: todayStr,
                 lastLogin: '',
+                ...editorMeta,
               };
 
           if (existing) updated++;
@@ -1993,6 +2497,10 @@ export default {
             nextUser.isActive === false ? 0 : 1,
             nextUser.createdAt || '',
             nextUser.lastLogin || '',
+            nextUser.updatedAt || '',
+            nextUser.updatedByUserId || '',
+            nextUser.updatedByUsername || '',
+            nextUser.updatedByName || '',
           ]);
         }
 
@@ -2009,12 +2517,18 @@ export default {
         const stmts = buildMultiRowUpsertStmts(
           env.DB,
           'users',
-          ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+          ['id', 'username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login', 'updated_at', 'updated_by_user_id', 'updated_by_username', 'updated_by_name'],
           'id',
-          ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login'],
+          ['username', 'password', 'full_name', 'role', 'department', 'email', 'uid', 'permissions_json', 'is_active', 'created_at', 'last_login', 'updated_at', 'updated_by_user_id', 'updated_by_username', 'updated_by_name'],
           Array.from(pendingMap.values())
         );
         await batchExecuteChunked(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'users',
+          action: 'import_excel',
+          summary: `ورود گروهی اکسل کاربران (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {
           success: true,
@@ -2037,6 +2551,14 @@ export default {
             deletedCount++;
           }
         }
+        if (deletedCount > 0) {
+          await recordAuditLog(env.DB, authUser, {
+            module: 'users',
+            action: 'batch_delete',
+            summary: `حذف گروهی ${deletedCount} حساب کاربری`,
+            recordCount: deletedCount,
+          });
+        }
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} حساب کاربری حذف شد.` });
       }
@@ -2046,13 +2568,21 @@ export default {
         const before = await env.DB.prepare('SELECT COUNT(*) as c FROM users WHERE username != ?').bind('javadabadiyan').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM users WHERE username != ?').bind('javadabadiyan').run();
         const deletedCount = Number(before?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'users',
+          action: 'delete_all',
+          summary: `پاکسازی حساب‌های کاربری (${deletedCount} کاربر)`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `حساب‌های کاربری به جز مدیر ارشد (${deletedCount} کاربر) پاکسازی شدند.` });
       }
 
       // ================= PERSONNEL ROUTES =================
       if (path === '/personnel' && method === 'GET') {
-        if (!checkPermission(authUser, 'personnel', 'view')) return jsonRes(request, env, { success: true, data: [] });
+        if (!checkPermission(authUser, 'personnel', 'view')) {
+          return jsonRes(request, env, { success: true, data: [], total: 0, limit: 0, offset: 0, hasMore: false });
+        }
         const hideSalary = !checkPermission(authUser, 'personnel', 'viewSalary');
         const hideDocs = !checkPermission(authUser, 'personnel', 'documents') || url.searchParams.get('lite') === '1';
         const selectExpr =
@@ -2095,6 +2625,7 @@ export default {
           return jsonRes(request, env, { success: false, message: 'پرسنلی با این کد پرسنلی قبلاً ثبت شده است.' }, 400);
         }
         const fullName = body.fullName || `${body.firstName || ''} ${body.lastName || ''}`.trim();
+        const editorMeta = buildEditorMeta(authUser);
         const item = {
           id: genId('p'),
           ...body,
@@ -2104,11 +2635,21 @@ export default {
           lastName: body.lastName || fullName.split(' ').slice(1).join(' ') || '',
           baseSalary: Number(body.baseSalary || 0),
           createdAt: faDate(),
-          updatedAt: faDate(),
+          createdByUserId: editorMeta.updatedByUserId,
+          createdByUsername: editorMeta.updatedByUsername,
+          createdByName: editorMeta.updatedByName,
+          ...editorMeta,
         };
         await env.DB.prepare('INSERT INTO personnel (id, personnel_code, data_json, updated_at) VALUES (?, ?, ?, ?)')
           .bind(item.id, item.personnelCode, JSON.stringify(item), item.updatedAt)
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'personnel',
+          action: 'create',
+          targetId: item.id,
+          targetLabel: `${item.fullName} (${item.personnelCode})`,
+          summary: `ثبت پرونده پرسنلی جدید برای «${item.fullName}» (کد ${item.personnelCode})`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: item, message: 'پرونده پرسنلی با موفقیت ذخیره شد.' });
       }
@@ -2122,23 +2663,41 @@ export default {
           const existing = JSON.parse(row.data_json);
           const body: any = await request.json().catch(() => ({}));
           const cleanCode = toAsciiDigits(body.personnelCode ?? existing.personnelCode ?? '').trim();
+          const editorMeta = buildEditorMeta(authUser);
           const updated = {
             ...existing,
             ...body,
             personnelCode: cleanCode,
             fullName: body.fullName || `${body.firstName ?? existing.firstName} ${body.lastName ?? existing.lastName}`.trim(),
             baseSalary: body.baseSalary !== undefined ? Number(body.baseSalary) : existing.baseSalary,
-            updatedAt: faDate(),
+            ...editorMeta,
           };
           await env.DB.prepare('UPDATE personnel SET personnel_code = ?, data_json = ?, updated_at = ? WHERE id = ?')
             .bind(cleanCode, JSON.stringify(updated), updated.updatedAt, id)
             .run();
+          const changes = computeAuditDiff(existing, updated, 'personnel');
+          await recordAuditLog(env.DB, authUser, {
+            module: 'personnel',
+            action: 'update',
+            targetId: id,
+            targetLabel: `${updated.fullName} (${cleanCode})`,
+            summary: `ویرایش پرونده پرسنلی «${updated.fullName}» (کد ${cleanCode})`,
+            changes,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: updated, message: 'پرونده پرسنلی با موفقیت به‌روزرسانی شد.' });
         }
         if (method === 'DELETE') {
           if (!checkPermission(authUser, 'personnel', 'delete')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT personnel_code, json_extract(data_json, \'$.fullName\') as fullName FROM personnel WHERE id = ?').bind(id).first<any>();
           await env.DB.prepare('DELETE FROM personnel WHERE id = ?').bind(id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'personnel',
+            action: 'delete',
+            targetId: id,
+            targetLabel: row ? `${row.fullName || ''} (${row.personnel_code || ''})`.trim() : id,
+            summary: `حذف پرونده پرسنلی ${row?.fullName || id}`,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, message: 'پرونده پرسنلی حذف شد.' });
         }
@@ -2189,7 +2748,9 @@ export default {
         let added = 0;
         let updated = 0;
         let skipped = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
+        const nowStr = editorMeta.updatedAt;
+        const todayDate = faDate();
 
         for (const row of items) {
           const code = toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی') || '').trim();
@@ -2237,7 +2798,7 @@ export default {
             status: String(getVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
             baseSalary: parseNum(getVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
             notes: String(getVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
-            updatedAt: nowStr,
+            ...editorMeta,
           };
 
           const merged = existing
@@ -2247,9 +2808,9 @@ export default {
                 ...(existing.jobGroupName ? { jobGroupName: existing.jobGroupName } : {}),
                 ...(existing.documents ? { documents: existing.documents } : {}),
                 relatives: Array.isArray(existing.relatives) ? existing.relatives : [],
-                createdAt: existing.createdAt || nowStr,
+                createdAt: existing.createdAt || todayDate,
               }
-            : { id: genId('p'), ...itemData, relatives: [], createdAt: nowStr };
+            : { id: genId('p'), ...itemData, relatives: [], createdAt: todayDate };
 
           byCode.set(code, merged);
           if (existing) updated++;
@@ -2278,6 +2839,12 @@ export default {
           "personnel_code = excluded.personnel_code, data_json = CASE WHEN personnel.data_json LIKE '%\"documents\":%' AND json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'personnel',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل پرسنل (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, {
           success: true,
           added,
@@ -2293,6 +2860,12 @@ export default {
         const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
         if (ids.length === 0) return jsonRes(request, env, { success: false, message: 'موردی برای حذف انتخاب نشده است.' }, 400);
         await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM personnel WHERE id = ?').bind(id)));
+        await recordAuditLog(env.DB, authUser, {
+          module: 'personnel',
+          action: 'batch_delete',
+          summary: `حذف گروهی ${ids.length} پرونده پرسنلی`,
+          recordCount: ids.length,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} پرونده پرسنلی با موفقیت حذف شد.` });
       }
@@ -2301,8 +2874,15 @@ export default {
         if (!checkPermission(authUser, 'personnel', 'deleteAll')) return forbidden(request, env);
         const c = await env.DB.prepare('SELECT COUNT(*) as c FROM personnel').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM personnel').run();
+        const cnt = Number(c?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'personnel',
+          action: 'delete_all',
+          summary: `پاکسازی کامل جدول پرسنل (${cnt} پرونده)`,
+          recordCount: cnt,
+        });
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول پرسنل (${Number(c?.c || 0)} پرونده) با موفقیت پاکسازی شد.` });
+        return jsonRes(request, env, { success: true, deletedCount: cnt, message: `کل جدول پرسنل (${cnt} پرونده) با موفقیت پاکسازی شد.` });
       }
 
       if (path === '/personnel/relatives/batch-import' && method === 'POST') {
@@ -2406,7 +2986,9 @@ export default {
         let updated = 0;
         let unmatched = 0;
         const touchedParents = new Map<string, any>();
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
+        const nowStr = editorMeta.updatedAt;
+        const todayDate = faDate();
 
         for (const row of items) {
           const pCode = toAsciiDigits(getVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
@@ -2458,8 +3040,8 @@ export default {
             isDependent,
             insuranceCovered,
             notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
-            updatedAt: nowStr,
-            createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : nowStr,
+            ...editorMeta,
+            createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : todayDate,
           };
 
           if (existingIdx >= 0) {
@@ -2470,6 +3052,9 @@ export default {
             added++;
           }
           parent.updatedAt = nowStr;
+          parent.updatedByUserId = editorMeta.updatedByUserId;
+          parent.updatedByUsername = editorMeta.updatedByUsername;
+          parent.updatedByName = editorMeta.updatedByName;
           touchedParents.set(parent.id, parent);
         }
 
@@ -2490,6 +3075,12 @@ export default {
             "personnel_code = excluded.personnel_code, data_json = CASE WHEN personnel.data_json LIKE '%\"documents\":%' AND json_valid(personnel.data_json) AND json_type(personnel.data_json, '$.documents') IS NOT NULL THEN json_set(excluded.data_json, '$.documents', json_extract(personnel.data_json, '$.documents')) ELSE excluded.data_json END, updated_at = excluded.updated_at"
           );
           await batchExecuteAndTouch(env.DB, stmts);
+          await recordAuditLog(env.DB, authUser, {
+            module: 'relatives',
+            action: 'import_excel',
+            summary: `بارگذاری اکسل بستگان و عائله (${added} جدید، ${updated} به‌روزرسانی)`,
+            recordCount: added + updated,
+          });
         }
 
         return jsonRes(request, env, {
@@ -2514,6 +3105,12 @@ export default {
           }
         }
         if (stmts.length > 0) await batchExecuteChunked(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'relatives',
+          action: 'delete_all',
+          summary: `پاکسازی کامل اطلاعات بستگان پرسنل (${deletedCount} رکورد)`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `تمامی اطلاعات بستگان پرسنل (${deletedCount} رکورد) پاکسازی شد.` });
       }
@@ -2525,77 +3122,111 @@ export default {
           checkPermission(authUser, 'karaneh', 'create') ||
           checkPermission(authUser, 'karaneh', 'edit') ||
           checkPermission(authUser, 'finalKaraneh', 'view');
-        if (!canAccess) return jsonRes(request, env, { success: true, data: [] });
-        const { results } = await env.DB.prepare(
-          `SELECT id,
-                  TRIM(personnel_code) as personnelCode,
-                  COALESCE(json_extract(data_json, '$.fullName'), '') as fullName,
-                  COALESCE(json_extract(data_json, '$.department'), '') as department,
-                  COALESCE(json_extract(data_json, '$.position'), '') as position
-           FROM personnel`
-        ).all<any>();
-        const rows = (results || []).filter((p: any) => isKaranehUnitAllowedForUser(authUser, p.department));
-        return jsonRes(request, env, { success: true, data: rows });
+        if (!canAccess) {
+          return jsonRes(request, env, { success: true, data: [], total: 0, limit: 0, offset: 0, hasMore: false });
+        }
+
+        const fullScope = hasFullKaranehScope(authUser);
+        const allowed = getKaranehAllowedUnitsForUser(authUser);
+        const deptFilter = !fullScope && allowed.length > 0 ? buildJsonLikeFilter(allowed) : { clause: '', binds: [] as string[] };
+        const pg = parsePagination(url);
+        const limit = pg.hasPagination ? pg.limit : 300;
+        const offset = pg.hasPagination ? pg.offset : 0;
+
+        const countSql = deptFilter.clause ? `SELECT COUNT(*) as total FROM personnel WHERE ${deptFilter.clause}` : 'SELECT COUNT(*) as total FROM personnel';
+        const dataSql = deptFilter.clause
+          ? `SELECT id, TRIM(personnel_code) as personnelCode, data_json FROM personnel WHERE ${deptFilter.clause} ORDER BY rowid ASC LIMIT ? OFFSET ?`
+          : `SELECT id, TRIM(personnel_code) as personnelCode, data_json FROM personnel ORDER BY rowid ASC LIMIT ? OFFSET ?`;
+
+        const [countRow, { results }] = await Promise.all([
+          (deptFilter.binds.length > 0 ? env.DB.prepare(countSql).bind(...deptFilter.binds) : env.DB.prepare(countSql)).first<{ total: number }>(),
+          env.DB.prepare(dataSql).bind(...deptFilter.binds, limit, offset).all<any>(),
+        ]);
+
+        const rows: any[] = [];
+        for (const r of results || []) {
+          try {
+            const p = JSON.parse(r.data_json);
+            if (!fullScope && !isKaranehUnitAllowedForUser(authUser, p?.department)) continue;
+            rows.push({
+              id: r.id,
+              personnelCode: r.personnelCode || p?.personnelCode || '',
+              fullName: String(p?.fullName || `${p?.firstName || ''} ${p?.lastName || ''}`.trim()),
+              department: String(p?.department || ''),
+              position: String(p?.position || ''),
+            });
+          } catch {
+            // skip malformed row
+          }
+        }
+        const total = Number(countRow?.total || 0);
+        return jsonRes(request, env, {
+          success: true,
+          data: rows,
+          total,
+          limit,
+          offset,
+          hasMore: offset + limit < total,
+        });
       }
 
       if (path === '/karaneh' && method === 'GET') {
         const canKarView = checkPermission(authUser, 'karaneh', 'view');
         const canFinalView = checkPermission(authUser, 'finalKaraneh', 'view');
-        if (!canKarView && !canFinalView) return jsonRes(request, env, { success: true, data: [] });
+        if (!canKarView && !canFinalView) {
+          return jsonRes(request, env, { success: true, data: [], total: 0, limit: 0, offset: 0, hasMore: false });
+        }
         const period = url.searchParams.get('period');
         const scope = url.searchParams.get('scope');
-        const whereClause = period ? 'period = ?' : '';
-        const binds = period ? [period] : [];
         const fullScope = hasFullKaranehScope(authUser);
 
-        if (canKarView && fullScope && scope !== 'submitted') {
-          const pg = parsePagination(url);
-          if (pg.hasPagination) {
-            const countSql = whereClause ? `SELECT COUNT(*) as total FROM karaneh WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM karaneh';
-            const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
-            const [countRow, rawArr] = await Promise.all([
-              countStmt.first<{ total: number }>(),
-              getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds, 'data_json', pg.limit, pg.offset),
-            ]);
-            const total = Number(countRow?.total || 0);
-            const hasMore = pg.offset + pg.limit < total;
-            return rawJsonResponse(
-              request,
-              env,
-              `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
-            );
+        const whereParts: string[] = [];
+        const binds: any[] = [];
+        if (period) {
+          whereParts.push('period = ?');
+          binds.push(period);
+        }
+        if (scope === 'submitted') {
+          whereParts.push(`data_json LIKE '%"status":"submitted"%'`);
+          if (!canFinalView && !isSuperAdminUser(authUser) && !fullScope) {
+            const f = buildJsonLikeFilter(getKaranehAllowedUnitsForUser(authUser));
+            if (f.clause) {
+              whereParts.push(f.clause);
+              binds.push(...f.binds);
+            }
           }
-          const rawArr = await getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds);
-          return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
+        } else if (!canKarView && canFinalView) {
+          whereParts.push(`data_json LIKE '%"status":"submitted"%'`);
+        } else if (canKarView && !fullScope) {
+          const f = buildJsonLikeFilter(
+            getKaranehAllowedUnitsForUser(authUser),
+            canFinalView ? [`data_json LIKE '%"status":"submitted"%'`] : []
+          );
+          if (f.clause) {
+            whereParts.push(f.clause);
+            binds.push(...f.binds);
+          }
         }
 
-        let rows = await getJsonRows(env.DB, 'karaneh', whereClause, binds);
-        if (scope === 'submitted') {
-          if (!canFinalView && !isSuperAdminUser(authUser)) {
-            rows = rows.filter((k: any) => k.status === 'submitted' && isKaranehUnitAllowedForUser(authUser, k.department));
-          } else {
-            rows = rows.filter((k: any) => k.status === 'submitted');
-          }
-        } else {
-          rows = rows.filter(
-            (k: any) =>
-              (canKarView && isKaranehUnitAllowedForUser(authUser, k.department)) ||
-              (canFinalView && k.status === 'submitted')
-          );
-        }
+        const whereClause = whereParts.join(' AND ');
         const pg = parsePagination(url);
         if (pg.hasPagination) {
-          const slice = rows.slice(pg.offset, pg.offset + pg.limit);
-          return jsonRes(request, env, {
-            success: true,
-            data: slice,
-            total: rows.length,
-            limit: pg.limit,
-            offset: pg.offset,
-            hasMore: pg.offset + pg.limit < rows.length,
-          });
+          const countSql = whereClause ? `SELECT COUNT(*) as total FROM karaneh WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM karaneh';
+          const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
+          const [countRow, rawArr] = await Promise.all([
+            countStmt.first<{ total: number }>(),
+            getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds, 'data_json', pg.limit, pg.offset),
+          ]);
+          const total = Number(countRow?.total || 0);
+          const hasMore = pg.offset + pg.limit < total;
+          return rawJsonResponse(
+            request,
+            env,
+            `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+          );
         }
-        return jsonRes(request, env, { success: true, data: rows });
+        const rawArr = await getRawJsonArrayString(env.DB, 'karaneh', whereClause, binds);
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/karaneh/comparison' && method === 'GET') {
@@ -2658,6 +3289,10 @@ export default {
             submittedAt: curr.submittedAt || '',
             submittedBy: curr.submittedBy || '',
             submittedByName: curr.submittedByName || '',
+            updatedAt: curr.updatedAt || '',
+            updatedByUserId: curr.updatedByUserId || '',
+            updatedByUsername: curr.updatedByUsername || '',
+            updatedByName: curr.updatedByName || '',
           };
         });
         const totalCurrent = comparisonRows.reduce((s, r) => s + r.currentKaraneh, 0);
@@ -2752,7 +3387,7 @@ export default {
           submittedAt: resolvedStatus === 'submitted' ? (kData.submittedAt || existingParsed?.submittedAt || '') : '',
           submittedBy: resolvedStatus === 'submitted' ? (kData.submittedBy || existingParsed?.submittedBy || '') : '',
           submittedByName: resolvedStatus === 'submitted' ? (kData.submittedByName || existingParsed?.submittedByName || '') : '',
-          updatedAt: faDate(),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare(
           `INSERT INTO karaneh (id, period, personnel_code, data_json) VALUES (?, ?, ?, ?)
@@ -2760,6 +3395,14 @@ export default {
         )
           .bind(record.id, record.period, record.personnelCode, JSON.stringify(record))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'karaneh',
+          action: existingParsed ? 'update' : 'create',
+          targetId: record.id,
+          targetLabel: `${record.fullName} (${record.personnelCode}) - ${record.period}`,
+          summary: `${existingParsed ? 'ویرایش' : 'ثبت'} کارانه «${record.fullName}» در دوره ${record.period}`,
+          changes: existingParsed ? computeAuditDiff(existingParsed, record, 'karaneh') : [],
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: record, message: 'کارانه پرسنل با موفقیت ثبت شد.' });
       }
@@ -2824,7 +3467,7 @@ export default {
         let added = 0;
         let updated = 0;
         let skippedUnit = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const code = toAsciiDigits(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي', 'شماره پرسنلی') || '').trim();
@@ -2878,7 +3521,7 @@ export default {
             submittedAt: prev?.status === 'submitted' && fullScope ? (prev.submittedAt || '') : '',
             submittedBy: prev?.status === 'submitted' && fullScope ? (prev.submittedBy || '') : '',
             submittedByName: prev?.status === 'submitted' && fullScope ? (prev.submittedByName || '') : '',
-            updatedAt: nowStr,
+            ...editorMeta,
           };
           if (prev) updated++;
           else added++;
@@ -2909,6 +3552,13 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'karaneh',
+          action: 'import_excel',
+          targetLabel: period,
+          summary: `بارگذاری اکسل کارانه دوره ${period} (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, {
           success: true,
           added,
@@ -2934,7 +3584,8 @@ export default {
 
         const rows = await getJsonRows(env.DB, 'karaneh', 'period = ?', [period]);
         const fullScope = hasFullKaranehScope(authUser);
-        const nowTime = faDateTime();
+        const editorMeta = buildEditorMeta(authUser);
+        const nowTime = editorMeta.updatedAt;
         const pendingMap = new Map<string, any[]>();
         let submittedCount = 0;
 
@@ -2947,7 +3598,7 @@ export default {
             submittedAt: nowTime,
             submittedBy: authUser.username,
             submittedByName: authUser.fullName,
-            updatedAt: faDate(),
+            ...editorMeta,
           };
           pendingMap.set(updatedRec.id, [updatedRec.id, period, String(updatedRec.personnelCode || '').trim(), JSON.stringify(updatedRec)]);
           submittedCount++;
@@ -2966,6 +3617,13 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteChunked(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'finalKaraneh',
+          action: 'submit',
+          targetLabel: `${period}${targetDept ? ` - ${targetDept}` : ''}`,
+          summary: `تایید و ارسال نهایی کارانه ${submittedCount} نفر در دوره ${period}${targetDept ? ` (واحد ${targetDept})` : ''}`,
+          recordCount: submittedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, {
           success: true,
@@ -2985,6 +3643,7 @@ export default {
 
         const rows = await getJsonRows(env.DB, 'karaneh', 'period = ?', [period]);
         const pendingMap = new Map<string, any[]>();
+        const editorMeta = buildEditorMeta(authUser);
         let reopenedCount = 0;
 
         for (const r of rows) {
@@ -2996,7 +3655,7 @@ export default {
             submittedAt: '',
             submittedBy: '',
             submittedByName: '',
-            updatedAt: faDate(),
+            ...editorMeta,
           };
           pendingMap.set(updatedRec.id, [updatedRec.id, period, String(updatedRec.personnelCode || '').trim(), JSON.stringify(updatedRec)]);
           reopenedCount++;
@@ -3012,6 +3671,13 @@ export default {
             Array.from(pendingMap.values())
           );
           await batchExecuteChunked(env.DB, stmts);
+          await recordAuditLog(env.DB, authUser, {
+            module: 'finalKaraneh',
+            action: 'reopen',
+            targetLabel: `${period}${targetDept ? ` - ${targetDept}` : ''}`,
+            summary: `بازگرداندن کارانه ${reopenedCount} نفر در دوره ${period} به پیش‌نویس`,
+            recordCount: reopenedCount,
+          });
           await touchLastSaved(env.DB);
         }
 
@@ -3026,14 +3692,19 @@ export default {
         const canDel = checkPermission(authUser, 'karaneh', 'delete') || checkPermission(authUser, 'finalKaraneh', 'delete');
         if (!canDel) return forbidden(request, env);
         const id = decodeURIComponent(path.slice('/karaneh/'.length));
-        if (!hasFullKaranehScope(authUser)) {
-          const row = await env.DB.prepare('SELECT data_json FROM karaneh WHERE id = ?').bind(id).first<{ data_json: string }>();
-          if (row) {
-            const parsed = JSON.parse(row.data_json);
-            if (!isKaranehUnitAllowedForUser(authUser, parsed.department)) return forbidden(request, env);
-          }
+        const row = await env.DB.prepare('SELECT data_json FROM karaneh WHERE id = ?').bind(id).first<{ data_json: string }>();
+        const parsed = row ? JSON.parse(row.data_json) : null;
+        if (!hasFullKaranehScope(authUser) && parsed && !isKaranehUnitAllowedForUser(authUser, parsed.department)) {
+          return forbidden(request, env);
         }
         await env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'karaneh',
+          action: 'delete',
+          targetId: id,
+          targetLabel: parsed ? `${parsed.fullName || ''} (${parsed.personnelCode || ''}) - ${parsed.period || ''}` : id,
+          summary: `حذف رکورد کارانه ${parsed?.fullName || id}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'رکورد کارانه حذف شد.' });
       }
@@ -3058,6 +3729,12 @@ export default {
         }
         if (ids.length > 0) {
           await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM karaneh WHERE id = ?').bind(id)));
+          await recordAuditLog(env.DB, authUser, {
+            module: 'karaneh',
+            action: 'batch_delete',
+            summary: `حذف گروهی ${ids.length} رکورد کارانه`,
+            recordCount: ids.length,
+          });
           await touchLastSaved(env.DB);
         }
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} رکورد کارانه حذف شد.` });
@@ -3098,6 +3775,13 @@ export default {
           deletedCount = Number(c?.c || 0);
           await env.DB.prepare('DELETE FROM karaneh').run();
         }
+        await recordAuditLog(env.DB, authUser, {
+          module: scope === 'submitted' ? 'finalKaraneh' : 'karaneh',
+          action: 'delete_all',
+          targetLabel: body.period || 'همه دوره‌ها',
+          summary: `پاکسازی ${deletedCount} رکورد کارانه (${scope === 'submitted' ? 'ارسال‌شده' : 'کل جدول'})`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} رکورد کارانه پاکسازی شد.` });
       }
@@ -3120,8 +3804,16 @@ export default {
           maxBaseSalary: Number(body.maxBaseSalary || 0),
           maxKaranehCeiling: Number(body.maxKaranehCeiling || 0),
           requiredExperienceYears: Number(body.requiredExperienceYears || 0),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT INTO job_groups (id, data_json) VALUES (?, ?)').bind(item.id, JSON.stringify(item)).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobGroups',
+          action: 'create',
+          targetId: item.id,
+          targetLabel: `${item.code} - ${item.title}`,
+          summary: `ثبت گروه شغلی جدید «${item.code} - ${item.title}»`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: item, message: 'گروه شغلی جدید با موفقیت ثبت شد.' });
       }
@@ -3132,14 +3824,32 @@ export default {
           if (!checkPermission(authUser, 'jobGroups', 'edit')) return forbidden(request, env);
           const row = await env.DB.prepare('SELECT data_json FROM job_groups WHERE id = ?').bind(id).first<{ data_json: string }>();
           if (!row) return jsonRes(request, env, { success: false, message: 'گروه شغلی یافت نشد.' }, 404);
-          const updated = { ...JSON.parse(row.data_json), ...(await request.json().catch(() => ({}))) };
+          const existing = JSON.parse(row.data_json);
+          const updated = { ...existing, ...(await request.json().catch(() => ({}))), ...buildEditorMeta(authUser) };
           await env.DB.prepare('UPDATE job_groups SET data_json = ? WHERE id = ?').bind(JSON.stringify(updated), id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'jobGroups',
+            action: 'update',
+            targetId: id,
+            targetLabel: `${updated.code || ''} - ${updated.title || ''}`,
+            summary: `ویرایش گروه شغلی «${updated.code || ''} - ${updated.title || ''}»`,
+            changes: computeAuditDiff(existing, updated, 'jobGroups'),
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: updated, message: 'گروه شغلی به‌روزرسانی شد.' });
         }
         if (method === 'DELETE') {
           if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM job_groups WHERE id = ?').bind(id).first<{ data_json: string }>();
+          const prev = row ? JSON.parse(row.data_json) : null;
           await env.DB.prepare('DELETE FROM job_groups WHERE id = ?').bind(id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'jobGroups',
+            action: 'delete',
+            targetId: id,
+            targetLabel: prev ? `${prev.code || ''} - ${prev.title || ''}` : id,
+            summary: `حذف گروه شغلی ${prev?.title || id}`,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, message: 'گروه شغلی حذف شد.' });
         }
@@ -3151,6 +3861,12 @@ export default {
         const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
         if (ids.length === 0) return jsonRes(request, env, { success: false, message: 'موردی برای حذف انتخاب نشده است.' }, 400);
         await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM job_groups WHERE id = ?').bind(id)));
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobGroups',
+          action: 'batch_delete',
+          summary: `حذف گروهی ${ids.length} گروه شغلی`,
+          recordCount: ids.length,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} گروه شغلی حذف شد.` });
       }
@@ -3159,8 +3875,15 @@ export default {
         if (!checkPermission(authUser, 'jobGroups', 'deleteAll')) return forbidden(request, env);
         const c = await env.DB.prepare('SELECT COUNT(*) as c FROM job_groups').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM job_groups').run();
+        const cnt = Number(c?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobGroups',
+          action: 'delete_all',
+          summary: `پاکسازی کامل جدول گروه‌های شغلی (${cnt} گروه)`,
+          recordCount: cnt,
+        });
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول گروه‌های شغلی (${Number(c?.c || 0)} گروه) پاکسازی شد.` });
+        return jsonRes(request, env, { success: true, deletedCount: cnt, message: `کل جدول گروه‌های شغلی (${cnt} گروه) پاکسازی شد.` });
       }
 
       // ================= JOB CLASSIFICATIONS ROUTES =================
@@ -3210,11 +3933,18 @@ export default {
           nextGroupGap: String(b.nextGroupGap || '').trim(),
           jobTitle: String(b.jobTitle || '').trim(),
           position: String(b.position || '').trim(),
-          updatedAt: faDate(),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT INTO job_classifications (id, personnel_code, data_json) VALUES (?, ?, ?)')
           .bind(record.id, record.personnelCode, JSON.stringify(record))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobClassifications',
+          action: 'create',
+          targetId: record.id,
+          targetLabel: `${record.firstName} ${record.lastName} (${record.personnelCode})`.trim(),
+          summary: `ثبت ردیف طرح طبقه‌بندی مشاغل برای «${record.firstName} ${record.lastName}»`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: record, message: 'ردیف طرح طبقه‌بندی مشاغل با موفقیت ثبت شد.' });
       }
@@ -3225,16 +3955,34 @@ export default {
           if (!checkPermission(authUser, 'jobGroups', 'edit')) return forbidden(request, env);
           const row = await env.DB.prepare('SELECT data_json FROM job_classifications WHERE id = ?').bind(id).first<{ data_json: string }>();
           if (!row) return jsonRes(request, env, { success: false, message: 'رکورد طبقه‌بندی یافت نشد.' }, 404);
-          const updated = { ...JSON.parse(row.data_json), ...(await request.json().catch(() => ({}))), updatedAt: faDate() };
+          const existing = JSON.parse(row.data_json);
+          const updated = { ...existing, ...(await request.json().catch(() => ({}))), ...buildEditorMeta(authUser) };
           await env.DB.prepare('UPDATE job_classifications SET personnel_code = ?, data_json = ? WHERE id = ?')
             .bind(String(updated.personnelCode || ''), JSON.stringify(updated), id)
             .run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'jobClassifications',
+            action: 'update',
+            targetId: id,
+            targetLabel: `${updated.firstName || ''} ${updated.lastName || ''} (${updated.personnelCode || ''})`.trim(),
+            summary: `ویرایش ردیف طرح طبقه‌بندی مشاغل «${updated.firstName || ''} ${updated.lastName || ''}»`,
+            changes: computeAuditDiff(existing, updated, 'jobClassifications'),
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: updated, message: 'رکورد طرح طبقه‌بندی مشاغل به‌روزرسانی شد.' });
         }
         if (method === 'DELETE') {
           if (!checkPermission(authUser, 'jobGroups', 'delete')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM job_classifications WHERE id = ?').bind(id).first<{ data_json: string }>();
+          const prev = row ? JSON.parse(row.data_json) : null;
           await env.DB.prepare('DELETE FROM job_classifications WHERE id = ?').bind(id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'jobClassifications',
+            action: 'delete',
+            targetId: id,
+            targetLabel: prev ? `${prev.firstName || ''} ${prev.lastName || ''} (${prev.personnelCode || ''})`.trim() : id,
+            summary: `حذف ردیف طبقه‌بندی مشاغل ${prev ? `${prev.firstName || ''} ${prev.lastName || ''}`.trim() : id}`,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, message: 'رکورد طبقه‌بندی مشاغل حذف شد.' });
         }
@@ -3303,7 +4051,7 @@ export default {
         const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const code = toAsciiDigits(getVal(row, 'personnelCode', 'کد پرسنلی', 'كد پرسنلي') || '').trim();
@@ -3333,7 +4081,7 @@ export default {
             nextGroupGap: String(getVal(row, 'nextGroupGap', 'فاصله گروه بعدی') || '').trim(),
             jobTitle: String(getVal(row, 'jobTitle', 'شغل') || '').trim(),
             position: String(getVal(row, 'position', 'پست', 'سمت') || '').trim(),
-            updatedAt: nowStr,
+            ...editorMeta,
           };
           if (existingId) updated++;
           else added++;
@@ -3361,6 +4109,12 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobClassifications',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل طرح طبقه‌بندی مشاغل (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, {
           success: true,
           added,
@@ -3374,6 +4128,12 @@ export default {
         const body: any = await request.json().catch(() => ({}));
         const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
         await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM job_classifications WHERE id = ?').bind(id)));
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobClassifications',
+          action: 'batch_delete',
+          summary: `حذف گروهی ${ids.length} رکورد طبقه‌بندی مشاغل`,
+          recordCount: ids.length,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} رکورد طبقه‌بندی مشاغل حذف شد.` });
       }
@@ -3382,8 +4142,15 @@ export default {
         if (!checkPermission(authUser, 'jobGroups', 'deleteAll')) return forbidden(request, env);
         const c = await env.DB.prepare('SELECT COUNT(*) as c FROM job_classifications').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM job_classifications').run();
+        const cnt = Number(c?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'jobClassifications',
+          action: 'delete_all',
+          summary: `پاکسازی کامل جدول طرح طبقه‌بندی مشاغل (${cnt} رکورد)`,
+          recordCount: cnt,
+        });
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `جدول طرح طبقه‌بندی مشاغل (${Number(c?.c || 0)} رکورد) پاکسازی شد.` });
+        return jsonRes(request, env, { success: true, deletedCount: cnt, message: `جدول طرح طبقه‌بندی مشاغل (${cnt} رکورد) پاکسازی شد.` });
       }
 
       // ================= COMMITMENTS ROUTES =================
@@ -3420,10 +4187,18 @@ export default {
           previouslyTakenAmount: Number(body.previouslyTakenAmount || 0),
           maxAllowedAmount: Number(body.maxAllowedAmount || 0),
           isArchived: Boolean(body.isArchived),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT INTO commitments (id, personnel_code, data_json) VALUES (?, ?, ?)')
           .bind(item.id, String(item.personnelCode || ''), JSON.stringify(item))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'commitments',
+          action: 'create',
+          targetId: item.id,
+          targetLabel: `${item.personnelName} - ${item.commitmentType}`,
+          summary: `ثبت تعهد پرسنلی «${item.commitmentType}» برای «${item.personnelName}»`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: item, message: 'سند تعهد پرسنلی با موفقیت ذخیره شد.' });
       }
@@ -3445,16 +4220,34 @@ export default {
             amount: body.amount !== undefined ? Number(body.amount) : prev.amount,
             previouslyTakenAmount: body.previouslyTakenAmount !== undefined ? Number(body.previouslyTakenAmount) : prev.previouslyTakenAmount,
             maxAllowedAmount: body.maxAllowedAmount !== undefined ? Number(body.maxAllowedAmount) : prev.maxAllowedAmount,
+            ...buildEditorMeta(authUser),
           };
           await env.DB.prepare('UPDATE commitments SET personnel_code = ?, data_json = ? WHERE id = ?')
             .bind(String(updated.personnelCode || ''), JSON.stringify(updated), id)
             .run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'commitments',
+            action: 'update',
+            targetId: id,
+            targetLabel: `${updated.personnelName || ''} - ${updated.commitmentType || ''}`,
+            summary: `ویرایش سند تعهد «${updated.personnelName || id}»`,
+            changes: computeAuditDiff(prev, updated, 'commitments'),
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, data: updated, message: 'سند تعهد به‌روزرسانی شد.' });
         }
         if (method === 'DELETE') {
           if (!checkPermission(authUser, 'commitments', 'delete')) return forbidden(request, env);
+          const row = await env.DB.prepare('SELECT data_json FROM commitments WHERE id = ?').bind(id).first<{ data_json: string }>();
+          const prev = row ? JSON.parse(row.data_json) : null;
           await env.DB.prepare('DELETE FROM commitments WHERE id = ?').bind(id).run();
+          await recordAuditLog(env.DB, authUser, {
+            module: 'commitments',
+            action: 'delete',
+            targetId: id,
+            targetLabel: prev ? `${prev.personnelName || ''} - ${prev.commitmentType || ''}` : id,
+            summary: `حذف سند تعهد ${prev?.personnelName || id}`,
+          });
           await touchLastSaved(env.DB);
           return jsonRes(request, env, { success: true, message: 'سند تعهد حذف شد.' });
         }
@@ -3475,6 +4268,7 @@ export default {
         );
         const persMap = incomingCodes.length > 0 ? await getPersonnelLookupMap(env.DB, incomingCodes) : new Map<string, any>();
         const pendingMap = new Map<string, any[]>();
+        const editorMeta = buildEditorMeta(authUser);
         let added = 0;
 
         for (const row of items) {
@@ -3501,6 +4295,7 @@ export default {
             isArchived,
             guarantorName: String(getVal(row, 'guarantorName', 'نام ضامن', 'ضامن') || '-'),
             notes: String(getVal(row, 'notes', 'توضیحات') || ''),
+            ...editorMeta,
           };
           pendingMap.set(rec.id, [rec.id, code, JSON.stringify(rec)]);
           added++;
@@ -3523,6 +4318,12 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'commitments',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل تعهدات پرسنلی (${added} سند)`,
+          recordCount: added,
+        });
         return jsonRes(request, env, { success: true, added, message: `${added} سند تعهد پرسنلی با موفقیت ذخیره شد.` });
       }
 
@@ -3531,6 +4332,12 @@ export default {
         const body: any = await request.json().catch(() => ({}));
         const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
         await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM commitments WHERE id = ?').bind(id)));
+        await recordAuditLog(env.DB, authUser, {
+          module: 'commitments',
+          action: 'batch_delete',
+          summary: `حذف گروهی ${ids.length} سند تعهد پرسنلی`,
+          recordCount: ids.length,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} سند تعهد پرسنلی حذف شد.` });
       }
@@ -3539,8 +4346,15 @@ export default {
         if (!checkPermission(authUser, 'commitments', 'deleteAll')) return forbidden(request, env);
         const c = await env.DB.prepare('SELECT COUNT(*) as c FROM commitments').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM commitments').run();
+        const cnt = Number(c?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'commitments',
+          action: 'delete_all',
+          summary: `پاکسازی کامل جدول تعهدات پرسنلی (${cnt} سند)`,
+          recordCount: cnt,
+        });
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل جدول تعهدات پرسنلی (${Number(c?.c || 0)} سند) پاکسازی شد.` });
+        return jsonRes(request, env, { success: true, deletedCount: cnt, message: `کل جدول تعهدات پرسنلی (${cnt} سند) پاکسازی شد.` });
       }
 
       // ================= PAYROLL ROUTES =================
@@ -3612,7 +4426,7 @@ export default {
         const pendingMap = new Map<string, any[]>();
         let added = 0;
         let updated = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const code = toAsciiDigits(getVal(row, 'كد پرسنلي', 'کد پرسنلی', 'شماره پرسنلی', 'personnelCode') || '').trim();
@@ -3671,7 +4485,7 @@ export default {
             bankName: String(getVal(row, 'نام بانک') || ''),
             bankAccount: String(getVal(row, 'شماره حساب') || ''),
             rawFields: compactRawRow(row),
-            updatedAt: nowStr,
+            ...editorMeta,
           };
           if (prevId) updated++;
           else added++;
@@ -3698,6 +4512,13 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'payroll',
+          action: 'import_excel',
+          targetLabel: period,
+          summary: `بارگذاری اکسل حقوق دوره ${period} (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, {
           success: true,
           added,
@@ -3710,6 +4531,12 @@ export default {
         if (!checkPermission(authUser, 'payroll', 'delete')) return forbidden(request, env);
         const period = decodeURIComponent(path.slice('/payroll/by-period/'.length));
         await env.DB.prepare('DELETE FROM payroll WHERE period = ?').bind(period).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'payroll',
+          action: 'delete',
+          targetLabel: period,
+          summary: `حذف کامل لیست حقوق دوره ${period}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: `لیست حقوق دوره ${period} حذف شد.` });
       }
@@ -3718,6 +4545,12 @@ export default {
         if (!checkPermission(authUser, 'payroll', 'delete')) return forbidden(request, env);
         const id = decodeURIComponent(path.slice('/payroll/'.length));
         await env.DB.prepare('DELETE FROM payroll WHERE id = ?').bind(id).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'payroll',
+          action: 'delete',
+          targetId: id,
+          summary: `حذف ردیف حقوق ${id}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'ردیف حقوق حذف شد.' });
       }
@@ -3727,6 +4560,12 @@ export default {
         const body: any = await request.json().catch(() => ({}));
         const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
         await batchExecuteChunked(env.DB, ids.map((id: string) => env.DB.prepare('DELETE FROM payroll WHERE id = ?').bind(id)));
+        await recordAuditLog(env.DB, authUser, {
+          module: 'payroll',
+          action: 'batch_delete',
+          summary: `حذف گروهی ${ids.length} ردیف حقوق`,
+          recordCount: ids.length,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount: ids.length, message: `${ids.length} ردیف حقوق حذف شد.` });
       }
@@ -3735,21 +4574,37 @@ export default {
         if (!checkPermission(authUser, 'payroll', 'deleteAll')) return forbidden(request, env);
         const c = await env.DB.prepare('SELECT COUNT(*) as c FROM payroll').first<{ c: number }>();
         await env.DB.prepare('DELETE FROM payroll').run();
+        const cnt = Number(c?.c || 0);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'payroll',
+          action: 'delete_all',
+          summary: `پاکسازی کامل لیست‌های حقوق (${cnt} ردیف)`,
+          recordCount: cnt,
+        });
         await touchLastSaved(env.DB);
-        return jsonRes(request, env, { success: true, deletedCount: Number(c?.c || 0), message: `کل لیست‌های حقوق (${Number(c?.c || 0)} ردیف) پاکسازی شد.` });
+        return jsonRes(request, env, { success: true, deletedCount: cnt, message: `کل لیست‌های حقوق (${cnt} ردیف) پاکسازی شد.` });
       }
 
       // ================= MINING VOLUMES ROUTES =================
       if (path === '/mining-volumes' && method === 'GET') {
         if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
         const period = url.searchParams.get('period');
-        let records = period
-          ? await getJsonRows(env.DB, 'mining_volumes', 'period = ?', [period])
-          : await getJsonRows(env.DB, 'mining_volumes');
-        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
-          records = records.filter((v: any) => isDispatchingOrUnitAllowed(authUser, v.unitName));
+        const fullScope = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
+        const whereParts: string[] = [];
+        const binds: any[] = [];
+        if (period) {
+          whereParts.push('period = ?');
+          binds.push(period);
         }
-        return jsonRes(request, env, { success: true, data: records });
+        if (!fullScope) {
+          const f = buildJsonLikeFilter([...getAllowedUnitsForUser(authUser), 'واحد دیسپچینگ و کنترل تولید', 'دیسپچینگ']);
+          if (f.clause) {
+            whereParts.push(f.clause);
+            binds.push(...f.binds);
+          }
+        }
+        const rawArr = await getRawJsonArrayString(env.DB, 'mining_volumes', whereParts.join(' AND '), binds);
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/mining-volumes' && method === 'POST') {
@@ -3759,6 +4614,8 @@ export default {
         const hasUnitPerm = checkPermission(authUser, 'unitOperations', action) && isDispatchingOrUnitAllowed(authUser, body.unitName);
         if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش آمار حجم معدن.');
         if (!body.period || !body.unitName) return jsonRes(request, env, { success: false, message: 'دوره و نام واحد عملیاتی الزامی است.' }, 400);
+        const prevRow = body.id ? await env.DB.prepare('SELECT data_json FROM mining_volumes WHERE id = ?').bind(body.id).first<{ data_json: string }>() : null;
+        const prevParsed = prevRow ? JSON.parse(prevRow.data_json) : null;
         const volumeValue = Number(body.volumeValue || 0);
         const targetVolume = Number(body.targetVolume || 0);
         const rec = {
@@ -3772,11 +4629,19 @@ export default {
           unitLabel: String(body.unitLabel || 'تن').trim(),
           status: String(body.status || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim(),
           notes: String(body.notes || '').trim(),
-          updatedAt: faDate(),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT OR REPLACE INTO mining_volumes (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
           .bind(rec.id, rec.period, rec.unitName, JSON.stringify(rec))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningVolumes',
+          action: prevParsed ? 'update' : 'create',
+          targetId: rec.id,
+          targetLabel: `${rec.unitName} - ${rec.metricTitle} (${rec.period})`,
+          summary: `${prevParsed ? 'ویرایش' : 'ثبت'} آمار حجم عملیات «${rec.metricTitle}» در ${rec.unitName}`,
+          changes: prevParsed ? computeAuditDiff(prevParsed, rec, 'miningVolumes') : [],
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: rec, message: 'آمار حجم عملیات ماهانه با موفقیت ذخیره شد.' });
       }
@@ -3819,7 +4684,7 @@ export default {
         let added = 0;
         let updated = 0;
         let skipped = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const unitName = String(getVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
@@ -3837,7 +4702,7 @@ export default {
           const notes = String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim();
           const k = `${period}__${normKey(unitName)}__${normKey(metricTitle)}`;
           const prevId = existingMap.get(k);
-          const rec = { id: prevId || genId('mv'), period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes, updatedAt: nowStr };
+          const rec = { id: prevId || genId('mv'), period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes, ...editorMeta };
           if (prevId) updated++;
           else added++;
           existingMap.set(k, rec.id);
@@ -3861,6 +4726,12 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningVolumes',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل آمار حجم عملیات معدنی (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
@@ -3872,6 +4743,13 @@ export default {
           return forbidden(request, env, 'دسترسی حذف برای این واحد محدود شده است.');
         }
         await env.DB.prepare('DELETE FROM mining_volumes WHERE id = ?').bind(id).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningVolumes',
+          action: 'delete',
+          targetId: id,
+          targetLabel: row?.unit_name || id,
+          summary: `حذف ردیف آمار حجم عملیات ${row?.unit_name || id}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'ردیف آمار حجم حذف شد.' });
       }
@@ -3888,6 +4766,14 @@ export default {
             await env.DB.prepare('DELETE FROM mining_volumes WHERE id = ?').bind(id).run();
             deletedCount++;
           }
+        }
+        if (deletedCount > 0) {
+          await recordAuditLog(env.DB, authUser, {
+            module: 'miningVolumes',
+            action: 'batch_delete',
+            summary: `حذف گروهی ${deletedCount} ردیف آمار حجم عملیات`,
+            recordCount: deletedCount,
+          });
         }
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف آمار حجم حذف شد.` });
@@ -3910,6 +4796,12 @@ export default {
             }
           }
         }
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningVolumes',
+          action: 'delete_all',
+          summary: `پاکسازی جدول آمار حجم عملیات (${deletedCount} ردیف)`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `جدول آمار حجم عملیات (${deletedCount} ردیف) پاکسازی شد.` });
       }
@@ -3917,11 +4809,12 @@ export default {
       // ================= MINING MACHINERY ROUTES =================
       if (path === '/mining-machinery' && method === 'GET') {
         if (!hasMiningOrUnitPerm(authUser, 'view')) return jsonRes(request, env, { success: true, data: [] });
-        let records = await getJsonRows(env.DB, 'mining_machinery');
-        if (!isSuperAdminUser(authUser) && !checkPermission(authUser, 'ceoDashboard', 'view')) {
-          records = records.filter((m: any) => isWorkshopOrUnitAllowed(authUser, m.unitName));
-        }
-        return jsonRes(request, env, { success: true, data: records });
+        const fullScope = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
+        const f = !fullScope
+          ? buildJsonLikeFilter([...getAllowedUnitsForUser(authUser), 'واحد تعمیرگاه و ماشین‌آلات سنگین', 'تعمیرگاه'])
+          : { clause: '', binds: [] as string[] };
+        const rawArr = await getRawJsonArrayString(env.DB, 'mining_machinery', f.clause, f.binds);
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/mining-machinery' && method === 'POST') {
@@ -3931,9 +4824,10 @@ export default {
         const hasUnitPerm = checkPermission(authUser, 'unitOperations', action) && isWorkshopOrUnitAllowed(authUser, body.unitName);
         if (!hasCeoPerm && !hasUnitPerm) return forbidden(request, env, 'عدم دسترسی ثبت یا ویرایش وضعیت ماشین‌آلات.');
         if (!body.machineCode || !body.machineName) return jsonRes(request, env, { success: false, message: 'کد دستگاه و نام تجهیز الزامی است.' }, 400);
-        const existingRow = !body.id
-          ? await env.DB.prepare('SELECT id FROM mining_machinery WHERE machine_code = ?').bind(toAsciiDigits(body.machineCode).trim()).first<{ id: string }>()
-          : null;
+        const existingRow = body.id
+          ? await env.DB.prepare('SELECT id, data_json FROM mining_machinery WHERE id = ?').bind(body.id).first<{ id: string; data_json: string }>()
+          : await env.DB.prepare('SELECT id, data_json FROM mining_machinery WHERE machine_code = ?').bind(toAsciiDigits(body.machineCode).trim()).first<{ id: string; data_json: string }>();
+        const prevParsed = existingRow?.data_json ? JSON.parse(existingRow.data_json) : null;
         const rawStatus = String(body.status || 'آماده به کار').trim();
         const status =
           rawStatus.includes('خراب') || rawStatus.includes('تعمیرگاه')
@@ -3955,11 +4849,19 @@ export default {
           estimatedReadyDate: String(body.estimatedReadyDate || '-').trim(),
           operatorName: String(body.operatorName || '').trim(),
           notes: String(body.notes || '').trim(),
-          updatedAt: faDate(),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT OR REPLACE INTO mining_machinery (id, machine_code, data_json) VALUES (?, ?, ?)')
           .bind(rec.id, rec.machineCode, JSON.stringify(rec))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningMachinery',
+          action: prevParsed ? 'update' : 'create',
+          targetId: rec.id,
+          targetLabel: `${rec.machineName} (${rec.machineCode})`,
+          summary: `${prevParsed ? 'ویرایش' : 'ثبت'} وضعیت تجهیز «${rec.machineName}»`,
+          changes: prevParsed ? computeAuditDiff(prevParsed, rec, 'miningMachinery') : [],
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: rec, message: 'وضعیت تجهیز و ماشین‌آلات با موفقیت ذخیره شد.' });
       }
@@ -4003,7 +4905,7 @@ export default {
         let added = 0;
         let updated = 0;
         let skipped = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           const machineCode = toAsciiDigits(getVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'پلاک تجهیزات', 'کد') || '').trim();
@@ -4039,7 +4941,7 @@ export default {
             estimatedReadyDate: toAsciiDigits(getVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تخمین آماده‌به‌کار', 'تاریخ تحویل') || '-').trim(),
             operatorName: String(getVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'مسئول / اپراتور', 'اپراتور') || '').trim(),
             notes: String(getVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
-            updatedAt: nowStr,
+            ...editorMeta,
           };
           if (prevId) updated++;
           else added++;
@@ -4064,6 +4966,12 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningMachinery',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل ماشین‌آلات و تعمیرگاه (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
@@ -4071,11 +4979,18 @@ export default {
         if (!hasMiningOrUnitPerm(authUser, 'delete')) return forbidden(request, env);
         const id = decodeURIComponent(path.slice('/mining-machinery/'.length));
         const row = await env.DB.prepare('SELECT data_json FROM mining_machinery WHERE id = ?').bind(id).first<{ data_json: string }>();
-        if (row && !checkPermission(authUser, 'ceoDashboard', 'delete')) {
-          const parsed = JSON.parse(row.data_json);
+        const parsed = row ? JSON.parse(row.data_json) : null;
+        if (parsed && !checkPermission(authUser, 'ceoDashboard', 'delete')) {
           if (!isWorkshopOrUnitAllowed(authUser, parsed.unitName)) return forbidden(request, env);
         }
         await env.DB.prepare('DELETE FROM mining_machinery WHERE id = ?').bind(id).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningMachinery',
+          action: 'delete',
+          targetId: id,
+          targetLabel: parsed ? `${parsed.machineName || ''} (${parsed.machineCode || ''})` : id,
+          summary: `حذف رکورد ماشین‌آلات ${parsed?.machineName || id}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'رکورد ماشین‌آلات حذف شد.' });
       }
@@ -4092,6 +5007,14 @@ export default {
             await env.DB.prepare('DELETE FROM mining_machinery WHERE id = ?').bind(id).run();
             deletedCount++;
           }
+        }
+        if (deletedCount > 0) {
+          await recordAuditLog(env.DB, authUser, {
+            module: 'miningMachinery',
+            action: 'batch_delete',
+            summary: `حذف گروهی ${deletedCount} ردیف ماشین‌آلات`,
+            recordCount: deletedCount,
+          });
         }
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف ماشین‌آلات حذف شد.` });
@@ -4114,6 +5037,12 @@ export default {
             }
           }
         }
+        await recordAuditLog(env.DB, authUser, {
+          module: 'miningMachinery',
+          action: 'delete_all',
+          summary: `پاکسازی لیست ماشین‌آلات (${deletedCount} دستگاه)`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه) پاکسازی شد.` });
       }
@@ -4125,46 +5054,41 @@ export default {
         const unitName = url.searchParams.get('unitName');
         const fullScope = isSuperAdminUser(authUser) || checkPermission(authUser, 'ceoDashboard', 'view');
         const pg = parsePagination(url);
-        if (fullScope && !unitName) {
-          const whereClause = period ? 'period = ?' : '';
-          const binds = period ? [period] : [];
-          if (pg.hasPagination) {
-            const countSql = whereClause ? `SELECT COUNT(*) as total FROM unit_reports WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM unit_reports';
-            const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
-            const [countRow, rawArr] = await Promise.all([
-              countStmt.first<{ total: number }>(),
-              getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds, 'data_json', pg.limit, pg.offset),
-            ]);
-            const total = Number(countRow?.total || 0);
-            const hasMore = pg.offset + pg.limit < total;
-            return rawJsonResponse(
-              request,
-              env,
-              `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
-            );
-          }
-          const rawArr = await getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds);
-          return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
+        const whereParts: string[] = [];
+        const binds: any[] = [];
+        if (period) {
+          whereParts.push('period = ?');
+          binds.push(period);
         }
-        let records = period
-          ? await getJsonRows(env.DB, 'unit_reports', 'period = ?', [period])
-          : await getJsonRows(env.DB, 'unit_reports');
-        if (unitName) records = records.filter((r: any) => normKey(String(r.unitName || '')) === normKey(unitName));
+        if (unitName) {
+          whereParts.push('unit_name = ?');
+          binds.push(unitName);
+        }
         if (!fullScope) {
-          records = records.filter((r: any) => isUnitAllowedForUser(authUser, r.unitName));
+          const f = buildJsonLikeFilter(getAllowedUnitsForUser(authUser));
+          if (f.clause) {
+            whereParts.push(f.clause);
+            binds.push(...f.binds);
+          }
         }
+        const whereClause = whereParts.join(' AND ');
         if (pg.hasPagination) {
-          const slice = records.slice(pg.offset, pg.offset + pg.limit);
-          return jsonRes(request, env, {
-            success: true,
-            data: slice,
-            total: records.length,
-            limit: pg.limit,
-            offset: pg.offset,
-            hasMore: pg.offset + pg.limit < records.length,
-          });
+          const countSql = whereClause ? `SELECT COUNT(*) as total FROM unit_reports WHERE ${whereClause}` : 'SELECT COUNT(*) as total FROM unit_reports';
+          const countStmt = binds.length > 0 ? env.DB.prepare(countSql).bind(...binds) : env.DB.prepare(countSql);
+          const [countRow, rawArr] = await Promise.all([
+            countStmt.first<{ total: number }>(),
+            getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds, 'data_json', pg.limit, pg.offset),
+          ]);
+          const total = Number(countRow?.total || 0);
+          const hasMore = pg.offset + pg.limit < total;
+          return rawJsonResponse(
+            request,
+            env,
+            `{"success":true,"data":${rawArr},"total":${total},"limit":${pg.limit},"offset":${pg.offset},"hasMore":${hasMore}}`
+          );
         }
-        return jsonRes(request, env, { success: true, data: records });
+        const rawArr = await getRawJsonArrayString(env.DB, 'unit_reports', whereClause, binds);
+        return rawJsonResponse(request, env, `{"success":true,"data":${rawArr}}`);
       }
 
       if (path === '/unit-reports' && method === 'POST') {
@@ -4176,6 +5100,8 @@ export default {
         if (!body.period || !body.unitName || !body.metricName) {
           return jsonRes(request, env, { success: false, message: 'دوره، نام واحد و عنوان شاخص / فعالیت الزامی است.' }, 400);
         }
+        const prevRow = body.id ? await env.DB.prepare('SELECT data_json FROM unit_reports WHERE id = ?').bind(body.id).first<{ data_json: string }>() : null;
+        const prevParsed = prevRow ? JSON.parse(prevRow.data_json) : null;
         const sanitizedRaw: Record<string, string | number> = {};
         if (body.rawFields && typeof body.rawFields === 'object') {
           for (const [k, v] of Object.entries(body.rawFields).slice(0, 100)) {
@@ -4198,11 +5124,19 @@ export default {
           submittedBy: String(body.submittedBy || authUser.fullName || '').trim(),
           notes: String(body.notes || '').trim(),
           rawFields: sanitizedRaw,
-          updatedAt: faDate(),
+          ...buildEditorMeta(authUser),
         };
         await env.DB.prepare('INSERT OR REPLACE INTO unit_reports (id, period, unit_name, data_json) VALUES (?, ?, ?, ?)')
           .bind(rec.id, rec.period, rec.unitName, JSON.stringify(rec))
           .run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'unitReports',
+          action: prevParsed ? 'update' : 'create',
+          targetId: rec.id,
+          targetLabel: `${rec.unitName} - ${rec.metricName} (${rec.period})`,
+          summary: `${prevParsed ? 'ویرایش' : 'ثبت'} گزارش واحد «${rec.unitName}» (${rec.metricName})`,
+          changes: prevParsed ? computeAuditDiff(prevParsed, rec, 'unitReports') : [],
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, data: rec, message: 'گزارش عملیاتی واحد با موفقیت ذخیره شد.' });
       }
@@ -4247,7 +5181,7 @@ export default {
         let added = 0;
         let updated = 0;
         let skipped = 0;
-        const nowStr = faDate();
+        const editorMeta = buildEditorMeta(authUser);
 
         for (const row of items) {
           if (!row || typeof row !== 'object') continue;
@@ -4280,7 +5214,7 @@ export default {
           }
           const mapKey = `${period}__${normKey(unitName)}__${normKey(metricName)}`;
           const prevId = existingMap.get(mapKey);
-          const rec = { id: prevId || genId('ur'), period, unitName, reportCategory, metricName, actualValue, previousValue, targetValue, unitLabel, status, submittedBy, notes, rawFields, updatedAt: nowStr };
+          const rec = { id: prevId || genId('ur'), period, unitName, reportCategory, metricName, actualValue, previousValue, targetValue, unitLabel, status, submittedBy, notes, rawFields, ...editorMeta };
           if (prevId) updated++;
           else added++;
           existingMap.set(mapKey, rec.id);
@@ -4304,6 +5238,12 @@ export default {
           Array.from(pendingMap.values())
         );
         await batchExecuteAndTouch(env.DB, stmts);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'unitReports',
+          action: 'import_excel',
+          summary: `بارگذاری اکسل گزارش عملیاتی واحدها (${added} جدید، ${updated} به‌روزرسانی)`,
+          recordCount: added + updated,
+        });
         return jsonRes(request, env, { success: true, added, updated, skipped, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` });
       }
 
@@ -4315,6 +5255,13 @@ export default {
           return forbidden(request, env);
         }
         await env.DB.prepare('DELETE FROM unit_reports WHERE id = ?').bind(id).run();
+        await recordAuditLog(env.DB, authUser, {
+          module: 'unitReports',
+          action: 'delete',
+          targetId: id,
+          targetLabel: row?.unit_name || id,
+          summary: `حذف ردیف گزارش واحد ${row?.unit_name || id}`,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'ردیف گزارش عملیاتی واحد حذف شد.' });
       }
@@ -4331,6 +5278,14 @@ export default {
             await env.DB.prepare('DELETE FROM unit_reports WHERE id = ?').bind(id).run();
             deletedCount++;
           }
+        }
+        if (deletedCount > 0) {
+          await recordAuditLog(env.DB, authUser, {
+            module: 'unitReports',
+            action: 'batch_delete',
+            summary: `حذف گروهی ${deletedCount} ردیف گزارش واحدها`,
+            recordCount: deletedCount,
+          });
         }
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `${deletedCount} ردیف گزارش واحد حذف شد.` });
@@ -4353,6 +5308,12 @@ export default {
             }
           }
         }
+        await recordAuditLog(env.DB, authUser, {
+          module: 'unitReports',
+          action: 'delete_all',
+          summary: `پاکسازی گزارش‌های واحدهای عملیاتی (${deletedCount} ردیف)`,
+          recordCount: deletedCount,
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, deletedCount, message: `گزارش‌های واحدهای عملیاتی (${deletedCount} ردیف) پاکسازی شد.` });
       }
@@ -4410,6 +5371,7 @@ export default {
           miningVolumesRaw,
           miningMachineryRaw,
           unitReportsRaw,
+          auditLogsRows,
           countsAgg,
         ] = await Promise.all([
           getAllUsers(env.DB),
@@ -4422,10 +5384,11 @@ export default {
           getRawJsonArrayString(env.DB, 'mining_volumes'),
           getRawJsonArrayString(env.DB, 'mining_machinery'),
           getRawJsonArrayString(env.DB, 'unit_reports'),
+          env.DB.prepare('SELECT * FROM audit_logs ORDER BY created_at_iso DESC LIMIT 5000').all<any>(),
           env.DB.prepare(
             `SELECT
                (SELECT COUNT(*) FROM personnel) as personnelCount,
-               (SELECT COALESCE(SUM(COALESCE(json_array_length(json_extract(data_json, '$.relatives')), 0)), 0) FROM personnel) as relativesCount,
+               (SELECT COALESCE(SUM(json_array_length(json_extract(data_json, '$.relatives'))), 0) FROM personnel WHERE data_json LIKE '%"relatives":[{%' AND json_valid(data_json)) as relativesCount,
                (SELECT COUNT(*) FROM karaneh) as karanehCount,
                (SELECT COUNT(*) FROM karaneh WHERE data_json LIKE '%"status":"submitted"%') as submittedKaranehCount,
                (SELECT COUNT(*) FROM payroll) as payrollCount,
@@ -4434,15 +5397,43 @@ export default {
                (SELECT COUNT(*) FROM commitments) as commitmentsCount,
                (SELECT COUNT(*) FROM mining_volumes) as miningVolumesCount,
                (SELECT COUNT(*) FROM mining_machinery) as miningMachineryCount,
-               (SELECT COUNT(*) FROM unit_reports) as unitReportsCount`
+               (SELECT COUNT(*) FROM unit_reports) as unitReportsCount,
+               (SELECT COUNT(*) FROM audit_logs) as auditLogsCount`
           ).first<any>(),
         ]);
 
+        const auditLogs = (auditLogsRows.results || []).map((r: any) => {
+          let changes: any[] = [];
+          try { changes = JSON.parse(r.changes_json || '[]'); } catch { changes = []; }
+          return {
+            id: r.id,
+            createdAtIso: r.created_at_iso,
+            persianDateTime: r.persian_date_time,
+            userId: r.user_id,
+            username: r.username,
+            userFullName: r.user_full_name,
+            userRole: r.user_role,
+            module: r.module,
+            action: r.action,
+            targetId: r.target_id,
+            targetLabel: r.target_label,
+            summary: r.summary,
+            changes,
+            recordCount: Number(r.record_count ?? 1),
+          };
+        });
+
+        await recordAuditLog(env.DB, authUser, {
+          module: 'database',
+          action: 'backup',
+          summary: 'دریافت فایل پشتیبان کامل از دیتابیس ابری Cloudflare D1',
+        });
+
         const meta = {
-          version: '5.1-negin-parto-nasr-full-sync',
+          version: '5.2-negin-parto-nasr-audit-sync',
           exportedAt: new Date().toISOString(),
           engine: 'cloudflare-d1',
-          modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
+          modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel', 'auditLogs'],
           counts: {
             users: users.length,
             personnel: Number(countsAgg?.personnelCount || 0),
@@ -4456,10 +5447,11 @@ export default {
             miningVolumes: Number(countsAgg?.miningVolumesCount || 0),
             miningMachinery: Number(countsAgg?.miningMachineryCount || 0),
             unitReports: Number(countsAgg?.unitReportsCount || 0),
+            auditLogs: Number(countsAgg?.auditLogsCount || 0),
           },
         };
 
-        const rawPayload = `{"users":${JSON.stringify(users)},"personnel":${personnelRaw},"karaneh":${karanehRaw},"jobGroups":${jobGroupsRaw},"jobClassifications":${jobClassificationsRaw},"commitments":${commitmentsRaw},"payroll":${payrollRaw},"miningVolumes":${miningVolumesRaw},"miningMachinery":${miningMachineryRaw},"unitReports":${unitReportsRaw},"_backupMetadata":${JSON.stringify(meta)}}`;
+        const rawPayload = `{"users":${JSON.stringify(users)},"personnel":${personnelRaw},"karaneh":${karanehRaw},"jobGroups":${jobGroupsRaw},"jobClassifications":${jobClassificationsRaw},"commitments":${commitmentsRaw},"payroll":${payrollRaw},"miningVolumes":${miningVolumesRaw},"miningMachinery":${miningMachineryRaw},"unitReports":${unitReportsRaw},"auditLogs":${JSON.stringify(auditLogs)},"_backupMetadata":${JSON.stringify(meta)}}`;
         return new Response(rawPayload, {
           status: 200,
           headers: {
@@ -4478,6 +5470,12 @@ export default {
           return jsonRes(request, env, { success: false, message: 'ساختار فایل پشتیبان معتبر نیست.' }, 400);
         }
         await replaceAllSnapshotInD1(env.DB, incoming);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'database',
+          action: 'restore',
+          summary: `بازیابی کامل پایگاه داده از فایل پشتیبان (${incoming.personnel?.length || 0} پرسنل، ${incoming.karaneh?.length || 0} کارانه)`,
+          recordCount: (incoming.personnel?.length || 0) + (incoming.karaneh?.length || 0),
+        });
         return jsonRes(request, env, { success: true, message: 'پایگاه داده Cloudflare D1 با موفقیت بازیابی گردید.' });
       }
 
@@ -4499,6 +5497,11 @@ export default {
           }
         }
         if (body.finalize === true) {
+          await recordAuditLog(env.DB, authUser, {
+            module: 'database',
+            action: 'restore',
+            summary: `تکمیل عملیات بازیابی مرحله‌ای پشتیبان (${body.mode || 'replace'})`,
+          });
           await touchLastSaved(env.DB);
         }
         return jsonRes(request, env, { success: true, processed, message: 'بخش پشتیبان با موفقیت ثبت شد.' });
@@ -4508,6 +5511,11 @@ export default {
         if (!checkPermission(authUser, 'system', 'restoreDatabase')) return forbidden(request, env);
         const seed = await buildInitialSeedData();
         await replaceAllSnapshotInD1(env.DB, seed);
+        await recordAuditLog(env.DB, authUser, {
+          module: 'database',
+          action: 'reset_demo',
+          summary: 'بازنشانی دیتابیس به داده‌های اولیه سامانه',
+        });
         return jsonRes(request, env, { success: true, message: 'داده‌های اولیه در دیتابیس Cloudflare D1 بازنشانی شدند.' });
       }
 
@@ -4530,6 +5538,11 @@ export default {
           const safeUsers = incoming.users.filter((u: any) => u && u.id && u.username !== 'javadabadiyan');
           await upsertChunkIntoD1(env.DB, 'users', safeUsers);
         }
+        await recordAuditLog(env.DB, authUser, {
+          module: 'database',
+          action: 'restore',
+          summary: 'ادغام داده‌های همگام‌سازی در پایگاه داده Cloudflare D1',
+        });
         await touchLastSaved(env.DB);
         return jsonRes(request, env, { success: true, message: 'اطلاعات با موفقیت در پایگاه داده Cloudflare D1 ادغام شد.' });
       }

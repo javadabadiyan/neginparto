@@ -41,6 +41,7 @@ interface DashboardOverviewProps {
   canViewJobGroups?: boolean;
   canViewPayroll?: boolean;
   canViewUsers?: boolean;
+  canViewSecurityLogs?: boolean;
   canBackupDatabase?: boolean;
   canRestoreDatabase?: boolean;
   onNavigate: (tab: string) => void;
@@ -67,6 +68,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   canViewJobGroups = false,
   canViewPayroll = false,
   canViewUsers = false,
+  canViewSecurityLogs = false,
   canBackupDatabase = false,
   canRestoreDatabase = false,
   onNavigate,
@@ -81,6 +83,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   const allowJobGroups = isAdmin || canViewJobGroups;
   const allowPayroll = isAdmin || canViewPayroll;
   const allowUsers = isAdmin || canViewUsers;
+  const allowSecurityLogs = isAdmin || canViewSecurityLogs;
   const allowBackup = isAdmin || canBackupDatabase;
   const allowRestore = isAdmin || canRestoreDatabase;
 
@@ -118,7 +121,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
     { key: 'payroll', allowed: allowPayroll, title: 'حقوق و دستمزد (۲۲۶ ستونی)', desc: 'مقایسه ماهانه فیش‌ها و مزایای پرسنل', icon: TrendingUp, color: 'bg-teal-50 text-teal-700 border-teal-200' },
     { key: 'karaneh', allowed: allowKaraneh, title: 'سیستم جامع کارانه', desc: 'آنالیز مقایسه‌ای کارانه ماهانه پرسنل', icon: FileSpreadsheet, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
     { key: 'final-karaneh', allowed: allowFinalKaraneh, title: 'کارانه نهایی ارسالی', desc: 'تجمیع، آنالیز درصد رشد و خروجی اکسل کارانه‌های ارسالی همه واحدها', icon: Send, color: 'bg-violet-50 text-violet-700 border-violet-200' },
-    { key: 'users', allowed: allowUsers, title: 'مدیریت کاربران و مجوزها', desc: 'تعریف نقش‌ها و تنظیم سطوح دسترسی', icon: ShieldCheck, color: 'bg-rose-50 text-rose-700 border-rose-200' },
+    {
+      key: 'users',
+      allowed: allowUsers || allowSecurityLogs,
+      title: allowUsers ? 'کاربران، دسترسی‌ها و امنیت' : 'امنیت و تاریخچه عملکرد کاربران',
+      desc: allowUsers ? 'تعریف نقش‌ها، سطوح دسترسی و مشاهده گزارش امنیت' : 'پایش تاریخچه ورود، ویرایش و تغییرات کاربران',
+      icon: ShieldCheck,
+      color: 'bg-rose-50 text-rose-700 border-rose-200',
+    },
     { key: 'database', allowed: allowBackup || allowRestore, title: 'پشتیبان‌گیری و دیتابیس', desc: 'مدیریت نسخه‌های پشتیبان و بازیابی', icon: HardDrive, color: 'bg-slate-100 text-slate-800 border-slate-200' },
   ].filter(m => m.allowed);
 

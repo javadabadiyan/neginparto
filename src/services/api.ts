@@ -11,8 +11,10 @@ import {
   UnitOperationalReport,
   DatabaseStatus,
   KaranehComparisonRow,
+  SecurityAuditLog,
 } from '../types';
 import { embeddedDb } from './embeddedDb';
+import { normalizePermissions } from '../utils/permissions';
 
 export type StorageEngine = 'node' | 'php' | 'cloudflare' | 'indexeddb';
 
@@ -957,6 +959,11 @@ async function fetchPaginatedCloudflareList<T>(
       timeoutMs: reqTimeout,
       retries: reqRetries,
     });
+    if (res?.status === 401 || res?.status === 403) {
+      const authErr: any = new Error(res?.message || 'عدم دسترسی به این بخش');
+      authErr.status = res.status;
+      throw authErr;
+    }
     const items = unwrapArrayResponse<T>(res, fallbackError);
     return { items, raw: res };
   };
@@ -965,6 +972,9 @@ async function fetchPaginatedCloudflareList<T>(
   try {
     firstRes = await fetchSingleSlice(offset, pageSize);
   } catch (err: any) {
+    if (err?.status === 401 || err?.status === 403) {
+      throw err;
+    }
     if (pageSize > 80) {
       const half = Math.max(40, Math.floor(pageSize / 2));
       const p1 = await fetchSingleSlice(offset, half);
@@ -1005,14 +1015,22 @@ async function fetchPaginatedCloudflareList<T>(
   while (idx < offsets.length) {
     const wave = offsets.slice(idx, idx + waveSize);
     const settled = await Promise.allSettled(wave.map((off) => fetchSingleSlice(off, pageSize)));
+    let hitEmptySlice = false;
 
     for (let w = 0; w < settled.length; w++) {
       const outcome = settled[w];
       const off = wave[w];
       if (outcome.status === 'fulfilled') {
+        if (outcome.value.items.length === 0) {
+          hitEmptySlice = true;
+          continue;
+        }
         results = results.concat(outcome.value.items);
         options?.onProgress?.(results, total);
         continue;
+      }
+      if ((outcome.reason as any)?.status === 401 || (outcome.reason as any)?.status === 403) {
+        throw outcome.reason;
       }
 
       // Drop wave size to 1 so flaky mobile connections don't choke on concurrent streams
@@ -1024,13 +1042,21 @@ async function fetchPaginatedCloudflareList<T>(
           for (let subOff = off; subOff < off + sliceLimit; subOff += subStep) {
             const take = Math.min(subStep, off + sliceLimit - subOff);
             const subRes = await fetchSingleSlice(subOff, take);
+            if (subRes.items.length === 0) {
+              hitEmptySlice = true;
+              break;
+            }
             results = results.concat(subRes.items);
             options?.onProgress?.(results, total);
           }
         } else {
           const retryRes = await fetchSingleSlice(off, sliceLimit);
-          results = results.concat(retryRes.items);
-          options?.onProgress?.(results, total);
+          if (retryRes.items.length === 0) {
+            hitEmptySlice = true;
+          } else {
+            results = results.concat(retryRes.items);
+            options?.onProgress?.(results, total);
+          }
         }
       } catch (sliceErr: any) {
         if (sliceErr && typeof sliceErr === 'object') {
@@ -1039,6 +1065,7 @@ async function fetchPaginatedCloudflareList<T>(
         throw sliceErr;
       }
     }
+    if (hitEmptySlice) break;
     idx += wave.length;
   }
 
@@ -1268,6 +1295,9 @@ export const api = {
   async getKaranehUnitPersonnel(): Promise<Personnel[]> {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.getKaranehUnitPersonnel();
+    if (engine === 'cloudflare') {
+      return fetchPaginatedCloudflareList<Personnel>('/karaneh/unit-personnel', 300, 'خطا در دریافت لیست پرسنل واحد');
+    }
     const json = await callBackend('/karaneh/unit-personnel');
     return unwrapArrayResponse<Personnel>(json, 'خطا در دریافت لیست پرسنل واحد');
   },
@@ -1800,8 +1830,8 @@ export const api = {
 
     if (engine === 'cloudflare') {
       const json = await callBackend(wantLite ? '/bootstrap?lite=1' : '/bootstrap', {
-        timeoutMs: wantLite ? 40000 : 60000,
-        retries: 2,
+        timeoutMs: wantLite ? 22000 : 45000,
+        retries: wantLite ? 1 : 2,
       });
 
       let d: any = null;
@@ -1812,19 +1842,38 @@ export const api = {
       } else if (json?.status === 401 || json?.status === 403) {
         throw new Error(json?.message || 'نشست کاربری معتبر نیست.');
       } else if (json?.status !== 404) {
-        // Resilient mobile fallback: if /bootstrap itself timed out, pull initial lightweight endpoints individually via allSettled
+        // Permission-aware resilient fallback: skip endpoints the signed-in user has no permission to read,
+        // and defer /karaneh/unit-personnel to lazy post-paint loading in App.tsx.
+        let storedUser: any = null;
+        try {
+          const rawUser = localStorage.getItem('hr_current_user');
+          if (rawUser) storedUser = JSON.parse(rawUser);
+        } catch {
+          storedUser = null;
+        }
+        const isSuper = Boolean(storedUser && (storedUser.role === 'super_admin' || storedUser.username === 'javadabadiyan'));
+        const perms = storedUser ? normalizePermissions(storedUser.permissions) : null;
+        const can = (section: string, action = 'view') => {
+          if (!perms) return true;
+          if (isSuper) return true;
+          return Boolean((perms as any)?.[section]?.[action]);
+        };
+        const canKaranehAny = can('karaneh', 'view') || can('finalKaraneh', 'view');
+        const canMiningAny = can('ceoDashboard', 'view') || can('unitOperations', 'view');
+        const emptyOk = () => Promise.resolve({ success: true, data: [], total: 0 });
+
         const [sRes, pRes, kRes, kpRes, jgRes, jcRes, cRes, mvRes, mmRes, urRes, uRes] = await Promise.allSettled([
-          callBackend('/database/status', { timeoutMs: 25000, retries: 2 }),
-          callBackend('/personnel?lite=1&limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
-          callBackend('/karaneh?limit=100&offset=0', { timeoutMs: 32000, retries: 2 }),
-          callBackend('/karaneh/unit-personnel', { timeoutMs: 25000, retries: 1 }),
-          callBackend('/job-groups', { timeoutMs: 25000, retries: 2 }),
-          callBackend('/job-classifications?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
-          callBackend('/commitments?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
-          callBackend('/mining-volumes', { timeoutMs: 25000, retries: 2 }),
-          callBackend('/mining-machinery', { timeoutMs: 25000, retries: 2 }),
-          callBackend('/unit-reports?limit=80&offset=0', { timeoutMs: 32000, retries: 2 }),
-          callBackend('/users', { timeoutMs: 25000, retries: 2 }),
+          callBackend('/database/status', { timeoutMs: 14000, retries: 1 }),
+          can('personnel') ? callBackend('/personnel?lite=1&limit=80&offset=0', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          canKaranehAny ? callBackend('/karaneh?limit=100&offset=0', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          emptyOk(),
+          can('jobGroups') ? callBackend('/job-groups', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          can('jobGroups') ? callBackend('/job-classifications?limit=80&offset=0', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          can('commitments') ? callBackend('/commitments?limit=80&offset=0', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          canMiningAny ? callBackend('/mining-volumes', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          canMiningAny ? callBackend('/mining-machinery', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          canMiningAny ? callBackend('/unit-reports?limit=80&offset=0', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
+          can('users') ? callBackend('/users', { timeoutMs: 14000, retries: 1 }) : emptyOk(),
         ]);
 
         const okVal = (r: PromiseSettledResult<any>) =>
@@ -1847,8 +1896,8 @@ export const api = {
           throw new Error(json?.message || 'خطا در اتصال به سرور کلودفلر');
         }
 
-        if (!pOk) partialErrors.push('خطا در دریافت لیست پرسنل');
-        if (!kOk) partialErrors.push('خطا در دریافت لیست کارانه');
+        if (!pOk && can('personnel')) partialErrors.push('خطا در دریافت لیست پرسنل');
+        if (!kOk && canKaranehAny) partialErrors.push('خطا در دریافت لیست کارانه');
 
         const statusData = sOk?.data || null;
         d = {
@@ -1866,12 +1915,22 @@ export const api = {
           dbStatus: statusData,
           syncVersion: statusData?.syncVersion,
           lite: wantLite,
-          personnelTotal: Number(pOk?.total ?? statusData?.totalPersonnel ?? (Array.isArray(pOk?.data) ? pOk.data.length : 0)),
-          karanehTotal: Number(kOk?.total ?? statusData?.totalKaranehRecords ?? (Array.isArray(kOk?.data) ? kOk.data.length : 0)),
-          payrollTotal: Number(statusData?.totalPayrollRecords ?? 0),
-          jobClassificationsTotal: Number(jcOk?.total ?? statusData?.totalJobClassifications ?? (Array.isArray(jcOk?.data) ? jcOk.data.length : 0)),
-          commitmentsTotal: Number(cOk?.total ?? statusData?.totalCommitments ?? (Array.isArray(cOk?.data) ? cOk.data.length : 0)),
-          unitReportsTotal: Number(urOk?.total ?? statusData?.totalUnitReports ?? (Array.isArray(urOk?.data) ? urOk.data.length : 0)),
+          personnelTotal: can('personnel')
+            ? Number(pOk?.total ?? statusData?.totalPersonnel ?? (Array.isArray(pOk?.data) ? pOk.data.length : 0))
+            : 0,
+          karanehTotal: canKaranehAny
+            ? Number(kOk?.total ?? statusData?.totalKaranehRecords ?? (Array.isArray(kOk?.data) ? kOk.data.length : 0))
+            : 0,
+          payrollTotal: !wantLite && can('payroll') ? Number(statusData?.totalPayrollRecords ?? 0) : 0,
+          jobClassificationsTotal: can('jobGroups')
+            ? Number(jcOk?.total ?? statusData?.totalJobClassifications ?? (Array.isArray(jcOk?.data) ? jcOk.data.length : 0))
+            : 0,
+          commitmentsTotal: can('commitments')
+            ? Number(cOk?.total ?? statusData?.totalCommitments ?? (Array.isArray(cOk?.data) ? cOk.data.length : 0))
+            : 0,
+          unitReportsTotal: canMiningAny
+            ? Number(urOk?.total ?? statusData?.totalUnitReports ?? (Array.isArray(urOk?.data) ? urOk.data.length : 0))
+            : 0,
         };
       }
 
@@ -2255,6 +2314,7 @@ export const api = {
         { key: 'miningVolumes', label: 'حجم عملیات معدن', batchSize: 120 },
         { key: 'miningMachinery', label: 'ماشین‌آلات تعمیرگاه', batchSize: 120 },
         { key: 'unitReports', label: 'گزارش‌های واحدها', batchSize: 120 },
+        { key: 'auditLogs', label: 'گزارش‌های امنیت و عملکرد', batchSize: 150 },
       ];
       const totalRows = tableKeys.reduce(
         (sum, t) => sum + (Array.isArray(backupData?.[t.key]) ? backupData[t.key].length : 0),
@@ -2329,6 +2389,7 @@ export const api = {
         { key: 'miningVolumes', batchSize: 150 },
         { key: 'miningMachinery', batchSize: 150 },
         { key: 'unitReports', batchSize: 150 },
+        { key: 'auditLogs', batchSize: 150 },
       ];
       const totalRows = tableKeys.reduce(
         (sum, t) => sum + (Array.isArray(snapshot?.[t.key]) ? snapshot[t.key].length : 0),
@@ -2361,6 +2422,39 @@ export const api = {
     const engine = await detectStorageEngine();
     if (engine === 'indexeddb') return embeddedDb.resetDemo();
     return callBackend('/database/reset-demo', { method: 'POST' });
+  },
+
+  async getAuditLogs(params?: {
+    limit?: number;
+    offset?: number;
+    userId?: string;
+    module?: string;
+    action?: string;
+    search?: string;
+  }): Promise<{ data: SecurityAuditLog[]; total: number; limit: number; offset: number; hasMore: boolean }> {
+    const engine = await detectStorageEngine();
+    if (engine === 'indexeddb') {
+      return embeddedDb.getAuditLogs(params);
+    }
+    const qs = new URLSearchParams();
+    if (params?.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params?.offset !== undefined) qs.set('offset', String(params.offset));
+    if (params?.userId) qs.set('userId', params.userId);
+    if (params?.module) qs.set('module', params.module);
+    if (params?.action) qs.set('action', params.action);
+    if (params?.search) qs.set('search', params.search);
+    const qStr = qs.toString();
+    const json = await callBackend(`/audit-logs${qStr ? `?${qStr}` : ''}`, { timeoutMs: 25000, retries: 1 });
+    if (!json || json.success === false) {
+      throw new Error(json?.message || 'خطا در دریافت تاریخچه امنیت و عملکرد کاربران');
+    }
+    return {
+      data: Array.isArray(json.data) ? json.data : [],
+      total: Number(json.total ?? (Array.isArray(json.data) ? json.data.length : 0)),
+      limit: Number(json.limit ?? params?.limit ?? 100),
+      offset: Number(json.offset ?? params?.offset ?? 0),
+      hasMore: Boolean(json.hasMore),
+    };
   },
 
   async getEmailBackupConfig() {

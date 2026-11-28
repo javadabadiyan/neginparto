@@ -55,7 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const canViewPayroll = isAdmin || Boolean(perms.payroll?.view);
   const canViewKaraneh = isAdmin || Boolean(perms.karaneh?.view);
   const canViewFinalKaraneh = isAdmin || Boolean(perms.finalKaraneh?.view);
-  const canViewUsers = isAdmin || Boolean(perms.users?.view);
+  const canViewUsers = isAdmin || Boolean(perms.users?.view) || Boolean(perms.system?.securityLogs);
   const canViewBackup = isAdmin || Boolean(perms.system?.backupDatabase) || Boolean(perms.system?.restoreDatabase);
   const defaultTab = getFirstAccessibleTab(perms, isAdmin);
 
@@ -105,7 +105,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       ? [{ id: 'final-karaneh', label: 'کارانه نهایی ارسالی', icon: Send, accent: 'default' as const }]
       : []),
     ...(canViewUsers
-      ? [{ id: 'users', label: 'کاربران', icon: Shield, accent: 'default' as const }]
+      ? [{ id: 'users', label: perms.users?.view || isAdmin ? 'کاربران و امنیت' : 'امنیت و گزارش عملکرد', icon: Shield, accent: 'default' as const }]
       : []),
     ...(canViewBackup
       ? [{ id: 'database', label: 'پشتیبان‌گیری', icon: HardDrive, accent: 'default' as const }]

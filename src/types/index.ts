@@ -80,6 +80,55 @@ export interface GranularSystemPermissions {
   dashboardStats: boolean;
   backupDatabase: boolean;
   restoreDatabase: boolean;
+  securityLogs?: boolean;
+}
+
+export interface AuditMetaFields {
+  createdByUserId?: string;
+  createdByUsername?: string;
+  createdByName?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
+}
+
+export interface AuditLogChange {
+  field: string;
+  label: string;
+  oldValue: string;
+  newValue: string;
+}
+
+export type AuditActionType =
+  | 'login'
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'batch_delete'
+  | 'delete_all'
+  | 'import_excel'
+  | 'submit'
+  | 'reopen'
+  | 'backup'
+  | 'restore'
+  | 'reset_demo';
+
+export interface SecurityAuditLog {
+  id: string;
+  createdAtIso?: string;
+  timestampIso?: string;
+  persianDateTime: string;
+  userId: string;
+  username: string;
+  userFullName: string;
+  userRole: string;
+  module: string;
+  action: AuditActionType | string;
+  targetId?: string;
+  targetLabel?: string;
+  summary: string;
+  changes?: AuditLogChange[];
+  recordCount?: number;
 }
 
 export interface GranularDashboardReportPermissions {
@@ -141,6 +190,10 @@ export interface User {
   isActive: boolean;
   createdAt: string;
   lastLogin?: string;
+  updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export type EmploymentType = 'رسمی' | 'پیمانی' | 'قراردادی' | 'طرحی' | 'شرکتی';
@@ -189,6 +242,9 @@ export interface PersonnelRelative {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface Personnel {
@@ -231,6 +287,12 @@ export interface Personnel {
   relatives?: PersonnelRelative[];
   createdAt: string;
   updatedAt: string;
+  createdByUserId?: string;
+  createdByUsername?: string;
+  createdByName?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface KaranehRecord {
@@ -255,6 +317,9 @@ export interface KaranehRecord {
   submittedBy?: string;
   submittedByName?: string;
   updatedAt: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface KaranehComparisonRow {
@@ -274,6 +339,9 @@ export interface KaranehComparisonRow {
   status?: 'draft' | 'submitted';
   submittedAt?: string;
   submittedByName?: string;
+  updatedAt?: string;
+  updatedByName?: string;
+  updatedByUsername?: string;
 }
 
 export interface JobGroup {
@@ -287,6 +355,10 @@ export interface JobGroup {
   requiredExperienceYears: number;
   requiredDegree: string;
   description?: string;
+  updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface JobClassificationRecord {
@@ -310,6 +382,9 @@ export interface JobClassificationRecord {
   jobTitle: string; // شغل
   position: string; // پست
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export type CommitmentType =
@@ -344,6 +419,10 @@ export interface PersonnelCommitment {
   archiveCode?: string;
   guarantorName?: string;
   notes?: string;
+  updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface PayrollRecord {
@@ -390,6 +469,9 @@ export interface PayrollRecord {
   bankAccount?: string; // شماره حساب
   rawFields: Record<string, string | number>; // All 226 exact columns preserved
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export type PayrollAnalysisMetric = 'netPayable' | 'totalBenefits';
@@ -440,6 +522,9 @@ export interface MiningVolumeRecord {
   status?: string;
   notes?: string;
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface MiningMachineryRecord {
@@ -455,6 +540,9 @@ export interface MiningMachineryRecord {
   operatorName?: string; // اپراتور / سرپرست مسئول
   notes?: string;
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface UnitOperationalReport {
@@ -472,6 +560,9 @@ export interface UnitOperationalReport {
   notes?: string;
   rawFields?: Record<string, string | number>; // ستون‌های اضافه فایل اکسل واحد
   updatedAt?: string;
+  updatedByUserId?: string;
+  updatedByUsername?: string;
+  updatedByName?: string;
 }
 
 export interface DatabaseStatus {
@@ -495,6 +586,7 @@ export interface DatabaseStatus {
   totalMiningVolumes?: number;
   totalMiningMachinery?: number;
   totalUnitReports?: number;
+  totalAuditLogs?: number;
   fileSizeBytes: number;
   lastSaved: string;
   isLocalHost: boolean;

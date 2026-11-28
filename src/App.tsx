@@ -34,6 +34,7 @@ import {
   DatabaseStatus
 } from './types';
 import { normalizePermissions, getFullAdminPermissions, getFirstAccessibleTab } from './utils/permissions';
+import { buildEditorStamp } from './utils/audit';
 import { toEnglishDigits } from './utils/persian';
 import { parseYearMonthToPeriod } from './utils/payrollColumns';
 import { CheckCircle2, AlertCircle, X } from 'lucide-react';
@@ -314,6 +315,27 @@ export default function App() {
     }
   };
 
+  const resetWorkspaceState = () => {
+    loadedForUserIdRef.current = null;
+    lastSyncVersionRef.current = null;
+    isReloadingDataRef.current = false;
+    hasLoadedOnceRef.current = false;
+    setSyncingData(false);
+    setSyncError(null);
+    setPersonnelList([]);
+    setKaranehUnitPersonnel([]);
+    setKaranehList([]);
+    setPayrollList([]);
+    setJobGroups([]);
+    setJobClassifications([]);
+    setCommitments([]);
+    setMiningVolumes([]);
+    setMiningMachinery([]);
+    setUnitReports([]);
+    setUsers([]);
+    setDbStatus(null);
+  };
+
   const forceSessionExpire = (reason?: string) => {
     const msg =
       reason ||
@@ -326,8 +348,7 @@ export default function App() {
     } catch {
       // ignore storage errors
     }
-    loadedForUserIdRef.current = null;
-    hasLoadedOnceRef.current = false;
+    resetWorkspaceState();
     setCurrentUser(null);
     setActiveTab('dashboard');
   };
@@ -444,13 +465,11 @@ export default function App() {
     setUsers(bundle.users || []);
     setDbStatus(bundle.dbStatus || null);
 
-      const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
+    const nextSync = bundle.syncVersion || (bundle.dbStatus as any)?.syncVersion;
     if (nextSync) {
       lastSyncVersionRef.current = String(nextSync);
     }
-    if (!bundle.partialErrors?.length) {
-      hasLoadedOnceRef.current = true;
-    }
+    hasLoadedOnceRef.current = true;
   };
 
   const loadAllData = async (options?: { silent?: boolean; force?: boolean }) => {
@@ -506,9 +525,7 @@ export default function App() {
         setJobClassifications(bundle.jobClassifications || []);
         setCommitments(bundle.commitments || []);
         setUnitReports(bundle.unitReports || []);
-        if (!bundle.partialErrors?.length) {
-          hasLoadedOnceRef.current = true;
-        }
+        hasLoadedOnceRef.current = true;
       }
 
       if (bundle.partialErrors && bundle.partialErrors.length > 0) {
@@ -613,7 +630,7 @@ export default function App() {
       (activeTab === 'payroll' && perms.payroll?.view) ||
       (activeTab === 'job-groups' && perms.jobGroups?.view) ||
       (activeTab === 'commitments' && perms.commitments?.view) ||
-      (activeTab === 'users' && perms.users?.view) ||
+      (activeTab === 'users' && (perms.users?.view || perms.system?.securityLogs)) ||
       (activeTab === 'database' && (perms.system?.backupDatabase || perms.system?.restoreDatabase));
     if (!isPermitted) {
       const nextTab = getFirstAccessibleTab(perms, isAdmin);
@@ -951,8 +968,7 @@ export default function App() {
     }
     lockGitHubSession();
     githubAutoPulledRef.current = false;
-    loadedForUserIdRef.current = null;
-    hasLoadedOnceRef.current = false;
+    resetWorkspaceState();
     signOut(auth).catch(() => {});
     setCurrentUser(null);
     setActiveTab('dashboard');
@@ -1072,6 +1088,7 @@ export default function App() {
               relatives: Array.isArray(existing?.relatives) ? existing.relatives : [],
               createdAt: existing?.createdAt || nowStr,
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) {
               next[existingIdx] = merged;
@@ -1209,6 +1226,7 @@ export default function App() {
               submittedBy: existing?.submittedBy || '',
               submittedByName: existing?.submittedByName || '',
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) {
               next[existingIdx] = rec;
@@ -1413,6 +1431,7 @@ export default function App() {
               jobTitle: String(optVal(row, 'jobTitle', 'شغل') || '').trim(),
               position: String(optVal(row, 'position', 'پست', 'سمت') || '').trim(),
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) {
               next[existingIdx] = rec;
@@ -1527,6 +1546,7 @@ export default function App() {
             isArchived,
             guarantorName: String(optVal(row, 'guarantorName', 'نام ضامن', 'ضامن') || '-'),
             notes: String(optVal(row, 'notes', 'توضیحات') || ''),
+            ...buildEditorStamp(currentUser),
           });
         });
         if (newCommitments.length > 0) {
@@ -1705,6 +1725,7 @@ export default function App() {
               bankAccount: String(optVal(row, 'شماره حساب') || ''),
               rawFields: row,
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) {
               next[existingIdx] = rec;
@@ -1995,10 +2016,11 @@ export default function App() {
               insuranceCovered: ['بله', 'آری', 'true', '1', 'دارد', 'تحت پوشش'].includes(insRaw),
               notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (matchIdx >= 0) existingRels[matchIdx] = relObj;
             else existingRels.push(relObj);
-            next[parentIdx] = { ...parent, relatives: existingRels, updatedAt: nowStr };
+            next[parentIdx] = { ...parent, relatives: existingRels, updatedAt: nowStr, ...buildEditorStamp(currentUser) };
           });
           return next;
         });
@@ -2256,6 +2278,7 @@ export default function App() {
               status: String(optVal(row, 'status', 'وضعیت تحقق', 'وضعیت') || (targetVolume > 0 && volumeValue >= targetVolume ? 'فراتر از برنامه' : 'در حال اجرا')).trim(),
               notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) next[existingIdx] = rec;
             else {
@@ -2395,6 +2418,7 @@ export default function App() {
               operatorName: String(optVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'مسئول / اپراتور', 'اپراتور') || '').trim(),
               notes: String(optVal(row, 'notes', 'توضیحات', 'یادداشت') || '').trim(),
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) next[existingIdx] = rec;
             else {
@@ -2531,6 +2555,7 @@ export default function App() {
               notes: String(optVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim(),
               rawFields: row.rawFields || row,
               updatedAt: nowStr,
+              ...buildEditorStamp(currentUser),
             };
             if (existingIdx !== undefined) next[existingIdx] = rec;
             else {
@@ -2753,6 +2778,7 @@ export default function App() {
                 canViewJobGroups={isSuperAdmin || Boolean(userPerms.jobGroups?.view)}
                 canViewPayroll={isSuperAdmin || Boolean(userPerms.payroll?.view)}
                 canViewUsers={isSuperAdmin || Boolean(userPerms.users?.view)}
+                canViewSecurityLogs={isSuperAdmin || Boolean(userPerms.system?.securityLogs)}
                 canBackupDatabase={isSuperAdmin || Boolean(userPerms.system?.backupDatabase)}
                 canRestoreDatabase={isSuperAdmin || Boolean(userPerms.system?.restoreDatabase)}
                 onNavigate={setActiveTab}
@@ -3032,7 +3058,7 @@ export default function App() {
             )}
 
             {activeTab === 'users' && (
-              (isSuperAdmin || userPerms.users.view) ? (
+              (isSuperAdmin || userPerms.users.view || userPerms.system?.securityLogs) ? (
                 <UsersModule
                   users={users}
                   currentUser={currentUser}
@@ -3042,13 +3068,15 @@ export default function App() {
                   onDeleteAllUsers={handleDeleteAllUsers}
                   onBatchImportUsers={handleBatchImportUsers}
                   granularPermissions={userPerms.users}
+                  canViewUsers={isSuperAdmin || Boolean(userPerms.users?.view)}
+                  canViewSecurityLogs={isSuperAdmin || Boolean(userPerms.system?.securityLogs)}
                   onRefreshData={() => handleManualRefreshData('users')}
                   isRefreshing={syncingData}
                 />
               ) : (
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 space-y-2">
                   <div className="font-bold text-slate-800 text-sm">دسترسی محدود شده</div>
-                  <p>مدیریت کاربران و سطوح دسترسی منحصراً در اختیار کاربران مجاز و مدیر ارشد می‌باشد.</p>
+                  <p>مدیریت کاربران، سطوح دسترسی و گزارش امنیت منحصراً در اختیار کاربران مجاز و مدیر ارشد می‌باشد.</p>
                 </div>
               )
             )}

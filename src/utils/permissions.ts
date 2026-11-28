@@ -68,6 +68,7 @@ export function getFullAdminPermissions(): UserPermissions {
       dashboardStats: true,
       backupDatabase: true,
       restoreDatabase: true,
+      securityLogs: true,
     },
     smartDashboard: {
       view: true,
@@ -180,6 +181,7 @@ export function getEmptyPermissions(): UserPermissions {
       dashboardStats: false,
       backupDatabase: false,
       restoreDatabase: false,
+      securityLogs: false,
     },
     smartDashboard: {
       view: false,
@@ -292,6 +294,7 @@ export function getDefaultViewerPermissions(): UserPermissions {
       dashboardStats: true,
       backupDatabase: false,
       restoreDatabase: false,
+      securityLogs: false,
     },
     smartDashboard: {
       view: true,
@@ -909,6 +912,7 @@ export function normalizePermissions(raw?: any): UserPermissions {
         dashboardStats: lp || lk || lj || lc || lu,
         backupDatabase: lb,
         restoreDatabase: lb,
+        securityLogs: false,
       },
       smartDashboard: {
         view: false,
@@ -1027,6 +1031,7 @@ export function normalizePermissions(raw?: any): UserPermissions {
       dashboardStats: b(s.dashboardStats),
       backupDatabase: b(s.backupDatabase),
       restoreDatabase: b(s.restoreDatabase),
+      securityLogs: b(s.securityLogs),
     },
     smartDashboard: {
       view: b(sd.view),
@@ -1103,7 +1108,7 @@ export function getFirstAccessibleTab(perms: UserPermissions, isAdmin: boolean):
   if (perms.payroll?.view) return 'payroll';
   if (perms.jobGroups?.view) return 'job-groups';
   if (perms.commitments?.view) return 'commitments';
-  if (perms.users?.view) return 'users';
+  if (perms.users?.view || perms.system?.securityLogs) return 'users';
   if (perms.system?.backupDatabase || perms.system?.restoreDatabase) return 'database';
   return 'dashboard';
 }

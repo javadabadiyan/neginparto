@@ -56,6 +56,8 @@ import {
 } from '../utils/excel';
 import { SmartExcelImportMapper } from './SmartExcelImportMapper';
 import { MINING_UNITS_CATALOG } from './CeoMiningUnitsPanel';
+import { SecurityAuditLogsPanel } from './SecurityAuditLogsPanel';
+import { EditorStampCell } from './EditorStampCell';
 
 interface UsersModuleProps {
   users: User[];
@@ -66,6 +68,8 @@ interface UsersModuleProps {
   onDeleteAllUsers?: () => Promise<boolean>;
   onBatchImportUsers: (items: any[]) => Promise<boolean>;
   granularPermissions?: GranularUsersPermissions;
+  canViewUsers?: boolean;
+  canViewSecurityLogs?: boolean;
   onRefreshData?: () => Promise<void> | void;
   isRefreshing?: boolean;
 }
@@ -105,10 +109,15 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   onDeleteAllUsers,
   onBatchImportUsers,
   granularPermissions,
+  canViewUsers = true,
+  canViewSecurityLogs = false,
   onRefreshData,
   isRefreshing = false
 }) => {
   const isSuperAdmin = currentUser?.role === 'super_admin' || currentUser?.username === 'javadabadiyan';
+  const showUsersTab = isSuperAdmin || canViewUsers;
+  const showSecurityTab = isSuperAdmin || canViewSecurityLogs;
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'security'>(showUsersTab ? 'users' : 'security');
   const canCreateUser = isSuperAdmin || Boolean(granularPermissions?.create);
   const canEditUser = isSuperAdmin || Boolean(granularPermissions?.edit);
   const canDeleteUser = isSuperAdmin || Boolean(granularPermissions?.delete);
@@ -129,6 +138,14 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
   // Excel import modal state
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [customKaranehUnitInput, setCustomKaranehUnitInput] = useState('');
+
+  useEffect(() => {
+    if (activeSubTab === 'users' && !showUsersTab && showSecurityTab) {
+      setActiveSubTab('security');
+    } else if (activeSubTab === 'security' && !showSecurityTab && showUsersTab) {
+      setActiveSubTab('users');
+    }
+  }, [activeSubTab, showUsersTab, showSecurityTab]);
 
   const isUserSelectable = (u: User) => u.username !== 'javadabadiyan' && u.id !== currentUser?.id;
 
@@ -521,7 +538,39 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
 
   return (
     <div className="space-y-6">
-      
+      {(showUsersTab && showSecurityTab) && (
+        <div className="bg-white p-2 rounded-2xl border border-slate-200 inline-flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('users')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+              activeSubTab === 'users'
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>کاربران و سطوح دسترسی</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('security')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+              activeSubTab === 'security'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>امنیت و تاریخچه عملکرد کاربران</span>
+          </button>
+        </div>
+      )}
+
+      {activeSubTab === 'security' && showSecurityTab ? (
+        <SecurityAuditLogsPanel users={users} />
+      ) : (
+        <>
       {/* Header Bar */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
@@ -700,6 +749,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                 <th className="py-3 px-3">واحد اداری</th>
                 <th className="py-3 px-4">خلاصه سطوح دسترسی تفکیک‌شده</th>
                 <th className="py-3 px-3 text-center">وضعیت حساب</th>
+                <th className="py-3 px-3">آخرین ویرایش / ثبت</th>
                 <th className="py-3 px-3 text-center w-24">عملیات</th>
               </tr>
             </thead>
@@ -837,6 +887,11 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                             پشتیبان‌گیری
                           </span>
                         )}
+                        {norm.system?.securityLogs && (
+                          <span className="bg-slate-900 text-white px-1.5 py-0.5 rounded font-bold">
+                            گزارش امنیت
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="py-3.5 px-3 text-center">
@@ -846,6 +901,9 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                         {u.isActive ? <UserCheck className="w-3 h-3" /> : <UserX className="w-3 h-3" />}
                         {u.isActive ? 'فعال' : 'مسدود'}
                       </span>
+                    </td>
+                    <td className="py-3.5 px-3">
+                      <EditorStampCell record={u} fallbackAt={u.createdAt} />
                     </td>
                     <td className="py-3.5 px-3 text-center">
                       <div className="flex items-center justify-center gap-1">
@@ -876,6 +934,8 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
           </table>
         </div>
       </div>
+        </>
+      )}
 
       {/* Advanced User Permissions Modal */}
       {isFormOpen && (
@@ -1127,6 +1187,7 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                   if (formData.permissions.karaneh?.view) visibleTabs.push('کارانه');
                   if (formData.permissions.finalKaraneh?.view) visibleTabs.push('کارانه نهایی ارسالی');
                   if (formData.permissions.users?.view) visibleTabs.push('مدیریت کاربران');
+                  if (formData.permissions.system?.securityLogs) visibleTabs.push('امنیت و گزارش عملکرد');
                   if (formData.permissions.system?.backupDatabase || formData.permissions.system?.restoreDatabase) visibleTabs.push('پشتیبان‌گیری');
 
                   return (
@@ -1576,11 +1637,12 @@ export const UsersModule: React.FC<UsersModuleProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                       {[
                         { key: 'dashboardStats', label: 'مشاهده آمار و نمودارهای تحلیلی داشبورد' },
                         { key: 'backupDatabase', label: 'دانلود نسخه کامل پشتیبان دیتابیس JSON' },
                         { key: 'restoreDatabase', label: 'بازیابی پایگاه داده از فایل پشتیبان' },
+                        { key: 'securityLogs', label: 'مشاهده گزارش امنیت و تاریخچه عملکرد کاربران' },
                       ].map(item => (
                         <label key={item.key} className="flex items-center gap-2.5 cursor-pointer select-none py-0.5 hover:text-indigo-600">
                           <input

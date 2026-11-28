@@ -385,6 +385,7 @@ npm start
           miningVolumes: Array.isArray(raw.miningVolumes) ? raw.miningVolumes : [],
           miningMachinery: Array.isArray(raw.miningMachinery) ? raw.miningMachinery : [],
           unitReports: Array.isArray(raw.unitReports) ? raw.unitReports : [],
+          auditLogs: Array.isArray(raw.auditLogs) ? raw.auditLogs : [],
           metadata: raw.metadata || undefined,
         };
         const ok = await onRestoreBackup(normalizedBackup, (progress) => setRestoreProgress(progress));
@@ -1785,17 +1786,17 @@ npm start
           </div>
 
           <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 sm:col-span-2">
-            <span className="text-[11px] text-slate-600 block">کاربران و دسترسی‌ها:</span>
+            <span className="text-[11px] text-slate-600 block">کاربران، دسترسی‌ها و تاریخچه امنیت:</span>
             <span className="text-sm font-bold text-slate-800 block mt-1 persian-num">
-              {toPersianDigits(dbStatus?.totalUsers || 0)} کاربر ({toPersianDigits(dbStatus?.totalActiveUsers ?? dbStatus?.totalUsers ?? 0)} فعال)
+              {toPersianDigits(dbStatus?.totalUsers || 0)} کاربر ({toPersianDigits(dbStatus?.totalActiveUsers ?? dbStatus?.totalUsers ?? 0)} فعال) · {toPersianDigits(dbStatus?.totalAuditLogs || 0)} رویداد امنیتی
             </span>
           </div>
         </div>
 
         {/* Updated Backup Coverage Matrix */}
         <div className="p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-xl text-[11px] text-slate-700 leading-relaxed">
-          <b className="text-indigo-900">پوشش کامل نسخه پشتیبان، دیتابیس مستقل از مرورگر و همگام‌سازی گیت‌هاب/ابری (نگین پرتو نصر — نسخه ۵.۱):</b>{' '}
-          فایل پشتیبان JSON، دیتابیس ابری Cloudflare D1، اسنپ‌شات گیت‌هاب و Firestore شامل تمامی اطلاعات <b>پرونده‌های ۲۸ ستونی پرسنلی، بستگان و اسکن مدارک</b>، <b>آمار حجم دیسپچینگ، ماشین‌آلات تعمیرگاه و گزارش‌های اکسل تمام واحدهای معدن</b>، <b>گروه‌های شغلی و جدول ۱۸ ستونی طبقه‌بندی مشاغل</b>، <b>کارانه ماهانه و کارانه‌های نهایی ارسالی واحدها</b>، <b>حقوق ۲۲۶ ستونی</b>، <b>اسناد تعهدات</b> و <b>کلیه دسترسی‌های به‌روزرسانی‌شده (از جمله تحلیل کارانه و خروجی آنالیز)</b> می‌باشد.
+          <b className="text-indigo-900">پوشش کامل نسخه پشتیبان، دیتابیس مستقل از مرورگر و همگام‌سازی گیت‌هاب/ابری (نگین پرتو نصر — نسخه ۵.۲):</b>{' '}
+          فایل پشتیبان JSON، دیتابیس ابری Cloudflare D1، اسنپ‌شات گیت‌هاب و Firestore شامل تمامی اطلاعات <b>پرونده‌های ۲۸ ستونی پرسنلی، بستگان و اسکن مدارک</b>، <b>آمار حجم دیسپچینگ، ماشین‌آلات تعمیرگاه و گزارش‌های اکسل تمام واحدهای معدن</b>، <b>گروه‌های شغلی و جدول ۱۸ ستونی طبقه‌بندی مشاغل</b>، <b>کارانه ماهانه و کارانه‌های نهایی ارسالی واحدها</b>، <b>حقوق ۲۲۶ ستونی</b>، <b>اسناد تعهدات</b> و <b>تاریخچه امنیت و عملکرد کاربران</b> می‌باشد.
         </div>
 
         {/* Restore and Reset */}

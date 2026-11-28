@@ -11,12 +11,20 @@ import {
   UnitOperationalReport,
   DatabaseStatus,
   KaranehComparisonRow,
+  SecurityAuditLog,
+  AuditActionType,
+  AuditLogChange,
 } from '../types';
 import {
   normalizePermissions,
   getEmptyPermissions,
   getFullAdminPermissions,
 } from '../utils/permissions';
+import {
+  buildEditorStamp,
+  computeRecordChanges,
+  formatIranDateTime,
+} from '../utils/audit';
 
 const IDB_NAME = 'hr_embedded_permanent_db';
 const IDB_VERSION = 1;
@@ -37,6 +45,7 @@ interface EmbeddedDatabase {
   miningVolumes: MiningVolumeRecord[];
   miningMachinery: MiningMachineryRecord[];
   unitReports: UnitOperationalReport[];
+  auditLogs?: SecurityAuditLog[];
   lastSaved?: string;
 }
 
@@ -184,7 +193,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: true, create: false, edit: false, delete: false, deleteAll: false, print: true, archive: false, importExcel: false, exportExcel: true },
       payroll: { view: true, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: true },
       users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
+      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false, securityLogs: false },
       smartDashboard: { view: true, exportExcel: true, print: true },
       ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, print: true },
       unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, allowedUnits: [] },
@@ -201,7 +210,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
+      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, allowedUnits: ['واحد دیسپچینگ و کنترل تولید', 'استخراج و معدن‌کاری', 'تراش و باطله‌برداری', 'حمل و نقل و بارگیری'] },
@@ -218,7 +227,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
+      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, allowedUnits: ['واحد تعمیرگاه و ماشین‌آلات سنگین'] },
@@ -235,7 +244,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false },
+      system: { dashboardStats: true, backupDatabase: false, restoreDatabase: false, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: false, importExcel: true, exportExcel: true, allowedUnits: [] },
@@ -252,7 +261,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: false, create: false, edit: false, delete: false, deleteAll: false, print: false, archive: false, importExcel: false, exportExcel: false },
       payroll: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
       users: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false },
-      system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false },
+      system: { dashboardStats: false, backupDatabase: false, restoreDatabase: false, securityLogs: false },
       smartDashboard: { view: false, exportExcel: false, print: false },
       ceoDashboard: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, print: false },
       unitOperations: { view: false, create: false, edit: false, delete: false, deleteAll: false, importExcel: false, exportExcel: false, allowedUnits: [] },
@@ -269,7 +278,7 @@ function buildPresetPermissions(presetName: string): any {
       commitments: { view: true, create: true, edit: true, delete: true, deleteAll: true, print: true, archive: true, importExcel: true, exportExcel: true },
       payroll: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
       users: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true },
-      system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true },
+      system: { dashboardStats: true, backupDatabase: true, restoreDatabase: true, securityLogs: true },
       smartDashboard: { view: true, exportExcel: true, print: true },
       ceoDashboard: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, print: true },
       unitOperations: { view: true, create: true, edit: true, delete: true, deleteAll: true, importExcel: true, exportExcel: true, allowedUnits: [] },
@@ -429,6 +438,7 @@ function getInitialEmbeddedDatabase(): EmbeddedDatabase {
       { id: 'ur-140308-3', period: '1403-08', unitName: 'واحد ایمنی، بهداشت و محیط زیست (HSE)', reportCategory: 'ایمنی و بازرسی', metricName: 'نرخ انطباق ایمنی شیفت‌های معدن', actualValue: 98.5, previousValue: 96.2, targetValue: 98, unitLabel: 'درصد', status: 'تایید شده', submittedBy: 'مسئول HSE', notes: 'صفر بودن حوادث منجر به فوت یا توقف کار', rawFields: { 'تعداد بازرسی': 64, 'مانور ایمنی برگزارشده': 3 }, updatedAt: '1403/08/29' },
       { id: 'ur-140308-4', period: '1403-08', unitName: 'واحد انبار، تدارکات و بازرگانی', reportCategory: 'پشتیبانی و تامین', metricName: 'نرخ تامین به‌موقع قطعات مصرفی', actualValue: 92, previousValue: 87, targetValue: 95, unitLabel: 'درصد', status: 'در انتظار بررسی', submittedBy: 'واحد انبار مرکزی', notes: 'سفارش‌گذاری فوری پمپ گیربکس لودر 966H', rawFields: { 'تعداد حواله صادره': 318, 'اقلام بحرانی در مسیر': 4 }, updatedAt: '1403/08/29' },
     ],
+    auditLogs: [],
     lastSaved: new Date().toLocaleString('fa-IR'),
   };
 }
@@ -513,6 +523,7 @@ async function loadEmbeddedDb(): Promise<EmbeddedDatabase> {
       miningVolumes: fromIdb.miningVolumes || [],
       miningMachinery: fromIdb.miningMachinery || [],
       unitReports: fromIdb.unitReports || [],
+      auditLogs: Array.isArray(fromIdb.auditLogs) ? fromIdb.auditLogs : [],
       lastSaved: fromIdb.lastSaved,
     };
   }
@@ -662,6 +673,101 @@ function stripPass(u: any): User {
   };
 }
 
+const EMB_AUDIT_LABELS: Record<string, string> = {
+  username: 'نام کاربری',
+  fullName: 'نام و نام خانوادگی',
+  firstName: 'نام',
+  lastName: 'نام خانوادگی',
+  role: 'نقش سازمانی',
+  department: 'واحد سازمانی',
+  email: 'ایمیل',
+  isActive: 'وضعیت حساب',
+  permissions: 'سطوح دسترسی',
+  personnelCode: 'کد پرسنلی',
+  nationalId: 'کد ملی',
+  position: 'پست سازمانی',
+  jobTitle: 'شغل',
+  workLocation: 'محل خدمت',
+  employmentType: 'نوع استخدام',
+  status: 'وضعیت',
+  baseSalary: 'حقوق پایه',
+  phone: 'تلفن همراه',
+  period: 'دوره',
+  baseKaraneh: 'کارانه پایه',
+  overtimeBonus: 'پاداش اضافه‌کاری',
+  deductions: 'کسورات',
+  finalKaraneh: 'کارانه نهایی',
+  notes: 'توضیحات',
+  code: 'کد گروه',
+  title: 'عنوان گروه',
+  grade: 'رتبه',
+  minBaseSalary: 'حداقل حقوق',
+  maxBaseSalary: 'حداکثر حقوق',
+  maxKaranehCeiling: 'سقف کارانه',
+  jobGroup: 'گروه شغلی',
+  commitmentType: 'نوع تعهد',
+  amount: 'مبلغ تعهد',
+  previouslyTakenAmount: 'مبلغ قبلی',
+  maxAllowedAmount: 'سقف مجاز',
+  isArchived: 'وضعیت بایگانی',
+  guarantorName: 'ضامن',
+  unitName: 'نام واحد',
+  activityType: 'نوع فعالیت',
+  metricTitle: 'شاخص حجم',
+  volumeValue: 'حجم محقق‌شده',
+  targetVolume: 'هدف ماهانه',
+  machineCode: 'کد دستگاه',
+  machineName: 'نام دستگاه',
+  machineType: 'نوع تجهیز',
+  issueDescription: 'شرح وضعیت/خرابی',
+  operatorName: 'اپراتور/مسئول',
+  reportCategory: 'دسته‌بندی گزارش',
+  metricName: 'عنوان شاخص',
+  actualValue: 'مقدار محقق‌شده',
+  previousValue: 'مقدار ماه قبل',
+  targetValue: 'هدف / برنامه',
+  submittedBy: 'ثبت‌کننده',
+};
+
+function recordAuditLogEmb(
+  db: EmbeddedDatabase,
+  actor: { id?: string; username?: string; fullName?: string; role?: string } | null | undefined,
+  opts: {
+    module: string;
+    action: AuditActionType | string;
+    targetId?: string;
+    targetLabel?: string;
+    summary: string;
+    changes?: AuditLogChange[];
+    recordCount?: number;
+  }
+) {
+  if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+  const now = new Date();
+  const iso = now.toISOString();
+  const entry: SecurityAuditLog = {
+    id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    createdAtIso: iso,
+    timestampIso: iso,
+    persianDateTime: formatIranDateTime(now),
+    userId: String(actor?.id || 'system'),
+    username: String(actor?.username || 'system'),
+    userFullName: String(actor?.fullName || actor?.username || 'کاربر سامانه'),
+    userRole: String(actor?.role || 'user'),
+    module: opts.module,
+    action: opts.action,
+    targetId: opts.targetId ? String(opts.targetId) : undefined,
+    targetLabel: opts.targetLabel ? String(opts.targetLabel) : undefined,
+    summary: opts.summary,
+    changes: Array.isArray(opts.changes) && opts.changes.length > 0 ? opts.changes : undefined,
+    recordCount: opts.recordCount,
+  };
+  db.auditLogs.unshift(entry);
+  if (db.auditLogs.length > 5000) {
+    db.auditLogs.length = 5000;
+  }
+}
+
 function normPayrollKey(key: string): string {
   return String(key || '').replace(/\u200c/g, ' ').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/أ|إ/g, 'ا').replace(/\s+/g, ' ').trim();
 }
@@ -721,7 +827,14 @@ export const embeddedDb = {
     if (!check.valid) return { success: false, message: 'نام کاربری یا رمز عبور اشتباه است.' };
     if (!user.isActive) return { success: false, message: 'حساب کاربری شما غیرفعال شده است. لطفاً با مدیر ارشد تماس بگیرید.' };
     if (check.needsMigration) user.password = hashPasswordClient(String(password));
-    user.lastLogin = new Date().toLocaleString('fa-IR');
+    user.lastLogin = formatIranDateTime();
+    recordAuditLogEmb(db, user, {
+      module: 'auth',
+      action: 'login',
+      targetId: user.id,
+      targetLabel: user.username,
+      summary: `ورود موفق کاربر «${user.fullName}» (${user.username}) به سامانه`,
+    });
     await saveEmbeddedDb(db);
     return {
       success: true,
@@ -754,7 +867,14 @@ export const embeddedDb = {
     if (!user.isActive) return { success: false, message: 'حساب کاربری غیرفعال است.' };
     user.uid = uid;
     user.email = email;
-    user.lastLogin = new Date().toLocaleString('fa-IR');
+    user.lastLogin = formatIranDateTime();
+    recordAuditLogEmb(db, user, {
+      module: 'auth',
+      action: 'login',
+      targetId: user.id,
+      targetLabel: user.username,
+      summary: `ورود از طریق حساب گوگل توسط «${user.fullName}» (${email})`,
+    });
     await saveEmbeddedDb(db);
     return {
       success: true,
@@ -797,6 +917,7 @@ export const embeddedDb = {
       : user.permissions && typeof user.permissions === 'object'
       ? normalizePermissions(user.permissions)
       : getEmptyPermissions();
+    const stamp = buildEditorStamp(auth);
     const newUser: any = {
       id: `u-${Date.now()}`,
       username: String(user.username).trim(),
@@ -807,9 +928,17 @@ export const embeddedDb = {
       department: user.department || '',
       permissions: normalizedPerms,
       isActive: true,
-      createdAt: new Date().toLocaleDateString('fa-IR'),
+      createdAt: formatIranDateTime(),
+      ...stamp,
     };
     db.users.push(newUser);
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'create',
+      targetId: newUser.id,
+      targetLabel: `${newUser.fullName} (${newUser.username})`,
+      summary: `ایجاد کاربر جدید «${newUser.fullName}» با نقش «${newUser.role}»`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: stripPass(newUser), message: 'کاربر جدید با موفقیت ذخیره شد.' };
   },
@@ -833,7 +962,8 @@ export const embeddedDb = {
       : user.permissions !== undefined
       ? normalizePermissions(user.permissions)
       : normalizePermissions(existing.permissions);
-    db.users[idx] = {
+    const stamp = buildEditorStamp(auth);
+    const updatedUser = {
       ...existing,
       fullName: user.fullName ?? existing.fullName,
       email: user.email !== undefined ? String(user.email).trim().toLowerCase() : existing.email,
@@ -842,7 +972,21 @@ export const embeddedDb = {
       permissions: nextPermissions,
       isActive: user.isActive ?? existing.isActive,
       password: user.password ? hashPasswordClient(String(user.password)) : existing.password,
+      ...stamp,
     };
+    const changes = computeRecordChanges(stripPass(existing), stripPass(updatedUser), EMB_AUDIT_LABELS);
+    if (user.password) {
+      changes.push({ field: 'password', label: 'رمز عبور', oldValue: '••••••', newValue: 'تغییر یافت' });
+    }
+    db.users[idx] = updatedUser;
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'update',
+      targetId: updatedUser.id,
+      targetLabel: `${updatedUser.fullName} (${updatedUser.username})`,
+      summary: `ویرایش مشخصات یا سطح دسترسی کاربر «${updatedUser.fullName}»`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: stripPass(db.users[idx]), message: 'اطلاعات و دسترسی‌های کاربر به‌روزرسانی شد.' };
   },
@@ -855,6 +999,13 @@ export const embeddedDb = {
     if (!u) return { success: false, message: 'کاربر یافت نشد.' };
     if (u.username === 'javadabadiyan') return { success: false, message: 'کاربر ارشد سامانه قابل حذف نیست.' };
     db.users = db.users.filter((x) => x.id !== id);
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'delete',
+      targetId: u.id,
+      targetLabel: `${u.fullName} (${u.username})`,
+      summary: `حذف حساب کاربری «${u.fullName}» (${u.username})`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, message: 'کاربر با موفقیت حذف گردید.' };
   },
@@ -870,7 +1021,7 @@ export const embeddedDb = {
       const k = String(u.username || '').trim().toLowerCase();
       if (k && !uIdxMap.has(k)) uIdxMap.set(k, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const username = String(row.username || row['نام کاربری'] || '').trim();
@@ -894,6 +1045,7 @@ export const embeddedDb = {
             ? normalizePermissions(buildPresetPermissions(presetLabel))
             : normalizePermissions(existing.permissions),
           password: rawPass ? hashPasswordClient(rawPass) : existing.password,
+          ...stamp,
         };
         updated++;
       } else {
@@ -902,12 +1054,19 @@ export const embeddedDb = {
           id: `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           username, password: hashPasswordClient(rawPass || '12345678'), fullName, role, department, isActive,
           permissions: row['الگوی دسترسی'] || row.preset ? normalizePermissions(buildPresetPermissions(presetLabel)) : getEmptyPermissions(),
-          createdAt: todayFa,
+          createdAt: stamp.updatedAt,
+          ...stamp,
         });
         uIdxMap.set(unameKey, newIdx);
         added++;
       }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'import_excel',
+      summary: `ورود گروهی اکسل کاربران (${added} کاربر جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `بارگذاری کاربران از اکسل انجام شد (${added} کاربر جدید، ${updated} کاربر به‌روزرسانی شد).` };
   },
@@ -920,6 +1079,12 @@ export const embeddedDb = {
     const before = db.users.length;
     db.users = db.users.filter((u) => !idSet.has(u.id) || u.username === 'javadabadiyan' || u.id === auth?.id);
     const deletedCount = before - db.users.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} حساب کاربری`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} کاربر با موفقیت حذف گردید.` };
   },
@@ -931,6 +1096,12 @@ export const embeddedDb = {
     const before = db.users.length;
     db.users = db.users.filter((u) => u.username === 'javadabadiyan' || u.id === auth?.id);
     const deletedCount = before - db.users.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'users',
+      action: 'delete_all',
+      summary: `پاکسازی جدول کاربران (${deletedCount} حساب حذف شد)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} حساب کاربری حذف شدند (حساب مدیر ارشد و کاربر جاری حفظ گردید).` };
   },
@@ -954,14 +1125,22 @@ export const embeddedDb = {
     if (db.personnel.some((p) => p.personnelCode === personnel.personnelCode)) {
       return { success: false, message: `کد پرسنلی ${personnel.personnelCode} قبلاً ثبت شده است.` };
     }
+    const stamp = buildEditorStamp(auth);
     const newP: any = {
       id: `p-${Date.now()}`, ...personnel,
       fullName: `${personnel.firstName} ${personnel.lastName}`.trim() || String(personnel.fullName || ''),
       relatives: Array.isArray(personnel.relatives) ? personnel.relatives : [],
-      createdAt: personnel.createdAt || new Date().toLocaleDateString('fa-IR'),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      createdAt: personnel.createdAt || stamp.updatedAt,
+      ...stamp,
     };
     db.personnel.push(newP);
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'create',
+      targetId: newP.id,
+      targetLabel: `${newP.fullName} (${newP.personnelCode})`,
+      summary: `ثبت پرسنل جدید «${newP.fullName}» با کد پرسنلی ${newP.personnelCode}`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: newP, message: 'پرسنل جدید با موفقیت ثبت گردید.' };
   },
@@ -978,12 +1157,23 @@ export const embeddedDb = {
       }
     }
     const prev = db.personnel[idx];
-    db.personnel[idx] = {
+    const stamp = buildEditorStamp(auth);
+    const updated = {
       ...prev, ...personnel,
       fullName: personnel.firstName && personnel.lastName ? `${personnel.firstName} ${personnel.lastName}`.trim() : (personnel.fullName || prev.fullName),
       relatives: personnel.relatives !== undefined ? personnel.relatives : (prev.relatives || []),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      ...stamp,
     };
+    const changes = computeRecordChanges(prev, updated, EMB_AUDIT_LABELS);
+    db.personnel[idx] = updated;
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'update',
+      targetId: updated.id,
+      targetLabel: `${updated.fullName} (${updated.personnelCode})`,
+      summary: `ویرایش پرونده پرسنلی «${updated.fullName}» (${updated.personnelCode})`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: db.personnel[idx], message: 'اطلاعات پرسنلی با موفقیت ویرایش شد.' };
   },
@@ -996,6 +1186,13 @@ export const embeddedDb = {
     if (!p) return { success: false, message: 'پرسنل یافت نشد.' };
     db.personnel = db.personnel.filter((x) => x.id !== id);
     db.commitments = db.commitments.filter((c) => c.personnelId !== id && c.personnelCode !== p.personnelCode);
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'delete',
+      targetId: p.id,
+      targetLabel: `${p.fullName} (${p.personnelCode})`,
+      summary: `حذف پرونده پرسنلی «${p.fullName}» (${p.personnelCode})`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, message: `پرسنل ${p.fullName} با موفقیت حذف شد.` };
   },
@@ -1009,7 +1206,7 @@ export const embeddedDb = {
       const k = String(p.personnelCode || '').trim();
       if (k && !pIdxMap.has(k)) pIdxMap.set(k, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(getPayrollVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
@@ -1054,16 +1251,22 @@ export const embeddedDb = {
         status: String(getPayrollVal(row, 'status', 'وضعیت') ?? existing?.status ?? 'فعال'),
         baseSalary: Number(getPayrollVal(row, 'baseSalary', 'حقوق پایه', 'حقوق پایه (ریال)') ?? existing?.baseSalary ?? 0),
         notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') ?? existing?.notes ?? ''),
-        updatedAt: todayFa,
+        ...stamp,
       };
       if (idx >= 0) { db.personnel[idx] = { ...db.personnel[idx], ...itemData }; updated++; }
       else {
         const newIdx = db.personnel.length;
-        db.personnel.push({ id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...itemData, relatives: [], createdAt: todayFa });
+        db.personnel.push({ id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...itemData, relatives: [], createdAt: stamp.updatedAt });
         pIdxMap.set(code, newIdx);
         added++;
       }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'import_excel',
+      summary: `بارگذاری اکسل پرسنل (${added} پرونده جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `ورود اطلاعات انجام شد: ${added} نفر جدید اضافه شدند و ${updated} پرونده به‌روزرسانی گردید.` };
   },
@@ -1076,6 +1279,12 @@ export const embeddedDb = {
     const before = db.personnel.length;
     db.personnel = db.personnel.filter((p) => !idSet.has(p.id));
     const deletedCount = before - db.personnel.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} پرونده پرسنلی`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} پرونده پرسنلی حذف شد.` };
   },
@@ -1086,6 +1295,12 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'personnel', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی جدول پرسنل.' };
     const deletedCount = db.personnel.length;
     db.personnel = [];
+    recordAuditLogEmb(db, auth, {
+      module: 'personnel',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول پرسنل (${deletedCount} پرونده)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `کل جدول پرسنل (${deletedCount} پرونده) پاکسازی شد.` };
   },
@@ -1108,7 +1323,7 @@ export const embeddedDb = {
       if (nid && !byNatId.has(nid)) byNatId.set(nid, p);
       if (fn && !byName.has(fn)) byName.set(fn, p);
     }
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0; let unmatched = 0;
     for (const row of items || []) {
       const pCode = String(getPayrollVal(row, 'personnelCode', 'كد پرسنلي', 'کد پرسنلی') || '').trim();
@@ -1151,8 +1366,8 @@ export const embeddedDb = {
         isDependent,
         insuranceCovered,
         notes: String(getPayrollVal(row, 'notes', 'توضیحات', 'یادداشت') || ''),
-        updatedAt: todayFa,
-        createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : todayFa,
+        ...stamp,
+        createdAt: existingIdx >= 0 ? parent.relatives[existingIdx].createdAt : stamp.updatedAt,
       };
       if (existingIdx >= 0) {
         parent.relatives[existingIdx] = { ...parent.relatives[existingIdx], ...relPayload };
@@ -1161,8 +1376,17 @@ export const embeddedDb = {
         parent.relatives.push(relPayload);
         added++;
       }
-      parent.updatedAt = todayFa;
+      parent.updatedAt = stamp.updatedAt;
+      parent.updatedByUserId = stamp.updatedByUserId;
+      parent.updatedByUsername = stamp.updatedByUsername;
+      parent.updatedByName = stamp.updatedByName;
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'relatives',
+      action: 'import_excel',
+      summary: `ورود اکسل بستگان پرسنل (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return {
       success: true,
@@ -1185,6 +1409,12 @@ export const embeddedDb = {
         p.relatives = [];
       }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'relatives',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول بستگان (${deletedCount} رکورد)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `تمامی اطلاعات بستگان پرسنل (${deletedCount} رکورد) پاکسازی شد.` };
   },
@@ -1260,6 +1490,7 @@ export const embeddedDb = {
         department: curr.department, position: curr.position, currentKaraneh: currFinal, previousKaraneh: prevFinal,
         diffAmount, diffPercent, trend, notes: curr.notes || '',
         status: curr.status || 'draft', submittedAt: curr.submittedAt, submittedByName: curr.submittedByName,
+        updatedAt: curr.updatedAt, updatedByName: curr.updatedByName, updatedByUsername: curr.updatedByUsername,
       };
     });
     const totalCurrent = comparisonRows.reduce((s, r) => s + r.currentKaraneh, 0);
@@ -1299,6 +1530,7 @@ export const embeddedDb = {
     const deductions = Number(record.deductions || 0);
     const finalKaraneh = record.finalKaraneh !== undefined ? Number(record.finalKaraneh) : (baseKaraneh + overtimeBonus - deductions);
     const nextStatus: 'draft' | 'submitted' = record.status === 'submitted' ? 'submitted' : (existing?.status === 'submitted' ? 'submitted' : 'draft');
+    const stamp = buildEditorStamp(auth);
     const rec: any = {
       id: existing ? existing.id : `k-${Date.now()}`,
       personnelId: record.personnelId || existing?.personnelId || '',
@@ -1316,9 +1548,18 @@ export const embeddedDb = {
       submittedAt: nextStatus === 'submitted' ? (record.submittedAt || existing?.submittedAt) : undefined,
       submittedBy: nextStatus === 'submitted' ? (record.submittedBy || existing?.submittedBy) : undefined,
       submittedByName: nextStatus === 'submitted' ? (record.submittedByName || existing?.submittedByName) : undefined,
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      ...stamp,
     };
+    const changes = existing ? computeRecordChanges(existing, rec, EMB_AUDIT_LABELS) : undefined;
     if (idx >= 0) db.karaneh[idx] = rec; else db.karaneh.push(rec);
+    recordAuditLogEmb(db, auth, {
+      module: rec.status === 'submitted' ? 'finalKaraneh' : 'karaneh',
+      action: existing ? 'update' : 'create',
+      targetId: rec.id,
+      targetLabel: `${rec.fullName} (${rec.personnelCode}) · دوره ${rec.period}`,
+      summary: `${existing ? 'ویرایش' : 'ثبت'} کارانه «${rec.fullName}» برای دوره ${rec.period}`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: rec, message: 'کارانه پرسنل با موفقیت ثبت شد.' };
   },
@@ -1341,7 +1582,7 @@ export const embeddedDb = {
         if (c && !kIdxMap.has(c)) kIdxMap.set(c, i);
       }
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
@@ -1380,11 +1621,18 @@ export const embeddedDb = {
         submittedAt: existing?.submittedAt,
         submittedBy: existing?.submittedBy,
         submittedByName: existing?.submittedByName,
-        updatedAt: todayFa,
+        ...stamp,
       };
       if (idx >= 0) { db.karaneh[idx] = rec; updated++; }
       else { const newIdx = db.karaneh.length; db.karaneh.push(rec); kIdxMap.set(code, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'karaneh',
+      action: 'import_excel',
+      targetLabel: `دوره ${period}`,
+      summary: `ورود گروهی اکسل کارانه دوره ${period} (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     const count = added + updated;
     return { success: true, added, updated, data: { inserted: added, updated }, message: `کارانه دوره با موفقیت بارگذاری شد (${count} رکورد ثبت گردید).` };
@@ -1400,7 +1648,7 @@ export const embeddedDb = {
     if (department && !fullScope && !isKaranehUnitAllowedEmb(auth, department)) {
       return { success: false, message: 'شما مجوز ارسال کارانه برای این واحد را ندارید.' };
     }
-    const nowFa = new Date().toLocaleString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     const targetNorm = department ? normalizeUnitTextEmb(department) : '';
     let submittedCount = 0;
     db.karaneh = db.karaneh.map((k) => {
@@ -1411,14 +1659,22 @@ export const embeddedDb = {
       return {
         ...k,
         status: 'submitted',
-        submittedAt: nowFa,
+        submittedAt: stamp.updatedAt,
         submittedBy: auth.id,
         submittedByName: auth.fullName,
+        ...stamp,
       };
     });
     if (submittedCount === 0) {
       return { success: false, message: 'رکورد کارانه‌ای در این دوره برای ارسال یافت نشد.' };
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'finalKaraneh',
+      action: 'submit',
+      targetLabel: department ? `${department} · دوره ${period}` : `دوره ${period}`,
+      summary: `تأیید و ارسال نهایی ${submittedCount} ردیف کارانه دوره ${period}${department ? ` (${department})` : ''}`,
+      recordCount: submittedCount,
+    });
     await saveEmbeddedDb(db);
     return {
       success: true,
@@ -1434,6 +1690,7 @@ export const embeddedDb = {
       return { success: false, message: 'عدم دسترسی بازگرداندن کارانه به پیش‌نویس.' };
     }
     if (!period) return { success: false, message: 'دوره مشخص نشده است.' };
+    const stamp = buildEditorStamp(auth);
     const targetNorm = department ? normalizeUnitTextEmb(department) : '';
     let reopenedCount = 0;
     db.karaneh = db.karaneh.map((k) => {
@@ -1441,7 +1698,14 @@ export const embeddedDb = {
       if (targetNorm && normalizeUnitTextEmb(k.department) !== targetNorm) return k;
       reopenedCount++;
       const { submittedAt: _sa, submittedBy: _sb, submittedByName: _sbn, ...rest } = k as any;
-      return { ...rest, status: 'draft' };
+      return { ...rest, status: 'draft', ...stamp };
+    });
+    recordAuditLogEmb(db, auth, {
+      module: 'finalKaraneh',
+      action: 'reopen',
+      targetLabel: department ? `${department} · دوره ${period}` : `دوره ${period}`,
+      summary: `بازگرداندن ${reopenedCount} ردیف کارانه دوره ${period} به پیش‌نویس واحد`,
+      recordCount: reopenedCount,
     });
     await saveEmbeddedDb(db);
     return {
@@ -1461,6 +1725,15 @@ export const embeddedDb = {
       return { success: false, message: 'امکان حذف کارانه سایر واحدها وجود ندارد.' };
     }
     db.karaneh = db.karaneh.filter((k) => k.id !== id);
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: target.status === 'submitted' ? 'finalKaraneh' : 'karaneh',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.fullName} (${target.personnelCode})`,
+        summary: `حذف ردیف کارانه «${target.fullName}» دوره ${target.period}`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'رکورد کارانه حذف گردید.' };
   },
@@ -1479,6 +1752,12 @@ export const embeddedDb = {
       return false;
     });
     const deletedCount = before - db.karaneh.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'karaneh',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف کارانه`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} رکورد کارانه حذف شد.` };
   },
@@ -1501,6 +1780,13 @@ export const embeddedDb = {
       return true;
     });
     const deletedCount = before - db.karaneh.length;
+    recordAuditLogEmb(db, auth, {
+      module: isSubmittedOnly ? 'finalKaraneh' : 'karaneh',
+      action: 'delete_all',
+      targetLabel: period ? `دوره ${period}` : 'تمام دوره‌ها',
+      summary: `پاکسازی جدول کارانه (${deletedCount} ردیف حذف شد)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return {
       success: true,
@@ -1523,13 +1809,22 @@ export const embeddedDb = {
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'jobGroups', 'create')) return { success: false, message: 'عدم دسترسی.' };
     if (!group.code || !group.title) return { success: false, message: 'کد گروه و عنوان شغلی الزامی است.' };
+    const stamp = buildEditorStamp(auth);
     const g: any = {
       id: `jg-${Date.now()}`, ...group,
       grade: Number(group.grade || 1), minBaseSalary: Number(group.minBaseSalary || 0),
       maxBaseSalary: Number(group.maxBaseSalary || 0), maxKaranehCeiling: Number(group.maxKaranehCeiling || 0),
       requiredExperienceYears: Number(group.requiredExperienceYears || 0),
+      ...stamp,
     };
     db.jobGroups.push(g);
+    recordAuditLogEmb(db, auth, {
+      module: 'jobGroups',
+      action: 'create',
+      targetId: g.id,
+      targetLabel: `${g.code} - ${g.title}`,
+      summary: `ایجاد گروه شغلی «${g.code} - ${g.title}»`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: g, message: 'گروه شغلی جدید ایجاد شد.' };
   },
@@ -1540,7 +1835,19 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'jobGroups', 'edit')) return { success: false, message: 'عدم دسترسی.' };
     const idx = db.jobGroups.findIndex((g) => g.id === id);
     if (idx < 0) return { success: false, message: 'گروه شغلی یافت نشد.' };
-    db.jobGroups[idx] = { ...db.jobGroups[idx], ...group };
+    const prev = db.jobGroups[idx];
+    const stamp = buildEditorStamp(auth);
+    const nextGroup = { ...prev, ...group, ...stamp };
+    const changes = computeRecordChanges(prev, nextGroup, EMB_AUDIT_LABELS);
+    db.jobGroups[idx] = nextGroup;
+    recordAuditLogEmb(db, auth, {
+      module: 'jobGroups',
+      action: 'update',
+      targetId: nextGroup.id,
+      targetLabel: `${nextGroup.code} - ${nextGroup.title}`,
+      summary: `ویرایش گروه شغلی «${nextGroup.code} - ${nextGroup.title}»`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: db.jobGroups[idx], message: 'گروه شغلی ویرایش شد.' };
   },
@@ -1549,7 +1856,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'jobGroups', 'delete')) return { success: false, message: 'عدم دسترسی.' };
+    const target = db.jobGroups.find((g) => g.id === id);
     db.jobGroups = db.jobGroups.filter((g) => g.id !== id);
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'jobGroups',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.code} - ${target.title}`,
+        summary: `حذف گروه شغلی «${target.code} - ${target.title}»`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'گروه شغلی حذف شد.' };
   },
@@ -1562,6 +1879,12 @@ export const embeddedDb = {
     const before = db.jobGroups.length;
     db.jobGroups = db.jobGroups.filter((g) => !idSet.has(g.id));
     const deletedCount = before - db.jobGroups.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'jobGroups',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} گروه شغلی`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} گروه شغلی حذف شد.` };
   },
@@ -1572,6 +1895,12 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'jobGroups', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی.' };
     const deletedCount = db.jobGroups.length;
     db.jobGroups = [];
+    recordAuditLogEmb(db, auth, {
+      module: 'jobGroups',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول گروه‌های شغلی (${deletedCount} ردیف)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `کل جدول گروه‌های شغلی (${deletedCount} رکورد) پاکسازی شد.` };
   },
@@ -1588,6 +1917,7 @@ export const embeddedDb = {
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'jobGroups', 'create')) return { success: false, message: 'عدم دسترسی.' };
     if (!record.personnelCode) return { success: false, message: 'کد پرسنلی الزامی است.' };
+    const stamp = buildEditorStamp(auth);
     const newRec: JobClassificationRecord = {
       id: `jc-${Date.now()}`,
       personnelCode: String(record.personnelCode || '').trim(),
@@ -1601,9 +1931,17 @@ export const embeddedDb = {
       nonMiningExperience: String(record.nonMiningExperience || ''),
       jobGroup: String(record.jobGroup || ''), groupGapFrom1405: String(record.groupGapFrom1405 || ''),
       nextGroupGap: String(record.nextGroupGap || ''), jobTitle: String(record.jobTitle || ''),
-      position: String(record.position || ''), updatedAt: new Date().toLocaleDateString('fa-IR'),
+      position: String(record.position || ''),
+      ...stamp,
     };
     db.jobClassifications.push(newRec);
+    recordAuditLogEmb(db, auth, {
+      module: 'jobClassifications',
+      action: 'create',
+      targetId: newRec.id,
+      targetLabel: `${newRec.firstName} ${newRec.lastName} (${newRec.personnelCode})`,
+      summary: `ثبت ردیف طبقه‌بندی مشاغل برای «${newRec.firstName} ${newRec.lastName}» (${newRec.personnelCode})`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: newRec, message: 'رکورد طبقه‌بندی شغلی ثبت شد.' };
   },
@@ -1614,7 +1952,19 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'jobGroups', 'edit')) return { success: false, message: 'عدم دسترسی.' };
     const idx = db.jobClassifications.findIndex((r) => r.id === id);
     if (idx < 0) return { success: false, message: 'رکورد یافت نشد.' };
-    db.jobClassifications[idx] = { ...db.jobClassifications[idx], ...record, updatedAt: new Date().toLocaleDateString('fa-IR') };
+    const prev = db.jobClassifications[idx];
+    const stamp = buildEditorStamp(auth);
+    const updatedRec = { ...prev, ...record, ...stamp };
+    const changes = computeRecordChanges(prev, updatedRec, EMB_AUDIT_LABELS);
+    db.jobClassifications[idx] = updatedRec;
+    recordAuditLogEmb(db, auth, {
+      module: 'jobClassifications',
+      action: 'update',
+      targetId: updatedRec.id,
+      targetLabel: `${updatedRec.firstName} ${updatedRec.lastName} (${updatedRec.personnelCode})`,
+      summary: `ویرایش طبقه‌بندی شغلی «${updatedRec.firstName} ${updatedRec.lastName}» (${updatedRec.personnelCode})`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: db.jobClassifications[idx], message: 'رکورد طبقه‌بندی شغلی ویرایش شد.' };
   },
@@ -1623,7 +1973,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'jobGroups', 'delete')) return { success: false, message: 'عدم دسترسی.' };
+    const target = db.jobClassifications.find((r) => r.id === id);
     db.jobClassifications = db.jobClassifications.filter((r) => r.id !== id);
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'jobClassifications',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.firstName} ${target.lastName} (${target.personnelCode})`,
+        summary: `حذف ردیف طبقه‌بندی شغلی «${target.firstName} ${target.lastName}» (${target.personnelCode})`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'رکورد طبقه‌بندی شغلی حذف شد.' };
   },
@@ -1637,7 +1997,7 @@ export const embeddedDb = {
       const k = String(item.personnelCode || '').trim();
       if (k && !jcIdxMap.has(k)) jcIdxMap.set(k, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode ?? row['کد پرسنلی'] ?? '').trim();
@@ -1658,12 +2018,18 @@ export const embeddedDb = {
         groupGapFrom1405: String(row.groupGapFrom1405 ?? row['فاصله گروه از 1405 به بعد'] ?? row['فاصله گروه از ۱۴۰۵ به بعد'] ?? ''),
         nextGroupGap: String(row.nextGroupGap ?? row['فاصله گروه بعدی'] ?? ''),
         jobTitle: String(row.jobTitle ?? row['شغل'] ?? ''), position: String(row.position ?? row['پست'] ?? row['پست سازمانی'] ?? ''),
-        updatedAt: todayFa,
+        ...stamp,
       };
       const idx = jcIdxMap.get(code) ?? -1;
       if (idx >= 0) { db.jobClassifications[idx] = { ...db.jobClassifications[idx], ...mapped }; updated++; }
       else { const newIdx = db.jobClassifications.length; db.jobClassifications.push({ id: `jc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...mapped }); jcIdxMap.set(code, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'jobClassifications',
+      action: 'import_excel',
+      summary: `ورود اکسل جدول ۱۸ ستونی طبقه‌بندی مشاغل (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `جدول طبقه‌بندی بارگذاری شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
@@ -1676,6 +2042,12 @@ export const embeddedDb = {
     const before = db.jobClassifications.length;
     db.jobClassifications = db.jobClassifications.filter((c) => !idSet.has(c.id));
     const deletedCount = before - db.jobClassifications.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'jobClassifications',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف طبقه‌بندی مشاغل`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} ردیف طبقه‌بندی شغلی حذف شد.` };
   },
@@ -1686,6 +2058,12 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'jobGroups', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی.' };
     const deletedCount = db.jobClassifications.length;
     db.jobClassifications = [];
+    recordAuditLogEmb(db, auth, {
+      module: 'jobClassifications',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول طبقه‌بندی مشاغل (${deletedCount} ردیف)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `کل جدول طبقه‌بندی مشاغل ۱۸ ستونی (${deletedCount} رکورد) پاکسازی شد.` };
   },
@@ -1703,6 +2081,7 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'commitments', 'create')) return { success: false, message: 'عدم دسترسی.' };
     if (!commitment.personnelCode || !commitment.commitmentType) return { success: false, message: 'کد پرسنلی و نوع تعهد الزامی است.' };
     const mp = db.personnel.find((p) => String(p.personnelCode).trim() === String(commitment.personnelCode).trim());
+    const stamp = buildEditorStamp(auth);
     const c: any = {
       id: `cmt-${Date.now()}`, ...commitment,
       personnelId: mp ? mp.id : (commitment.personnelId || ''),
@@ -1710,11 +2089,19 @@ export const embeddedDb = {
       amount: Number(commitment.amount || 0), previouslyTakenAmount: Number(commitment.previouslyTakenAmount || 0),
       maxAllowedAmount: Number(commitment.maxAllowedAmount || 0),
       isArchived: Boolean(commitment.isArchived),
-      archivedAt: commitment.isArchived ? (commitment.archivedAt || new Date().toLocaleDateString('fa-IR')) : undefined,
+      archivedAt: commitment.isArchived ? (commitment.archivedAt || stamp.updatedAt) : undefined,
       archiveCode: commitment.isArchived ? (commitment.archiveCode || `ARC-${Date.now().toString().slice(-5)}`) : undefined,
       status: commitment.status || 'جاری و معتبر',
+      ...stamp,
     };
     db.commitments.push(c);
+    recordAuditLogEmb(db, auth, {
+      module: 'commitments',
+      action: 'create',
+      targetId: c.id,
+      targetLabel: `${c.personnelName} (${c.commitmentType})`,
+      summary: `ثبت تعهد جدید «${c.commitmentType}» برای «${c.personnelName}»`,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: c, message: 'تعهد پرسنلی جدید با موفقیت ثبت شد.' };
   },
@@ -1729,16 +2116,28 @@ export const embeddedDb = {
       return { success: false, message: 'عدم دسترسی ویرایش تعهد.' };
     }
     const prev = db.commitments[idx];
+    const stamp = buildEditorStamp(auth);
     const nextArchived = commitment.isArchived !== undefined ? Boolean(commitment.isArchived) : prev.isArchived;
-    db.commitments[idx] = {
+    const nextCmt = {
       ...prev, ...commitment,
       amount: commitment.amount !== undefined ? Number(commitment.amount) : prev.amount,
       previouslyTakenAmount: commitment.previouslyTakenAmount !== undefined ? Number(commitment.previouslyTakenAmount) : prev.previouslyTakenAmount,
       maxAllowedAmount: commitment.maxAllowedAmount !== undefined ? Number(commitment.maxAllowedAmount) : prev.maxAllowedAmount,
       isArchived: nextArchived,
-      archivedAt: nextArchived ? (commitment.archivedAt || prev.archivedAt || new Date().toLocaleDateString('fa-IR')) : undefined,
+      archivedAt: nextArchived ? (commitment.archivedAt || prev.archivedAt || stamp.updatedAt) : undefined,
       archiveCode: nextArchived ? (commitment.archiveCode || prev.archiveCode || `ARC-${Date.now().toString().slice(-5)}`) : undefined,
+      ...stamp,
     };
+    const changes = computeRecordChanges(prev, nextCmt, EMB_AUDIT_LABELS);
+    db.commitments[idx] = nextCmt;
+    recordAuditLogEmb(db, auth, {
+      module: 'commitments',
+      action: 'update',
+      targetId: nextCmt.id,
+      targetLabel: `${nextCmt.personnelName} (${nextCmt.commitmentType})`,
+      summary: `ویرایش سند تعهد «${nextCmt.personnelName}»`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: db.commitments[idx], message: 'تعهد پرسنلی با موفقیت به‌روزرسانی شد.' };
   },
@@ -1747,7 +2146,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'commitments', 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const target = db.commitments.find((c) => c.id === id);
     db.commitments = db.commitments.filter((c) => c.id !== id);
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'commitments',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.personnelName} (${target.commitmentType})`,
+        summary: `حذف سند تعهد «${target.personnelName}»`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'سند تعهد پرسنلی حذف شد.' };
   },
@@ -1761,7 +2170,7 @@ export const embeddedDb = {
       const k = String(p.personnelCode || '').trim();
       if (k && !pMap.has(k)) pMap.set(k, p);
     }
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0;
     for (const row of items || []) {
       const code = String(row.personnelCode || row['کد پرسنلی'] || '').trim();
@@ -1780,13 +2189,20 @@ export const embeddedDb = {
         startDate: String(row.startDate || row['تاریخ شروع'] || '1403/01/01'),
         endDate: String(row.endDate || row['تاریخ سررسید'] || '1405/01/01'),
         status: row.status || row['وضعیت'] || 'جاری و معتبر',
-        isArchived, archivedAt: isArchived ? todayFa : undefined,
+        isArchived, archivedAt: isArchived ? stamp.updatedAt : undefined,
         archiveCode: isArchived ? `ARC-${Date.now().toString().slice(-5)}` : undefined,
         guarantorName: row.guarantorName || row['نام ضامن'] || '',
         notes: row.notes || row['توضیحات'] || '',
+        ...stamp,
       });
       added++;
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'commitments',
+      action: 'import_excel',
+      summary: `ورود گروهی اکسل تعهدات (${added} فقره)`,
+      recordCount: added,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, data: { inserted: added, updated: 0 }, message: `${added} فقره تعهد پرسنلی با موفقیت از اکسل ثبت گردید.` };
   },
@@ -1799,6 +2215,12 @@ export const embeddedDb = {
     const before = db.commitments.length;
     db.commitments = db.commitments.filter((c) => !idSet.has(c.id));
     const deletedCount = before - db.commitments.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'commitments',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} سند تعهد پرسنلی`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} سند تعهد پرسنلی حذف شد.` };
   },
@@ -1809,6 +2231,12 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'commitments', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی.' };
     const deletedCount = db.commitments.length;
     db.commitments = [];
+    recordAuditLogEmb(db, auth, {
+      module: 'commitments',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول تعهدات (${deletedCount} سند)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `کل جدول تعهدات پرسنلی (${deletedCount} سند) پاکسازی شد.` };
   },
@@ -1834,7 +2262,7 @@ export const embeddedDb = {
       const key = `${String(r.personnelCode || '').trim()}::${r.period}`;
       if (!payIdxMap.has(key)) payIdxMap.set(key, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const code = String(getPayrollVal(row, 'كد پرسنلي', 'کد پرسنلی', 'personnelCode') || '').trim();
@@ -1883,13 +2311,20 @@ export const embeddedDb = {
         projectTitle: String(getPayrollVal(row, 'پروژه(عنوان تفصيل)', 'پروژه(عنوان تفصیل)') || ''),
         bankName: String(getPayrollVal(row, 'نام بانک') || ''),
         bankAccount: String(getPayrollVal(row, 'شماره حساب') || ''),
-        rawFields: row, updatedAt: todayFa,
+        rawFields: row, ...stamp,
       };
       const payKey = `${code}::${targetPeriod}`;
       const idx = payIdxMap.get(payKey) ?? -1;
       if (idx >= 0) { db.payroll[idx] = { ...db.payroll[idx], ...rec }; updated++; }
       else { const newIdx = db.payroll.length; db.payroll.push({ id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...rec }); payIdxMap.set(payKey, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'payroll',
+      action: 'import_excel',
+      targetLabel: `دوره ${period}`,
+      summary: `ورود اکسل حقوق و دستمزد (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `فایل حقوق در پایگاه داده داخلی ذخیره شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
@@ -1898,7 +2333,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'payroll', 'delete')) return { success: false, message: 'عدم دسترسی.' };
+    const target = db.payroll.find((r) => r.id === id);
     db.payroll = db.payroll.filter((r) => r.id !== id);
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'payroll',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.fullName} (${target.personnelCode}) · ${target.period}`,
+        summary: `حذف فیش حقوق «${target.fullName}» دوره ${target.period}`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'رکورد حقوق حذف گردید.' };
   },
@@ -1907,7 +2352,16 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'payroll', 'delete')) return { success: false, message: 'عدم دسترسی.' };
+    const before = db.payroll.length;
     db.payroll = db.payroll.filter((r) => r.period !== period);
+    const deletedCount = before - db.payroll.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'payroll',
+      action: 'batch_delete',
+      targetLabel: `دوره ${period}`,
+      summary: `حذف فیش‌های حقوق دوره ${period} (${deletedCount} رکورد)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, message: `تمام رکوردهای حقوق دوره ${period} حذف شدند.` };
   },
@@ -1920,6 +2374,12 @@ export const embeddedDb = {
     const before = db.payroll.length;
     db.payroll = db.payroll.filter((r) => !idSet.has(r.id));
     const deletedCount = before - db.payroll.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'payroll',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} فیش حقوق`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} رکورد حقوقی حذف شد.` };
   },
@@ -1930,6 +2390,12 @@ export const embeddedDb = {
     if (!hasPerm(auth, 'payroll', 'deleteAll')) return { success: false, message: 'عدم دسترسی پاکسازی.' };
     const deletedCount = db.payroll.length;
     db.payroll = [];
+    recordAuditLogEmb(db, auth, {
+      module: 'payroll',
+      action: 'delete_all',
+      summary: `پاکسازی کامل جدول حقوق و دستمزد (${deletedCount} فیش)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `کل جدول حقوق و دستمزد (${deletedCount} فیش) پاکسازی شد.` };
   },
@@ -1962,8 +2428,10 @@ export const embeddedDb = {
     const volumeValue = Number(record.volumeValue || 0);
     const targetVolume = Number(record.targetVolume || 0);
     const idx = record.id ? db.miningVolumes.findIndex((v) => v.id === record.id) : -1;
+    const stamp = buildEditorStamp(auth);
+    const prev = idx >= 0 ? db.miningVolumes[idx] : null;
     const rec: MiningVolumeRecord = {
-      id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      id: prev ? prev.id : `mv-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       period: String(record.period).trim(),
       unitName: String(record.unitName).trim(),
       activityType: String(record.activityType || 'عملیات معدنی').trim(),
@@ -1973,9 +2441,18 @@ export const embeddedDb = {
       unitLabel: String(record.unitLabel || 'تن').trim(),
       status: String(record.status || (targetVolume > 0 && volumeValue >= targetVolume ? 'تحقق کامل' : 'در حال اجرا')).trim(),
       notes: String(record.notes || '').trim(),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      ...stamp,
     };
+    const changes = prev ? computeRecordChanges(prev, rec, EMB_AUDIT_LABELS) : undefined;
     if (idx >= 0) db.miningVolumes[idx] = rec; else db.miningVolumes.push(rec);
+    recordAuditLogEmb(db, auth, {
+      module: 'miningVolumes',
+      action: prev ? 'update' : 'create',
+      targetId: rec.id,
+      targetLabel: `${rec.unitName} · ${rec.metricTitle} (${rec.period})`,
+      summary: `${prev ? 'ویرایش' : 'ثبت'} آمار حجم «${rec.metricTitle}» واحد ${rec.unitName}`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: rec, message: 'آمار حجم عملیات ماهانه با موفقیت ذخیره شد.' };
   },
@@ -1994,7 +2471,7 @@ export const embeddedDb = {
       const key = `${v.period}::${normPayrollKey(v.unitName)}::${normPayrollKey(v.metricTitle)}`;
       if (!mvIdxMap.has(key)) mvIdxMap.set(key, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'واحد معدن', 'واحد') || '').trim();
@@ -2014,11 +2491,17 @@ export const embeddedDb = {
       const rec: MiningVolumeRecord = {
         id: idx >= 0 ? db.miningVolumes[idx].id : `mv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         period, unitName, activityType, metricTitle, volumeValue, targetVolume, unitLabel, status, notes,
-        updatedAt: todayFa,
+        ...stamp,
       };
       if (idx >= 0) { db.miningVolumes[idx] = rec; updated++; }
       else { const newIdx = db.miningVolumes.length; db.miningVolumes.push(rec); mvIdxMap.set(mvKey, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'miningVolumes',
+      action: 'import_excel',
+      summary: `ورود اکسل آمار حجم عملیات معدن (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `آمار حجم عملیات وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
@@ -2027,7 +2510,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasMiningOrUnitPermEmb(auth, 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const target = (db.miningVolumes || []).find((v) => v.id === id);
     db.miningVolumes = (db.miningVolumes || []).filter((v) => v.id !== id || (!hasPerm(auth, 'ceoDashboard', 'delete') && !isDispatchingOrUnitAllowedEmb(auth, v.unitName)));
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'miningVolumes',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.unitName} · ${target.metricTitle}`,
+        summary: `حذف ردیف آمار حجم «${target.metricTitle}»`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'ردیف آمار حجم حذف شد.' };
   },
@@ -2041,6 +2534,12 @@ export const embeddedDb = {
     const before = (db.miningVolumes || []).length;
     db.miningVolumes = (db.miningVolumes || []).filter((v) => !idSet.has(v.id) || (!canAll && !isDispatchingOrUnitAllowedEmb(auth, v.unitName)));
     const deletedCount = before - db.miningVolumes.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'miningVolumes',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف آمار حجم عملیات`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} ردیف آمار حجم حذف شد.` };
   },
@@ -2053,6 +2552,12 @@ export const embeddedDb = {
     const before = (db.miningVolumes || []).length;
     db.miningVolumes = canAll ? [] : (db.miningVolumes || []).filter((v) => !isDispatchingOrUnitAllowedEmb(auth, v.unitName));
     const deletedCount = before - db.miningVolumes.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'miningVolumes',
+      action: 'delete_all',
+      summary: `پاکسازی جدول آمار حجم عملیات (${deletedCount} ردیف)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `جدول آمار حجم عملیات (${deletedCount} ردیف) پاکسازی شد.` };
   },
@@ -2095,8 +2600,10 @@ export const embeddedDb = {
       : rawStatus.includes('سرویس')
       ? 'سرویس دوره‌ای'
       : 'آماده به کار';
+    const stamp = buildEditorStamp(auth);
+    const prev = idx >= 0 ? db.miningMachinery[idx] : null;
     const rec: MiningMachineryRecord = {
-      id: idx >= 0 ? db.miningMachinery[idx].id : `mm-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      id: prev ? prev.id : `mm-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       machineCode: String(record.machineCode).trim(),
       machineName: String(record.machineName).trim(),
       machineType: String(record.machineType || 'تجهیزات معدنی').trim(),
@@ -2107,9 +2614,18 @@ export const embeddedDb = {
       estimatedReadyDate: String(record.estimatedReadyDate || '').trim(),
       operatorName: String(record.operatorName || '').trim(),
       notes: String(record.notes || '').trim(),
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      ...stamp,
     };
+    const changes = prev ? computeRecordChanges(prev, rec, EMB_AUDIT_LABELS) : undefined;
     if (idx >= 0) db.miningMachinery[idx] = rec; else db.miningMachinery.push(rec);
+    recordAuditLogEmb(db, auth, {
+      module: 'miningMachinery',
+      action: prev ? 'update' : 'create',
+      targetId: rec.id,
+      targetLabel: `${rec.machineName} (${rec.machineCode})`,
+      summary: `${prev ? 'ویرایش' : 'ثبت'} وضعیت تجهیز «${rec.machineName}» (${rec.machineCode})`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: rec, message: 'وضعیت دستگاه و تعمیرگاه ذخیره شد.' };
   },
@@ -2128,7 +2644,7 @@ export const embeddedDb = {
       const k = String(m.machineCode || '').trim();
       if (k && !mmIdxMap.has(k)) mmIdxMap.set(k, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of items || []) {
       const machineCode = String(getPayrollVal(row, 'machineCode', 'کد دستگاه / پلاک', 'کد دستگاه', 'کد تجهیز', 'پلاک تجهیز') || '').trim();
@@ -2158,11 +2674,17 @@ export const embeddedDb = {
         estimatedReadyDate: String(getPayrollVal(row, 'estimatedReadyDate', 'تاریخ تخمینی آماده‌به‌کار', 'تاریخ آماده به کار') || '').trim(),
         operatorName: String(getPayrollVal(row, 'operatorName', 'اپراتور / مسئول تعمیر', 'اپراتور') || '').trim(),
         notes: String(getPayrollVal(row, 'notes', 'یادداشت', 'توضیحات') || '').trim(),
-        updatedAt: todayFa,
+        ...stamp,
       };
       if (idx >= 0) { db.miningMachinery[idx] = rec; updated++; }
       else { const newIdx = db.miningMachinery.length; db.miningMachinery.push(rec); mmIdxMap.set(machineCode, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'miningMachinery',
+      action: 'import_excel',
+      summary: `ورود اکسل ماشین‌آلات و تعمیرگاه (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `لیست ماشین‌آلات و تعمیرگاه وارد شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
@@ -2171,7 +2693,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasMiningOrUnitPermEmb(auth, 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const target = (db.miningMachinery || []).find((m) => m.id === id);
     db.miningMachinery = (db.miningMachinery || []).filter((m) => m.id !== id || (!hasPerm(auth, 'ceoDashboard', 'delete') && !isWorkshopOrUnitAllowedEmb(auth, m.unitName)));
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'miningMachinery',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.machineName} (${target.machineCode})`,
+        summary: `حذف تجهیز «${target.machineName}» (${target.machineCode})`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'دستگاه از فهرست حذف شد.' };
   },
@@ -2185,6 +2717,12 @@ export const embeddedDb = {
     const before = (db.miningMachinery || []).length;
     db.miningMachinery = (db.miningMachinery || []).filter((m) => !idSet.has(m.id) || (!canAll && !isWorkshopOrUnitAllowedEmb(auth, m.unitName)));
     const deletedCount = before - db.miningMachinery.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'miningMachinery',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} دستگاه ماشین‌آلات`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} دستگاه حذف شد.` };
   },
@@ -2197,6 +2735,12 @@ export const embeddedDb = {
     const before = (db.miningMachinery || []).length;
     db.miningMachinery = canAll ? [] : (db.miningMachinery || []).filter((m) => !isWorkshopOrUnitAllowedEmb(auth, m.unitName));
     const deletedCount = before - db.miningMachinery.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'miningMachinery',
+      action: 'delete_all',
+      summary: `پاکسازی لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `لیست ماشین‌آلات و تعمیرگاه (${deletedCount} دستگاه) پاکسازی شد.` };
   },
@@ -2226,8 +2770,10 @@ export const embeddedDb = {
     }
     if (!Array.isArray(db.unitReports)) db.unitReports = [];
     const idx = record.id ? db.unitReports.findIndex((r) => r.id === record.id) : -1;
+    const prev = idx >= 0 ? db.unitReports[idx] : null;
+    const stamp = buildEditorStamp(auth);
     const rec: UnitOperationalReport = {
-      id: idx >= 0 ? db.unitReports[idx].id : `ur-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      id: prev ? prev.id : `ur-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       period: String(record.period).trim(),
       unitName: String(record.unitName).trim(),
       reportCategory: String(record.reportCategory || 'گزارش عملیاتی واحد').trim(),
@@ -2240,9 +2786,18 @@ export const embeddedDb = {
       submittedBy: String(record.submittedBy || auth?.fullName || '').trim(),
       notes: String(record.notes || '').trim(),
       rawFields: record.rawFields && typeof record.rawFields === 'object' ? record.rawFields : {},
-      updatedAt: new Date().toLocaleDateString('fa-IR'),
+      ...stamp,
     };
+    const changes = prev ? computeRecordChanges(prev, rec, EMB_AUDIT_LABELS) : undefined;
     if (idx >= 0) db.unitReports[idx] = rec; else db.unitReports.push(rec);
+    recordAuditLogEmb(db, auth, {
+      module: 'unitReports',
+      action: prev ? 'update' : 'create',
+      targetId: rec.id,
+      targetLabel: `${rec.unitName} · ${rec.metricName} (${rec.period})`,
+      summary: `${prev ? 'ویرایش' : 'ثبت'} گزارش عملیاتی «${rec.metricName}» واحد ${rec.unitName}`,
+      changes,
+    });
     await saveEmbeddedDb(db);
     return { success: true, data: rec, message: 'گزارش عملیاتی واحد با موفقیت ذخیره شد.' };
   },
@@ -2259,7 +2814,7 @@ export const embeddedDb = {
       const key = `${r.period}::${normPayrollKey(r.unitName)}::${normPayrollKey(r.metricName)}`;
       if (!urIdxMap.has(key)) urIdxMap.set(key, i);
     });
-    const todayFa = new Date().toLocaleDateString('fa-IR');
+    const stamp = buildEditorStamp(auth);
     let added = 0; let updated = 0;
     for (const row of payload.items || []) {
       const unitName = String(getPayrollVal(row, 'unitName', 'واحد عملیاتی معدن', 'نام واحد', 'واحد', 'بخش') || payload.unitName || '').trim();
@@ -2295,11 +2850,17 @@ export const embeddedDb = {
         submittedBy: String(getPayrollVal(row, 'submittedBy', 'ثبت‌کننده / مسئول واحد', 'مسئول واحد', 'ثبت‌کننده') || auth?.fullName || '').trim(),
         notes: String(getPayrollVal(row, 'notes', 'توضیحات / تحلیل واحد', 'توضیحات', 'یادداشت') || '').trim(),
         rawFields,
-        updatedAt: todayFa,
+        ...stamp,
       };
       if (idx >= 0) { db.unitReports[idx] = rec; updated++; }
       else { const newIdx = db.unitReports.length; db.unitReports.push(rec); urIdxMap.set(urKey, newIdx); added++; }
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'unitReports',
+      action: 'import_excel',
+      summary: `ورود اکسل گزارش واحدهای عملیاتی (${added} جدید، ${updated} به‌روزرسانی)`,
+      recordCount: added + updated,
+    });
     await saveEmbeddedDb(db);
     return { success: true, added, updated, data: { inserted: added, updated }, message: `گزارش اکسل واحدها با موفقیت ثبت شد (${added} جدید، ${updated} به‌روزرسانی).` };
   },
@@ -2308,7 +2869,17 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasMiningOrUnitPermEmb(auth, 'delete')) return { success: false, message: 'عدم دسترسی حذف.' };
+    const target = (db.unitReports || []).find((r) => r.id === id);
     db.unitReports = (db.unitReports || []).filter((r) => r.id !== id || (!hasPerm(auth, 'ceoDashboard', 'delete') && !isUnitAllowedEmb(auth, r.unitName)));
+    if (target) {
+      recordAuditLogEmb(db, auth, {
+        module: 'unitReports',
+        action: 'delete',
+        targetId: target.id,
+        targetLabel: `${target.unitName} · ${target.metricName}`,
+        summary: `حذف گزارش عملیاتی «${target.metricName}»`,
+      });
+    }
     await saveEmbeddedDb(db);
     return { success: true, message: 'ردیف گزارش واحد حذف شد.' };
   },
@@ -2322,6 +2893,12 @@ export const embeddedDb = {
     const before = (db.unitReports || []).length;
     db.unitReports = (db.unitReports || []).filter((r) => !idSet.has(r.id) || (!canAll && !isUnitAllowedEmb(auth, r.unitName)));
     const deletedCount = before - db.unitReports.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'unitReports',
+      action: 'batch_delete',
+      summary: `حذف گروهی ${deletedCount} ردیف گزارش واحد`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `${deletedCount} ردیف گزارش واحد حذف شد.` };
   },
@@ -2334,8 +2911,57 @@ export const embeddedDb = {
     const before = (db.unitReports || []).length;
     db.unitReports = canAll ? [] : (db.unitReports || []).filter((r) => !isUnitAllowedEmb(auth, r.unitName));
     const deletedCount = before - db.unitReports.length;
+    recordAuditLogEmb(db, auth, {
+      module: 'unitReports',
+      action: 'delete_all',
+      summary: `پاکسازی گزارش‌های واحدها (${deletedCount} ردیف)`,
+      recordCount: deletedCount,
+    });
     await saveEmbeddedDb(db);
     return { success: true, deletedCount, message: `گزارش‌های واحدها (${deletedCount} ردیف) پاکسازی شد.` };
+  },
+
+  async getAuditLogs(params?: {
+    limit?: number;
+    offset?: number;
+    userId?: string;
+    module?: string;
+    action?: string;
+    search?: string;
+  }): Promise<{ data: SecurityAuditLog[]; total: number; limit: number; offset: number; hasMore: boolean }> {
+    const db = await loadEmbeddedDb();
+    const auth = await getCurrentAuthUser(db);
+    if (!isSuperAdmin(auth) && !hasPerm(auth, 'system', 'securityLogs')) {
+      throw new Error('عدم دسترسی مشاهده تاریخچه امنیت و عملکرد کاربران.');
+    }
+    let rows = Array.isArray(db.auditLogs) ? [...db.auditLogs] : [];
+    if (params?.userId) {
+      rows = rows.filter((l) => String(l.userId) === String(params.userId));
+    }
+    if (params?.module) {
+      rows = rows.filter((l) => String(l.module) === String(params.module));
+    }
+    if (params?.action) {
+      rows = rows.filter((l) => String(l.action) === String(params.action));
+    }
+    if (params?.search) {
+      const q = String(params.search).trim().toLowerCase();
+      rows = rows.filter((l) =>
+        [l.userFullName, l.username, l.summary, l.targetLabel, l.persianDateTime, l.module, l.action]
+          .some((f) => String(f || '').toLowerCase().includes(q))
+      );
+    }
+    const limit = Math.max(1, Math.min(500, Number(params?.limit ?? 100)));
+    const offset = Math.max(0, Number(params?.offset ?? 0));
+    const total = rows.length;
+    const sliced = rows.slice(offset, offset + limit);
+    return {
+      data: sliced,
+      total,
+      limit,
+      offset,
+      hasMore: offset + sliced.length < total,
+    };
   },
 
   async getDatabaseStatus(): Promise<DatabaseStatus> {
@@ -2349,6 +2975,7 @@ export const embeddedDb = {
     const canJg = canStats || hasPerm(auth, 'jobGroups', 'view');
     const canCmt = canStats || hasPerm(auth, 'commitments', 'view');
     const canMining = canStats || hasMiningOrUnitPermEmb(auth, 'view');
+    const canAudit = isSuperAdmin(auth) || hasPerm(auth, 'system', 'securityLogs');
     const approxBytes = canStats ? utf8Bytes(JSON.stringify(db)).length : 0;
     const totalActiveUsers = db.users.filter((u) => u.isActive !== false).length;
     const totalPersonnelWithDocs = db.personnel.filter((p) => {
@@ -2380,6 +3007,7 @@ export const embeddedDb = {
       totalMiningVolumes: canMining ? (db.miningVolumes || []).length : 0,
       totalMiningMachinery: canMining ? (db.miningMachinery || []).length : 0,
       totalUnitReports: canMining ? (db.unitReports || []).length : 0,
+      totalAuditLogs: canAudit ? (db.auditLogs || []).length : 0,
       storageEngine: 'indexeddb-embedded',
       fileSizeBytes: approxBytes,
       lastSaved: db.lastSaved || 'هم‌اکنون',
@@ -2396,6 +3024,12 @@ export const embeddedDb = {
     const db = await loadEmbeddedDb();
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'system', 'backupDatabase')) return false;
+    recordAuditLogEmb(db, auth, {
+      module: 'system',
+      action: 'backup',
+      summary: `تهیه نسخه پشتیبان کامل از پایگاه داده توسط «${auth?.fullName || 'کاربر'}»`,
+    });
+    await saveEmbeddedDb(db);
     const totalRelatives = db.personnel.reduce((sum, p) => sum + (Array.isArray(p.relatives) ? p.relatives.length : 0), 0);
     const submittedKaranehCount = db.karaneh.filter((k) => k.status === 'submitted').length;
     const backupPayload = {
@@ -2403,7 +3037,7 @@ export const embeddedDb = {
       _backupMetadata: {
         version: '5.1-negin-parto-nasr-full-sync',
         exportedAt: new Date().toISOString(),
-        modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel'],
+        modules: ['personnel', 'relatives', 'documents', 'karaneh', 'finalKaraneh', 'karanehAnalytics', 'payroll', 'jobGroups', 'jobClassifications', 'commitments', 'users', 'permissionsV5', 'smartDashboard', 'ceoDashboard', 'unitOperations', 'miningVolumes', 'miningMachinery', 'unitReports', 'smartExcel', 'auditLogs'],
         counts: {
           users: db.users.length,
           personnel: db.personnel.length,
@@ -2417,6 +3051,7 @@ export const embeddedDb = {
           miningVolumes: (db.miningVolumes || []).length,
           miningMachinery: (db.miningMachinery || []).length,
           unitReports: (db.unitReports || []).length,
+          auditLogs: (db.auditLogs || []).length,
         },
       },
     };
@@ -2445,7 +3080,7 @@ export const embeddedDb = {
       }
       return { ...u, permissions: normalizedPerms };
     });
-    await saveEmbeddedDb({
+    const nextDb: EmbeddedDatabase = {
       users: nextUsers,
       jobGroups: backupData.jobGroups || [],
       jobClassifications: backupData.jobClassifications || [],
@@ -2456,7 +3091,15 @@ export const embeddedDb = {
       miningVolumes: backupData.miningVolumes || [],
       miningMachinery: backupData.miningMachinery || [],
       unitReports: backupData.unitReports || [],
+      auditLogs: Array.isArray(backupData.auditLogs) ? backupData.auditLogs : (db.auditLogs || []),
+    };
+    recordAuditLogEmb(nextDb, auth, {
+      module: 'system',
+      action: 'restore',
+      summary: `بازیابی کامل نسخه پشتیبان پایگاه داده (${nextDb.personnel.length} پرسنل، ${nextDb.karaneh.length} کارانه)`,
+      recordCount: nextDb.personnel.length + nextDb.karaneh.length,
     });
+    await saveEmbeddedDb(nextDb);
     return { success: true, message: 'پایگاه داده سیستم (تمامی ماژول‌ها، مجوزها و اسناد) با موفقیت بازیابی گردید.' };
   },
 
@@ -2479,6 +3122,7 @@ export const embeddedDb = {
         miningVolumes: db.miningVolumes || [],
         miningMachinery: db.miningMachinery || [],
         unitReports: db.unitReports || [],
+        auditLogs: db.auditLogs || [],
       },
     };
   },
@@ -2505,6 +3149,7 @@ export const embeddedDb = {
     if (Array.isArray(incoming.miningVolumes)) db.miningVolumes = mergeById(db.miningVolumes || [], incoming.miningVolumes);
     if (Array.isArray(incoming.miningMachinery)) db.miningMachinery = mergeById(db.miningMachinery || [], incoming.miningMachinery);
     if (Array.isArray(incoming.unitReports)) db.unitReports = mergeById(db.unitReports || [], incoming.unitReports);
+    if (Array.isArray(incoming.auditLogs)) db.auditLogs = mergeById(db.auditLogs || [], incoming.auditLogs).slice(0, 5000);
     if (Array.isArray(incoming.users)) {
       const uMap = new Map(db.users.map((u) => [String(u.id), u]));
       for (const u of incoming.users) {
@@ -2520,6 +3165,11 @@ export const embeddedDb = {
       }
       db.users = Array.from(uMap.values());
     }
+    recordAuditLogEmb(db, auth, {
+      module: 'system',
+      action: 'restore',
+      summary: 'ادغام و همگام‌سازی داده‌های ابری در پایگاه داده داخلی',
+    });
     await saveEmbeddedDb(db);
     return { success: true, message: 'اطلاعات ابری با موفقیت در پایگاه داده داخلی ادغام شد.' };
   },
@@ -2529,6 +3179,11 @@ export const embeddedDb = {
     const auth = await getCurrentAuthUser(db);
     if (!hasPerm(auth, 'system', 'restoreDatabase')) return { success: false, message: 'عدم دسترسی.' };
     const initial = getInitialEmbeddedDatabase();
+    recordAuditLogEmb(initial, auth, {
+      module: 'system',
+      action: 'reset_demo',
+      summary: `بازنشانی داده‌های اولیه سامانه توسط «${auth?.fullName || 'کاربر'}»`,
+    });
     await saveEmbeddedDb(initial);
     return { success: true, message: 'داده‌های اولیه با موفقیت بازنشانی شدند.' };
   },
